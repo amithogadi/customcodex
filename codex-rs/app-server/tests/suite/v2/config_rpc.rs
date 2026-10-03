@@ -296,36 +296,6 @@ access = "deny"
         .expect("managed requirements should be returned");
     assert_eq!(requirements.allow_browser_and_computer_use, Some(false));
     assert_eq!(
-        requirements.browser_use,
-        Some(BrowserUseRequirements {
-            allow_webmcp: None,
-            allow_history_access: Some(false),
-            disable_auto_review: Some(true),
-            allow_global_persistent_approval: Some(false),
-            default_origin_policy: Some(BrowserUseOriginPolicy {
-                access: Some(AllowDenyRequirement::Deny),
-                downloads: Some(AllowDenyRequirement::Allow),
-                uploads: Some(AllowDenyRequirement::Deny),
-                full_cdp_access: Some(AllowDenyRequirement::Allow),
-                auto_review: Some(AllowDenyRequirement::Deny),
-                persistent_approval: Some(false),
-                access_approval_lifetime: Some(BrowserUseAccessApprovalLifetime::Turn),
-            }),
-            origins: Some(BTreeMap::from([(
-                "https://example.com".to_string(),
-                BrowserUseOriginPolicy {
-                    access: Some(AllowDenyRequirement::Allow),
-                    downloads: Some(AllowDenyRequirement::Deny),
-                    uploads: Some(AllowDenyRequirement::Allow),
-                    full_cdp_access: Some(AllowDenyRequirement::Deny),
-                    auto_review: Some(AllowDenyRequirement::Deny),
-                    persistent_approval: Some(true),
-                    access_approval_lifetime: Some(BrowserUseAccessApprovalLifetime::Thread),
-                },
-            )])),
-        })
-    );
-    assert_eq!(
         requirements.computer_use,
         Some(ComputerUseRequirements {
             allow_locked_computer_use: Some(false),
@@ -722,27 +692,6 @@ access = "deny"
     } = timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
 
     assert_eq!(
-        config.browser_use,
-        Some(BrowserUseConfig {
-            allow_history_access: Some(true),
-            default_origin_policy: Some(BrowserUseOriginPolicyConfig {
-                access: Some(AllowDenyRequirement::Deny),
-                downloads: Some(AllowDenyRequirement::Allow),
-                uploads: Some(AllowDenyRequirement::Deny),
-                full_cdp_access: Some(AllowDenyRequirement::Allow),
-            }),
-            origins: Some(BTreeMap::from([(
-                "https://example.com".to_string(),
-                BrowserUseOriginPolicyConfig {
-                    access: Some(AllowDenyRequirement::Allow),
-                    downloads: Some(AllowDenyRequirement::Deny),
-                    uploads: Some(AllowDenyRequirement::Allow),
-                    full_cdp_access: Some(AllowDenyRequirement::Deny),
-                },
-            )])),
-        })
-    );
-    assert_eq!(
         config.computer_use,
         Some(ComputerUseConfig {
             default_app_access: Some(AllowDenyRequirement::Deny),
@@ -821,25 +770,6 @@ access = "deny"
         .requirements
         .expect("managed requirements should be returned");
     assert_eq!(requirements.allow_browser_and_computer_use, Some(false));
-    assert_eq!(
-        requirements.browser_use,
-        Some(BrowserUseRequirements {
-            allow_webmcp: None,
-            allow_history_access: Some(false),
-            disable_auto_review: None,
-            allow_global_persistent_approval: Some(false),
-            default_origin_policy: Some(BrowserUseOriginPolicy {
-                access: Some(AllowDenyRequirement::Allow),
-                downloads: None,
-                uploads: None,
-                full_cdp_access: None,
-                auto_review: None,
-                persistent_approval: None,
-                access_approval_lifetime: None,
-            }),
-            origins: None,
-        })
-    );
     assert_eq!(
         requirements.computer_use,
         Some(ComputerUseRequirements {
@@ -2332,27 +2262,6 @@ access = "deny"
         .await?;
     let read: ConfigReadResponse =
         timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
-    assert_eq!(
-        read.config.browser_use,
-        Some(BrowserUseConfig {
-            allow_history_access: Some(true),
-            default_origin_policy: Some(BrowserUseOriginPolicyConfig {
-                access: Some(AllowDenyRequirement::Allow),
-                downloads: Some(AllowDenyRequirement::Deny),
-                uploads: Some(AllowDenyRequirement::Allow),
-                full_cdp_access: Some(AllowDenyRequirement::Deny),
-            }),
-            origins: Some(BTreeMap::from([(
-                "https://example.com".to_string(),
-                BrowserUseOriginPolicyConfig {
-                    access: Some(AllowDenyRequirement::Deny),
-                    downloads: Some(AllowDenyRequirement::Allow),
-                    uploads: Some(AllowDenyRequirement::Deny),
-                    full_cdp_access: Some(AllowDenyRequirement::Allow),
-                },
-            )])),
-        })
-    );
     assert_eq!(
         read.config.computer_use,
         Some(ComputerUseConfig {

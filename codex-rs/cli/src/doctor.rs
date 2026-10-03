@@ -73,7 +73,6 @@ use serde::Serialize;
 use supports_color::Stream;
 
 mod background;
-mod desktop;
 mod disk;
 mod filesystem_paths;
 mod git;
@@ -90,9 +89,6 @@ mod updates;
 #[cfg(target_os = "windows")]
 mod windows_dev_drive;
 
-#[cfg(test)]
-#[path = "doctor/desktop_tests.rs"]
-mod desktop_tests;
 
 use background::background_server_check;
 use git::git_check;
@@ -587,17 +583,6 @@ async fn build_report(
                 reachability_check,
             ]);
         }
-    }
-
-    progress.begin("desktop");
-    if let Some(desktop) = desktop::collect().await {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Some(application) = desktop.application.as_ref() {
-            updates::append_desktop_update(&mut checks, config_result.as_ref().ok(), application)
-                .await;
-        }
-        progress.finish("desktop", overall_status(&desktop.checks));
-        checks.extend(desktop.checks);
     }
 
     progress.settle();

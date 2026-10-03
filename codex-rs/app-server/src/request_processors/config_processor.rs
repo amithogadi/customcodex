@@ -9,9 +9,6 @@ use crate::outgoing_message::OutgoingMessageSender;
 use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AllowDenyRequirement;
 use codex_app_server_protocol::AutoReviewRequirements;
-use codex_app_server_protocol::BrowserUseAccessApprovalLifetime;
-use codex_app_server_protocol::BrowserUseOriginPolicy;
-use codex_app_server_protocol::BrowserUseRequirements;
 use codex_app_server_protocol::CliAuthCredentialsStoreMode;
 use codex_app_server_protocol::ClientResponsePayload;
 use codex_app_server_protocol::ComputerUseMacosRequirements;
@@ -31,7 +28,6 @@ use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
 use codex_app_server_protocol::FeedbackRequirements;
-use codex_app_server_protocol::InAppBrowserRequirements;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
@@ -535,15 +531,6 @@ fn map_requirements_to_api(
         computer_use: requirements
             .computer_use
             .map(map_computer_use_requirements_to_api),
-        browser_use: requirements
-            .browser_use
-            .map(map_browser_use_requirements_to_api),
-        in_app_browser: requirements.in_app_browser.map(|in_app_browser| {
-            InAppBrowserRequirements {
-                allow_external_browser_settings_import: in_app_browser
-                    .allow_external_browser_settings_import,
-            }
-        }),
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
@@ -622,43 +609,7 @@ fn map_computer_use_requirements_to_api(
     }
 }
 
-fn map_browser_use_requirements_to_api(
-    browser_use: codex_config::BrowserUseRequirementsToml,
-) -> BrowserUseRequirements {
-    BrowserUseRequirements {
-        allow_webmcp: browser_use.allow_webmcp,
-        allow_history_access: browser_use.allow_history_access,
-        disable_auto_review: browser_use.disable_auto_review,
-        allow_global_persistent_approval: browser_use.allow_global_persistent_approval,
-        default_origin_policy: browser_use
-            .default_origin_policy
-            .map(map_browser_use_origin_policy_to_api),
-        origins: browser_use.origins.map(|origins| {
-            origins
-                .into_iter()
-                .map(|(pattern, policy)| (pattern, map_browser_use_origin_policy_to_api(policy)))
-                .collect()
-        }),
-    }
-}
 
-fn map_browser_use_origin_policy_to_api(
-    policy: codex_config::BrowserUseOriginPolicyToml,
-) -> BrowserUseOriginPolicy {
-    BrowserUseOriginPolicy {
-        access: policy.access.map(map_allow_deny_requirement_to_api),
-        downloads: policy.downloads.map(map_allow_deny_requirement_to_api),
-        uploads: policy.uploads.map(map_allow_deny_requirement_to_api),
-        full_cdp_access: policy
-            .full_cdp_access
-            .map(map_allow_deny_requirement_to_api),
-        auto_review: policy.auto_review.map(map_allow_deny_requirement_to_api),
-        persistent_approval: policy.persistent_approval,
-        access_approval_lifetime: policy
-            .access_approval_lifetime
-            .map(map_browser_use_access_approval_lifetime_to_api),
-    }
-}
 
 fn map_allow_deny_requirement_to_api(
     requirement: codex_config::AllowDenyRequirementToml,
@@ -669,18 +620,6 @@ fn map_allow_deny_requirement_to_api(
     }
 }
 
-fn map_browser_use_access_approval_lifetime_to_api(
-    lifetime: codex_config::BrowserUseAccessApprovalLifetimeToml,
-) -> BrowserUseAccessApprovalLifetime {
-    match lifetime {
-        codex_config::BrowserUseAccessApprovalLifetimeToml::Turn => {
-            BrowserUseAccessApprovalLifetime::Turn
-        }
-        codex_config::BrowserUseAccessApprovalLifetimeToml::Thread => {
-            BrowserUseAccessApprovalLifetime::Thread
-        }
-    }
-}
 
 fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> ManagedHooksRequirements {
     let ManagedHooksRequirementsToml {
@@ -884,9 +823,6 @@ mod tests {
     use crate::config_manager::ConfigManager;
     use codex_app_server_protocol::AllowDenyRequirement;
     use codex_app_server_protocol::AutoReviewRequirements;
-    use codex_app_server_protocol::BrowserUseAccessApprovalLifetime;
-    use codex_app_server_protocol::BrowserUseOriginPolicy;
-    use codex_app_server_protocol::BrowserUseRequirements;
     use codex_app_server_protocol::ComputerUseMacosRequirements;
     use codex_app_server_protocol::ComputerUseRequirements;
     use codex_app_server_protocol::ComputerUseWindowsExeRequirement;
@@ -895,9 +831,6 @@ mod tests {
     use codex_app_server_protocol::WindowsSandboxImplementation;
     use codex_config::AllowDenyRequirementToml;
     use codex_config::AutoReviewRequirementsToml;
-    use codex_config::BrowserUseAccessApprovalLifetimeToml;
-    use codex_config::BrowserUseOriginPolicyToml;
-    use codex_config::BrowserUseRequirementsToml;
     use codex_config::CloudConfigBundleLoader;
     use codex_config::ComputerUseMacosRequirementsToml;
     use codex_config::ComputerUseRequirementsToml;
@@ -1095,35 +1028,6 @@ client_id = "mcp-client"
     fn requirements_api_includes_browser_and_computer_use_requirements() {
         let mapped = map_test_requirements(ConfigRequirementsToml {
             allow_browser_and_computer_use: Some(false),
-            browser_use: Some(BrowserUseRequirementsToml {
-                allow_webmcp: Some(true),
-                allow_history_access: Some(false),
-                disable_auto_review: Some(true),
-                allow_global_persistent_approval: Some(false),
-                default_origin_policy: Some(BrowserUseOriginPolicyToml {
-                    access: Some(AllowDenyRequirementToml::Deny),
-                    downloads: Some(AllowDenyRequirementToml::Allow),
-                    uploads: Some(AllowDenyRequirementToml::Deny),
-                    full_cdp_access: Some(AllowDenyRequirementToml::Allow),
-                    auto_review: Some(AllowDenyRequirementToml::Deny),
-                    persistent_approval: Some(false),
-                    access_approval_lifetime: Some(BrowserUseAccessApprovalLifetimeToml::Turn),
-                }),
-                origins: Some(BTreeMap::from([(
-                    "https://example.com".to_string(),
-                    BrowserUseOriginPolicyToml {
-                        access: Some(AllowDenyRequirementToml::Allow),
-                        downloads: Some(AllowDenyRequirementToml::Deny),
-                        uploads: Some(AllowDenyRequirementToml::Allow),
-                        full_cdp_access: Some(AllowDenyRequirementToml::Deny),
-                        auto_review: Some(AllowDenyRequirementToml::Deny),
-                        persistent_approval: Some(true),
-                        access_approval_lifetime: Some(
-                            BrowserUseAccessApprovalLifetimeToml::Thread,
-                        ),
-                    },
-                )])),
-            }),
             computer_use: Some(ComputerUseRequirementsToml {
                 allow_locked_computer_use: Some(false),
                 allow_persistent_approval: Some(false),
@@ -1151,36 +1055,6 @@ client_id = "mcp-client"
         });
 
         assert_eq!(mapped.allow_browser_and_computer_use, Some(false));
-        assert_eq!(
-            mapped.browser_use,
-            Some(BrowserUseRequirements {
-                allow_webmcp: Some(true),
-                allow_history_access: Some(false),
-                disable_auto_review: Some(true),
-                allow_global_persistent_approval: Some(false),
-                default_origin_policy: Some(BrowserUseOriginPolicy {
-                    access: Some(AllowDenyRequirement::Deny),
-                    downloads: Some(AllowDenyRequirement::Allow),
-                    uploads: Some(AllowDenyRequirement::Deny),
-                    full_cdp_access: Some(AllowDenyRequirement::Allow),
-                    auto_review: Some(AllowDenyRequirement::Deny),
-                    persistent_approval: Some(false),
-                    access_approval_lifetime: Some(BrowserUseAccessApprovalLifetime::Turn),
-                }),
-                origins: Some(BTreeMap::from([(
-                    "https://example.com".to_string(),
-                    BrowserUseOriginPolicy {
-                        access: Some(AllowDenyRequirement::Allow),
-                        downloads: Some(AllowDenyRequirement::Deny),
-                        uploads: Some(AllowDenyRequirement::Allow),
-                        full_cdp_access: Some(AllowDenyRequirement::Deny),
-                        auto_review: Some(AllowDenyRequirement::Deny),
-                        persistent_approval: Some(true),
-                        access_approval_lifetime: Some(BrowserUseAccessApprovalLifetime::Thread),
-                    },
-                )])),
-            })
-        );
         assert_eq!(
             mapped.computer_use,
             Some(ComputerUseRequirements {

@@ -7,7 +7,6 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use crate::HooksToml;
-use crate::browser_use::BrowserUseConfigToml;
 use crate::computer_use::ComputerUseConfigToml;
 use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
@@ -203,7 +202,6 @@ pub struct ConfigToml {
     #[serde(default)]
     pub auto_review: Option<AutoReviewToml>,
 
-    pub browser_use: Option<BrowserUseConfigToml>,
 
     pub computer_use: Option<ComputerUseConfigToml>,
 
@@ -539,9 +537,11 @@ pub struct ConfigToml {
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
 
-    /// Opaque desktop settings stored alongside the rest of config.toml.
-    #[serde(default)]
-    pub desktop: Option<HashMap<String, JsonValue>>,
+
+    /// Legacy worktree settings consumed by the terminal. Desktop controls are ignored.
+    #[serde(default, rename = "desktop", skip_serializing)]
+    #[schemars(skip)]
+    pub legacy_worktree_settings: Option<HashMap<String, JsonValue>>,
 
     /// OTEL configuration.
     pub otel: Option<OtelConfigToml>,

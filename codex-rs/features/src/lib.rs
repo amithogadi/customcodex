@@ -264,48 +264,6 @@ pub enum Feature {
     SkipHostSkillDiscovery,
     /// Removed compatibility flag for plugin-bundled lifecycle hooks.
     PluginHooks,
-    /// Allow the in-app browser pane in desktop apps.
-    ///
-    /// Requirements-only gate: this should be set from requirements, not user config.
-    InAppBrowser,
-    /// Allow websites to open and customize annotation tools in desktop apps.
-    /// Ordinary user-driven annotation is independent of this gate.
-    ///
-    /// Requirements-only gate: this should be set from requirements, not user config.
-    BrowserAnnotationApi,
-    /// Allow the in-app chat pane in desktop apps.
-    ///
-    /// Requirements-only gate: this should be set from requirements, not user config.
-    InAppChat,
-    /// Allow in-app dictation in desktop apps.
-    ///
-    /// Requirements-only gate: this should be set from requirements, not user config.
-    InAppDictation,
-    /// Allow in-app Voice in desktop apps.
-    ///
-    /// Requirements-only gate: this should be set from requirements, not user config.
-    /// Permission does not establish Voice availability or provider support.
-    InAppVoice,
-    /// Allow desktop apps to run local automations.
-    ///
-    /// Requirements-only gate: this should be set from requirements, not user config.
-    InAppLocalAutomation,
-    /// Allow desktop apps to perform in-app updates.
-    ///
-    /// Requirements-only gate: this should be set from requirements, not user config.
-    InAppUpdates,
-    /// Allow Browser Use agent integration in desktop apps.
-    ///
-    /// Requirements-only gate: this should be set from requirements, not user config.
-    BrowserUse,
-    /// Allow Browser Use integration to access the full Chrome DevTools Protocol surface.
-    ///
-    /// Requirements-only gate: this should be set from requirements, not user config.
-    BrowserUseFullCdpAccess,
-    /// Allow Browser Use integration with external browsers.
-    ///
-    /// Requirements-only gate: this should be set from requirements, not user config.
-    BrowserUseExternal,
     /// Allow Codex Computer Use.
     ///
     /// Requirements-only gate: this should be set from requirements, not user config.
@@ -1533,66 +1491,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "plugin_hooks",
         stage: Stage::Removed,
         default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::InAppBrowser,
-        key: "in_app_browser",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::BrowserAnnotationApi,
-        key: "browser_annotation_api",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::InAppChat,
-        key: "in_app_chat",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::InAppDictation,
-        key: "in_app_dictation",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::InAppVoice,
-        key: "in_app_voice",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::InAppLocalAutomation,
-        key: "in_app_local_automation",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::InAppUpdates,
-        key: "in_app_updates",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::BrowserUse,
-        key: "browser_use",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::BrowserUseFullCdpAccess,
-        key: "browser_use_full_cdp_access",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::BrowserUseExternal,
-        key: "browser_use_external",
-        stage: Stage::Stable,
-        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::ComputerUse,

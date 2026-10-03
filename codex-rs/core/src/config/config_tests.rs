@@ -7065,56 +7065,6 @@ approval_mode = "approve"
     );
 }
 
-#[test]
-fn desktop_toml_round_trips_opaque_nested_values() -> anyhow::Result<()> {
-    let parsed = toml::from_str::<ConfigToml>(
-        r#"
-[desktop]
-appearanceTheme = "dark"
-selected-avatar-id = "codex"
-recentViews = ["threads", "settings"]
-
-[desktop.workspace]
-collapsed = true
-width = 320
-pane = { selected = "console", expanded = false }
-"#,
-    )?;
-
-    let desktop = parsed
-        .desktop
-        .as_ref()
-        .expect("desktop settings should deserialize");
-    assert_eq!(
-        desktop.get("appearanceTheme"),
-        Some(&serde_json::json!("dark"))
-    );
-    assert_eq!(
-        desktop.get("selected-avatar-id"),
-        Some(&serde_json::json!("codex"))
-    );
-    assert_eq!(
-        desktop.get("recentViews"),
-        Some(&serde_json::json!(["threads", "settings"]))
-    );
-    assert_eq!(
-        desktop.get("workspace"),
-        Some(&serde_json::json!({
-            "collapsed": true,
-            "width": 320,
-            "pane": {
-                "selected": "console",
-                "expanded": false,
-            },
-        }))
-    );
-
-    let serialized = toml::to_string(&parsed)?;
-    let reparsed = toml::from_str::<ConfigToml>(&serialized)?;
-    assert_eq!(reparsed.desktop, parsed.desktop);
-
-    Ok(())
-}
 
 #[tokio::test]
 async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
@@ -10283,8 +10233,6 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         allow_remote_control: None,
         allow_browser_and_computer_use: None,
         computer_use: None,
-        browser_use: None,
-        in_app_browser: None,
         windows: None,
         feature_requirements: None,
         hooks: None,
@@ -11648,99 +11596,9 @@ auto_review = false
     Ok(())
 }
 
-#[tokio::test]
-async fn browser_feature_requirements_are_valid() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
 
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"
-[features]
-in_app_browser = false
-browser_annotation_api = false
-browser_use = false
-browser_use_full_cdp_access = false
-"#,
-            ),
-        )
-        .build()
-        .await?;
 
-    assert!(!config.features.enabled(Feature::InAppBrowser));
-    assert!(!config.features.enabled(Feature::BrowserAnnotationApi));
-    assert!(!config.features.enabled(Feature::BrowserUse));
-    assert!(!config.features.enabled(Feature::BrowserUseFullCdpAccess));
 
-    Ok(())
-}
-
-#[tokio::test]
-async fn in_app_chat_feature_requirements_are_valid() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"
-[features]
-in_app_chat = false
-"#,
-            ),
-        )
-        .build()
-        .await?;
-
-    assert!(!config.features.enabled(Feature::InAppChat));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn in_app_dictation_feature_requirements_are_valid() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"
-[features]
-in_app_dictation = false
-"#,
-            ),
-        )
-        .build()
-        .await?;
-
-    assert!(!config.features.enabled(Feature::InAppDictation));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn in_app_local_automation_feature_requirements_are_valid() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-
-    let config = ConfigBuilder::without_managed_config_for_tests()
-        .codex_home(codex_home.path().to_path_buf())
-        .cloud_config_bundle(
-            CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"
-[features]
-in_app_local_automation = false
-"#,
-            ),
-        )
-        .build()
-        .await?;
-
-    assert!(!config.features.enabled(Feature::InAppLocalAutomation));
-
-    Ok(())
-}
 
 #[tokio::test]
 async fn explicit_feature_config_is_normalized_by_requirements() -> std::io::Result<()> {

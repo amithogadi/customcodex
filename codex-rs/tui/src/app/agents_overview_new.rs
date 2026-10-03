@@ -266,7 +266,7 @@ impl App {
             .await?;
             let settings = codex_worktree::WorktreeSettings::for_cli(
                 &self.config.codex_home,
-                host.config_toml.desktop.as_ref(),
+                host.config_toml.legacy_worktree_settings.as_ref(),
             )?;
             anyhow::Ok(codex_worktree::WorktreeManager::new(settings))
         }

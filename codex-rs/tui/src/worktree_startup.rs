@@ -238,7 +238,7 @@ pub(super) async fn prepare(
     let manager = codex_worktree::WorktreeManager::new(
         codex_worktree::WorktreeSettings::for_cli(
             &source.codex_home,
-            host.config_toml.desktop.as_ref(),
+            host.config_toml.legacy_worktree_settings.as_ref(),
         )
         .map_err(std::io::Error::other)?,
     );

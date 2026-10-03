@@ -25,13 +25,11 @@ use wildmatch::WildMatchPattern;
 use super::requirements_exec_policy::RequirementsExecPolicyToml;
 use crate::Constrained;
 use crate::ConstraintError;
-use crate::InAppBrowserRequirementsToml;
 use crate::ManagedAuthPolicy;
 use crate::ManagedHooksRequirementsToml;
 use crate::McpServerRequirement;
 use crate::PluginRequirementsToml;
 use crate::RequirementsExecPolicy;
-use crate::browser_computer_use_requirements::BrowserUseRequirementsToml;
 use crate::browser_computer_use_requirements::ComputerUseRequirementsToml;
 use crate::config_toml::ConfigToml;
 use crate::mcp_requirements::validate_mcp_server_requirement;
@@ -1055,8 +1053,6 @@ pub struct ConfigRequirementsToml {
     pub allow_appshots: Option<bool>,
     pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirementsToml>,
-    pub browser_use: Option<BrowserUseRequirementsToml>,
-    pub in_app_browser: Option<InAppBrowserRequirementsToml>,
     pub windows: Option<WindowsRequirementsToml>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
@@ -1163,8 +1159,6 @@ pub struct ConfigRequirementsWithSources {
     pub allow_appshots: Option<Sourced<bool>>,
     pub allow_remote_control: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
-    pub browser_use: Option<Sourced<BrowserUseRequirementsToml>>,
-    pub in_app_browser: Option<Sourced<InAppBrowserRequirementsToml>>,
     pub windows: Option<Sourced<WindowsRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub hooks: Option<Sourced<ManagedHooksRequirementsToml>>,
@@ -1227,8 +1221,6 @@ impl ConfigRequirementsWithSources {
             allow_appshots: _,
             allow_remote_control: _,
             computer_use: _,
-            browser_use: _,
-            in_app_browser: _,
             windows: _,
             feature_requirements: _,
             hooks: _,
@@ -1377,8 +1369,6 @@ impl ConfigRequirementsWithSources {
             allow_appshots,
             allow_remote_control,
             computer_use,
-            browser_use,
-            in_app_browser,
             windows,
             feature_requirements,
             hooks,
@@ -1423,8 +1413,6 @@ impl ConfigRequirementsWithSources {
             allow_appshots: allow_appshots.map(|sourced| sourced.value),
             allow_remote_control: allow_remote_control.map(|sourced| sourced.value),
             computer_use: computer_use.map(|sourced| sourced.value),
-            browser_use: browser_use.map(|sourced| sourced.value),
-            in_app_browser: in_app_browser.map(|sourced| sourced.value),
             windows: windows.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
             hooks: hooks.map(|sourced| sourced.value),
@@ -1535,14 +1523,6 @@ impl ConfigRequirementsToml {
                 .computer_use
                 .as_ref()
                 .is_none_or(ComputerUseRequirementsToml::is_empty)
-            && self
-                .browser_use
-                .as_ref()
-                .is_none_or(BrowserUseRequirementsToml::is_empty)
-            && self
-                .in_app_browser
-                .as_ref()
-                .is_none_or(|requirements| requirements == &InAppBrowserRequirementsToml::default())
             && self
                 .windows
                 .as_ref()
@@ -1753,8 +1733,6 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allow_appshots,
             allow_remote_control,
             computer_use,
-            browser_use: _,
-            in_app_browser: _,
             windows,
             feature_requirements,
             hooks,
@@ -2184,8 +2162,6 @@ pub fn sandbox_mode_requirement_for_permission_profile(
 mod tests {
     use super::*;
     use crate::AllowDenyRequirementToml;
-    use crate::BrowserUseAccessApprovalLifetimeToml;
-    use crate::BrowserUseOriginPolicyToml;
     use crate::ComputerUseMacosRequirementsToml;
     use crate::ComputerUseWindowsExeRequirementToml;
     use crate::ComputerUseWindowsRequirementsToml;
@@ -2306,8 +2282,6 @@ mod tests {
             allow_appshots,
             allow_remote_control,
             computer_use,
-            browser_use,
-            in_app_browser,
             windows,
             feature_requirements,
             hooks,
@@ -2369,9 +2343,6 @@ mod tests {
             allow_remote_control: allow_remote_control
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            browser_use: browser_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            in_app_browser: in_app_browser
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             windows: windows.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -2575,38 +2546,6 @@ mod tests {
 
         assert_eq!(requirements.allow_browser_and_computer_use, Some(false));
         assert_eq!(
-            requirements.browser_use,
-            Some(BrowserUseRequirementsToml {
-                allow_webmcp: None,
-                allow_history_access: Some(false),
-                disable_auto_review: Some(true),
-                allow_global_persistent_approval: Some(false),
-                default_origin_policy: Some(BrowserUseOriginPolicyToml {
-                    access: Some(AllowDenyRequirementToml::Deny),
-                    downloads: Some(AllowDenyRequirementToml::Allow),
-                    uploads: Some(AllowDenyRequirementToml::Deny),
-                    full_cdp_access: Some(AllowDenyRequirementToml::Allow),
-                    auto_review: Some(AllowDenyRequirementToml::Deny),
-                    persistent_approval: Some(false),
-                    access_approval_lifetime: Some(BrowserUseAccessApprovalLifetimeToml::Turn),
-                }),
-                origins: Some(BTreeMap::from([(
-                    "https://example.com".to_string(),
-                    BrowserUseOriginPolicyToml {
-                        access: Some(AllowDenyRequirementToml::Allow),
-                        downloads: Some(AllowDenyRequirementToml::Deny),
-                        uploads: Some(AllowDenyRequirementToml::Allow),
-                        full_cdp_access: Some(AllowDenyRequirementToml::Deny),
-                        auto_review: Some(AllowDenyRequirementToml::Deny),
-                        persistent_approval: Some(true),
-                        access_approval_lifetime: Some(
-                            BrowserUseAccessApprovalLifetimeToml::Thread,
-                        ),
-                    },
-                )])),
-            })
-        );
-        assert_eq!(
             requirements.computer_use,
             Some(ComputerUseRequirementsToml {
                 allow_locked_computer_use: Some(false),
@@ -2809,14 +2748,6 @@ mod tests {
         let feature_requirements = FeatureRequirementsToml {
             entries: BTreeMap::from([("personality".to_string(), true)]),
         };
-        let browser_use = BrowserUseRequirementsToml {
-            allow_webmcp: None,
-            allow_history_access: Some(false),
-            disable_auto_review: Some(true),
-            allow_global_persistent_approval: None,
-            default_origin_policy: None,
-            origins: None,
-        };
         let computer_use = ComputerUseRequirementsToml {
             allow_locked_computer_use: Some(false),
             allow_persistent_approval: Some(false),
@@ -2882,8 +2813,6 @@ mod tests {
             allow_appshots: Some(false),
             allow_remote_control: Some(false),
             computer_use: Some(computer_use.clone()),
-            browser_use: Some(browser_use.clone()),
-            in_app_browser: None,
             windows: Some(windows.clone()),
             feature_requirements: Some(feature_requirements.clone()),
             hooks: None,

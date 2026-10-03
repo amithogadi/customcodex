@@ -1,7 +1,6 @@
 use super::ApplicationRequirements;
 use super::ApprovalsReviewer;
 use super::AskForApproval;
-use super::BrowserUseConfig;
 use super::ComputerUseConfig;
 use super::SandboxMode;
 use super::WindowsSandboxImplementation;
@@ -308,9 +307,7 @@ pub struct Config {
     #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
-    pub browser_use: Option<BrowserUseConfig>,
     pub computer_use: Option<ComputerUseConfig>,
-    pub desktop: Option<HashMap<String, JsonValue>>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }
@@ -435,8 +432,6 @@ pub struct ConfigRequirements {
     pub allow_appshots: Option<bool>,
     pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirements>,
-    pub browser_use: Option<BrowserUseRequirements>,
-    pub in_app_browser: Option<InAppBrowserRequirements>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
     pub hooks: Option<ManagedHooksRequirements>,
@@ -510,30 +505,7 @@ pub struct ComputerUseRequirements {
     pub windows: Option<ComputerUseWindowsRequirements>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct BrowserUseRequirements {
-    pub allow_webmcp: Option<bool>,
-    pub allow_history_access: Option<bool>,
-    pub disable_auto_review: Option<bool>,
-    pub allow_global_persistent_approval: Option<bool>,
-    pub default_origin_policy: Option<BrowserUseOriginPolicy>,
-    pub origins: Option<BTreeMap<String, BrowserUseOriginPolicy>>,
-}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct BrowserUseOriginPolicy {
-    pub access: Option<AllowDenyRequirement>,
-    pub downloads: Option<AllowDenyRequirement>,
-    pub uploads: Option<AllowDenyRequirement>,
-    pub full_cdp_access: Option<AllowDenyRequirement>,
-    pub auto_review: Option<AllowDenyRequirement>,
-    pub persistent_approval: Option<bool>,
-    pub access_approval_lifetime: Option<BrowserUseAccessApprovalLifetime>,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
@@ -543,13 +515,6 @@ pub enum AllowDenyRequirement {
     Deny,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "lowercase")]
-#[ts(rename_all = "lowercase", export_to = "v2/")]
-pub enum BrowserUseAccessApprovalLifetime {
-    Turn,
-    Thread,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -576,12 +541,6 @@ pub struct ComputerUseWindowsExeRequirement {
     pub access: AllowDenyRequirement,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
-pub struct InAppBrowserRequirements {
-    pub allow_external_browser_settings_import: Option<bool>,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

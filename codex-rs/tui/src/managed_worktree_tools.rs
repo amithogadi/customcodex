@@ -79,7 +79,7 @@ impl ManagedWorktreeTools {
         Ok(Self {
             manager: WorktreeManager::new(WorktreeSettings::for_cli(
                 &config.codex_home,
-                host.config_toml.desktop.as_ref(),
+                host.config_toml.legacy_worktree_settings.as_ref(),
             )?),
             source_config_builder: ConfigBuilder::default()
                 .codex_home(config.codex_home.to_path_buf()),

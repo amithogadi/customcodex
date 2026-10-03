@@ -35,10 +35,6 @@ const GROUPS: &[OutputGroup] = &[
         keys: &["config", "auth", "mcp", "sandbox"],
     },
     OutputGroup {
-        title: "Desktop App",
-        keys: &["desktop"],
-    },
-    OutputGroup {
         title: "Updates",
         keys: &["updates"],
     },
@@ -504,9 +500,6 @@ fn notes_for_report(report: &DoctorReport) -> Vec<DoctorNote> {
         update_note(check, report)
             .into_iter()
             .for_each(|note| notes.push(note));
-        desktop_update_note(check)
-            .into_iter()
-            .for_each(|note| notes.push(note));
     }
     if let Some(check) = find_check(report, "state") {
         rollout_note(check)
@@ -556,20 +549,6 @@ fn update_note(check: &DoctorCheck, report: &DoctorReport) -> Option<DoctorNote>
     })
 }
 
-fn desktop_update_note(check: &DoctorCheck) -> Option<DoctorNote> {
-    let status = detail::detail_value(check, "desktop update status")?;
-    let build = detail::detail_value(check, "desktop latest build")?;
-    let summary = match status.as_str() {
-        "ready to install" => format!("build {build} available (ready to install)"),
-        "available" => format!("build {build} available"),
-        _ => return None,
-    };
-    Some(DoctorNote {
-        status: DisplayStatus::Update,
-        name: "desktop".to_string(),
-        summary,
-    })
-}
 
 fn rollout_note(check: &DoctorCheck) -> Option<DoctorNote> {
     let active = detail::detail_value(check, "active rollout files")?;
@@ -1446,38 +1425,6 @@ Background Server
             .expect("endpoint security check should include exclusion targets");
         *targets = "exclusion targets: verified Codex app and required helpers".into();
         report.checks.push(security);
-        report.checks.extend([
-            DoctorCheck::new(
-                "desktop.app.version",
-                "desktop",
-                CheckStatus::Ok,
-                "the desktop application is installed",
-            )
-            .detail("version: 1.2.3")
-            .detail("running: true")
-            .detail("log directory: $HOME/Library/Logs/com.openai.codex"),
-            DoctorCheck::new(
-                "desktop.app_server.handshake",
-                "desktop",
-                CheckStatus::Ok,
-                "the desktop app-server initialized successfully",
-            ),
-        ]);
-        let update = report
-            .checks
-            .iter_mut()
-            .find(|check| check.category == "updates")
-            .unwrap();
-        for (status, expected) in [
-            ("available", "build 123 available"),
-            ("ready to install", "build 123 available (ready to install)"),
-        ] {
-            update.details = vec![
-                format!("desktop update status: {status}"),
-                "desktop latest build: 123".to_string(),
-            ];
-            assert_eq!(desktop_update_note(update).unwrap().summary, expected);
-        }
         insta::assert_snapshot!(
             "doctor_human_report_environment_rows",
             render_human_report(&report, detailed_no_color_unicode_options())

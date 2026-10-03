@@ -1417,19 +1417,15 @@ async fn mcp_confirmation_policy_follows_step_model_changes() -> Result<()> {
                     .expect("bundled model messages");
                 messages.confirmation_policies = match model.slug.as_str() {
                     MODEL_A => Some(ConfirmationPolicies {
-                        browser_use: Some(BROWSER_POLICY_A.to_string()),
                         computer_use: Some(COMPUTER_POLICY_A.to_string()),
                     }),
                     MODEL_B => Some(ConfirmationPolicies {
-                        browser_use: Some(BROWSER_POLICY_B.to_string()),
                         computer_use: Some(COMPUTER_POLICY_B.to_string()),
                     }),
                     BROWSER_ONLY_MODEL => Some(ConfirmationPolicies {
-                        browser_use: Some(BROWSER_POLICY_B.to_string()),
                         computer_use: None,
                     }),
                     COMPUTER_ONLY_MODEL => Some(ConfirmationPolicies {
-                        browser_use: None,
                         computer_use: Some(COMPUTER_POLICY_B.to_string()),
                     }),
                     MODEL_C => None,

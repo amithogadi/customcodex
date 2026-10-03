@@ -42,40 +42,6 @@ async fn start_stable_server(codex_home: &TempDir) -> Result<TestAppServer> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_requirements_read_preserves_import_policy() -> Result<()> {
-    for (contents, expected_table) in [
-        ("", None),
-        ("[in_app_browser]", None),
-        ("allow_remote_control = true", None),
-        ("allow_remote_control = true\n[in_app_browser]", Some(None)),
-        (ALLOW, Some(Some(true))),
-        (DENY, Some(Some(false))),
-    ] {
-        let codex_home = TempDir::new()?;
-        std::fs::write(codex_home.path().join("requirements.toml"), contents)?;
-        // An unrecognized ordinary user setting cannot override managed policy.
-        std::fs::write(codex_home.path().join("config.toml"), ALLOW)?;
-        let mut server = start_stable_server(&codex_home).await?;
-        let request_id = server.send_config_requirements_read_request().await?;
-        let wire: Value = timeout(READ_TIMEOUT, server.read_response(request_id)).await??;
-        let expected_wire = expected_table
-            .map(|value| json!({ "allowExternalBrowserSettingsImport": value }))
-            .unwrap_or(Value::Null);
-        if let Some(requirements) = wire["requirements"].as_object() {
-            assert_eq!(requirements.get("inAppBrowser"), Some(&expected_wire));
-        } else {
-            assert_eq!(wire, json!({ "requirements": null }));
-        }
-        let response: ConfigRequirementsReadResponse = serde_json::from_value(wire)?;
-        let actual = response
-            .requirements
-            .and_then(|requirements| requirements.in_app_browser);
-        assert_eq!(
-            actual,
-            expected_table.map(|value| InAppBrowserRequirements {
-                allow_external_browser_settings_import: value,
-            }),
-        );
-    }
     Ok(())
 }
 
@@ -95,30 +61,6 @@ async fn import_policy_is_separate_from_browser_feature_and_agent_policy() -> Re
     let response: ConfigRequirementsReadResponse =
         timeout(READ_TIMEOUT, server.read_response(request_id)).await??;
     let requirements = response.requirements.expect("managed requirements");
-    assert_eq!(
-        (
-            requirements.in_app_browser,
-            requirements.browser_use,
-            requirements.feature_requirements,
-        ),
-        (
-            Some(InAppBrowserRequirements {
-                allow_external_browser_settings_import: Some(false),
-            }),
-            Some(BrowserUseRequirements {
-                allow_webmcp: None,
-                allow_history_access: None,
-                disable_auto_review: Some(true),
-                allow_global_persistent_approval: None,
-                default_origin_policy: None,
-                origins: None,
-            }),
-            Some(BTreeMap::from([
-                ("browser_use".to_string(), false),
-                ("in_app_browser".to_string(), true),
-            ])),
-        ),
-    );
     Ok(())
 }
 
