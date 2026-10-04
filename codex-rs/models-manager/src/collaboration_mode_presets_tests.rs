@@ -10,7 +10,7 @@ fn preset_names_use_mode_display_names() {
     assert_eq!(plan.name, ModeKind::Plan.display_name());
     assert_eq!(default.name, ModeKind::Default.display_name());
     assert_eq!(plan.model, None);
-    assert_eq!(plan.reasoning_effort, Some(Some(ReasoningEffort::Medium)));
+    assert_eq!(plan.reasoning_effort, Some(Some(ReasoningEffort::High)));
     assert_eq!(default.model, None);
     assert_eq!(default.reasoning_effort, None);
 }

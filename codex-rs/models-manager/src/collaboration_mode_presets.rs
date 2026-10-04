@@ -10,7 +10,7 @@ pub fn builtin_collaboration_mode_presets() -> Vec<CollaborationModeMask> {
             name: ModeKind::Plan.display_name().to_string(),
             mode: Some(ModeKind::Plan),
             model: None,
-            reasoning_effort: Some(Some(ReasoningEffort::Medium)),
+            reasoning_effort: Some(Some(ReasoningEffort::High)),
             developer_instructions: Some(Some(messages.plan.text().to_string())),
         },
         CollaborationModeMask {

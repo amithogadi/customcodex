@@ -272,7 +272,7 @@ async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
 
     let preset = get_available_model(&chat, "gpt-5.5");
     chat.open_reasoning_popup(preset);
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let event = rx.try_recv().expect("expected AppEvent");
@@ -296,7 +296,7 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
     let _ = drain_insert_history(&mut rx);
     set_chatgpt_auth(&mut chat);
 
-    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let preset = get_available_model(&chat, "gpt-5.5");
     chat.open_reasoning_popup(preset);
@@ -330,10 +330,10 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
     let _ = drain_insert_history(&mut rx);
     set_chatgpt_auth(&mut chat);
 
-    // Reproduce: Plan effective reasoning remains the preset (medium), but the
-    // global default differs (high). Pressing Enter on the current Plan choice
+    // Reproduce: Plan effective reasoning remains the preset (high), but the
+    // global default differs (medium). Pressing Enter on the current Plan choice
     // should open the scope prompt rather than silently rewriting the global default.
-    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
     let preset = get_available_model(&chat, "gpt-5.5");
     chat.open_reasoning_popup(preset);
@@ -344,7 +344,7 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
         event,
         AppEvent::OpenPlanReasoningScopePrompt {
             model,
-            effort: Some(ReasoningEffortConfig::Medium)
+            effort: Some(ReasoningEffortConfig::High)
         } if model == "gpt-5.5"
     );
 }
@@ -354,6 +354,8 @@ async fn reasoning_shortcut_in_plan_mode_updates_plan_override_without_prompt_or
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.5")).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
+    // Exercise a medium-to-high shortcut independently of the built-in Plan default.
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Medium));
     let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
         .expect("expected plan collaboration mode");
     chat.set_collaboration_mask(plan_mask);
@@ -688,7 +690,7 @@ async fn plan_reasoning_scope_popup_mentions_built_in_plan_default_when_no_overr
         popup
             .split_whitespace()
             .collect::<String>()
-            .contains("built-inPlandefault(medium)")
+            .contains("built-inPlandefault(high)")
     );
 }
 
@@ -1381,7 +1383,7 @@ async fn mode_switch_surfaces_model_change_notification_when_effective_model_cha
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        plan_messages.contains("Model changed to gpt-5.6-luna medium for Plan mode."),
+        plan_messages.contains("Model changed to gpt-5.6-luna high for Plan mode."),
         "expected Plan-mode model switch notice, got: {plan_messages:?}"
     );
 
@@ -1406,7 +1408,7 @@ async fn mode_switch_surfaces_model_change_notification_when_effective_model_cha
 async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_same() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.6-terra")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
     let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
         .expect("expected plan collaboration mode");
@@ -1418,7 +1420,7 @@ async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_sam
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        plan_messages.contains("Model changed to gpt-5.6-terra medium for Plan mode."),
+        plan_messages.contains("Model changed to gpt-5.6-terra high for Plan mode."),
         "expected reasoning-change notice in Plan mode, got: {plan_messages:?}"
     );
 }
@@ -1673,7 +1675,7 @@ async fn set_model_updates_active_collaboration_mask() {
 }
 
 #[tokio::test]
-async fn set_reasoning_effort_updates_active_collaboration_mask() {
+async fn set_reasoning_effort_does_not_override_active_plan_preset() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.6-terra")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
     let plan_mask = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
@@ -1684,7 +1686,7 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
 
     assert_eq!(
         chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::Medium)
+        Some(ReasoningEffortConfig::High)
     );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 }
@@ -1693,7 +1695,7 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
 async fn set_reasoning_effort_does_not_override_active_plan_override() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.6-terra")).await;
     chat.set_feature_enabled(Feature::CollaborationModes, /*enabled*/ true);
-    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
+    chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Medium));
     let plan_mask = collaboration_modes::mask_for_kind(chat.model_catalog.as_ref(), ModeKind::Plan)
         .expect("expected plan collaboration mask");
     chat.set_collaboration_mask(plan_mask);
@@ -1702,7 +1704,7 @@ async fn set_reasoning_effort_does_not_override_active_plan_override() {
 
     assert_eq!(
         chat.current_reasoning_effort(),
-        Some(ReasoningEffortConfig::High)
+        Some(ReasoningEffortConfig::Medium)
     );
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
 }
