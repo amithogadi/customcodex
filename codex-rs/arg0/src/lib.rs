@@ -207,7 +207,7 @@ fn prepare_path_env_var_with_aliases(
 /// `codex-linux-sandbox` we *directly* execute
 /// [`codex_linux_sandbox::run_main`] (which never returns). Otherwise we:
 ///
-/// 1.  Load `.env` values from `~/.codex/.env` before creating any threads.
+/// 1.  Load `.env` values from `~/.customcodex/.env` before creating any threads.
 /// 2.  Spawn a main runtime thread with a controlled stack size.
 /// 3.  Construct a Tokio multi-thread runtime.
 /// 4.  Capture the current executable path and derive the
@@ -301,7 +301,7 @@ fn build_runtime() -> anyhow::Result<tokio::runtime::Runtime> {
 
 const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 
-/// Load env vars from ~/.codex/.env.
+/// Load env vars from ~/.customcodex/.env.
 ///
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
@@ -613,7 +613,7 @@ mod tests {
     fn windows_batch_alias_preserves_unicode_executable_paths() -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let profile = root.path().join("用户");
-        let alias_directory = profile.join(".codex").join("tmp").join("arg0");
+        let alias_directory = profile.join(".customcodex").join("tmp").join("arg0");
         let executable_directory = profile.join("bin");
         fs::create_dir_all(&alias_directory)?;
         fs::create_dir_all(&executable_directory)?;
@@ -646,7 +646,7 @@ mod tests {
         assert_eq!(
             super::windows_batch_executable_path(
                 Path::new(r"D:\Tools\codex.exe"),
-                Path::new(r"C:\Users\person\.codex\tmp\arg0"),
+                Path::new(r"C:\Users\person\.customcodex\tmp\arg0"),
             ),
             r"D:\Tools\codex.exe",
         );

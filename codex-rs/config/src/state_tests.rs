@@ -151,7 +151,7 @@ exclude = ["LEGACY_*"]
 fn disabled_layers_do_not_validate_shell_environment_policy() {
     let layer = ConfigLayerEntry::new_disabled(
         ConfigLayerSource::Project {
-            dot_codex_folder: AbsolutePathBuf::from_absolute_path("/untrusted/.codex")
+            dot_codex_folder: AbsolutePathBuf::from_absolute_path("/untrusted/.customcodex")
                 .expect("project path should be absolute"),
         },
         toml::from_str(
@@ -296,7 +296,7 @@ fn layer_iterators_preserve_precedence_and_disabled_layers() {
         profile: None,
     };
     let project_source = ConfigLayerSource::Project {
-        dot_codex_folder: test_user_config_path(&temp_dir, ".codex"),
+        dot_codex_folder: test_user_config_path(&temp_dir, ".customcodex"),
     };
     let session_source = ConfigLayerSource::SessionFlags;
     let empty_config = TomlValue::Table(toml::map::Map::new());

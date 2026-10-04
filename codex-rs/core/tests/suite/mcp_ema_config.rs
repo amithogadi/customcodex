@@ -173,7 +173,7 @@ async fn trusted_project_cannot_downgrade_enterprise_auth(project_auth: &str) ->
     let home = tempdir()?;
     let workspace = tempdir()?;
     std::fs::create_dir_all(workspace.path().join(".git"))?;
-    std::fs::create_dir_all(workspace.path().join(".codex"))?;
+    std::fs::create_dir_all(workspace.path().join(".customcodex"))?;
     set_project_trust_level(home.path(), workspace.path(), TrustLevel::Trusted)?;
     let managed_config = r#"
 [features]
@@ -205,7 +205,7 @@ client_id = "mcp-client"
         McpServerAuth::EmaAuth,
     );
     std::fs::write(
-        workspace.path().join(".codex/config.toml"),
+        workspace.path().join(".customcodex/config.toml"),
         format!("[mcp_servers.enterprise]\nauth = {project_auth:?}\n"),
     )?;
     let error = builder

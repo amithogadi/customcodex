@@ -208,7 +208,7 @@ pub fn create_directory_guard(directory: BorrowedHandle<'_>) -> Result<OwnedHand
         .try_fill_bytes(&mut random)
         .context("generate sandbox directory guard name")?;
     let guard_id = u64::from_le_bytes(random);
-    let name = format!(".codex-provisioning-{guard_id:016x}.guard");
+    let name = format!(".customcodex-provisioning-{guard_id:016x}.guard");
     let mut name: Vec<u16> = OsStr::new(&name).encode_wide().chain(Some(0)).collect();
     open_no_reparse(
         directory.as_raw_handle() as HANDLE,

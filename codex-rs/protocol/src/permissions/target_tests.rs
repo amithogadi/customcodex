@@ -135,7 +135,7 @@ fn managed_denials_preserve_native_metadata_read_rejections() {
             /*exclude_tmpdir_env_var*/ true,
             /*exclude_slash_tmp*/ true,
         );
-        for name in [".codex", ".git"] {
+        for name in [".customcodex", ".git"] {
             let denied_root = extra_root.join(name).unwrap();
             let child = denied_root.join("reopened").unwrap();
             for (path, expected_root_access) in [

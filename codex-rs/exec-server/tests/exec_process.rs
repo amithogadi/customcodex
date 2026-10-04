@@ -117,12 +117,12 @@ async fn codex_home_symlink_opt_out_respects_host_config_and_scope() -> Result<(
     let home = TempDir::new()?;
     let target = TempDir::new()?;
     let alias = home.path().join("visualizations");
-    let other_alias = workspace.path().join(".codex/visualizations");
-    std::fs::create_dir(workspace.path().join(".codex"))?;
+    let other_alias = workspace.path().join(".customcodex/visualizations");
+    std::fs::create_dir(workspace.path().join(".customcodex"))?;
     symlink(target.path(), &alias)?;
     symlink(target.path(), &other_alias)?;
     std::fs::write(
-        workspace.path().join(".codex/config.toml"),
+        workspace.path().join(".customcodex/config.toml"),
         "allow_symlinked_codex_home = true\n",
     )?;
 

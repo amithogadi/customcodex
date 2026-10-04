@@ -38,7 +38,7 @@ fn only_exact_opt_in_requests_registered_core() {
 #[test]
 fn runner_receipt_distinguishes_incomplete_setup_from_owner_and_removal() {
     let owner = "S-1-5-21-100";
-    let home = Path::new(r"C:\Users\owner\.codex");
+    let home = Path::new(r"C:\Users\owner\.customcodex");
     let package = "OpenAI.Codex_current";
     let runtime = RuntimeRegistration {
         package_family: "OpenAI.Codex_family".to_owned(),
@@ -71,7 +71,7 @@ fn runner_receipt_distinguishes_incomplete_setup_from_owner_and_removal() {
         ),
         (
             owner,
-            Path::new(r"C:\Users\other\.codex"),
+            Path::new(r"C:\Users\other\.customcodex"),
             "registered Core setup belongs to another Codex home",
         ),
         (owner, home, "registered Core setup is being removed"),

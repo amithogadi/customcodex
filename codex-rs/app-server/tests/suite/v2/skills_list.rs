@@ -228,9 +228,9 @@ async fn skills_list_uses_each_cwds_bundled_skills_configuration() -> Result<()>
 
     for (cwd, enabled) in [(disabled_cwd.path(), false), (enabled_cwd.path(), true)] {
         std::fs::create_dir_all(cwd.join(".git"))?;
-        std::fs::create_dir_all(cwd.join(".codex"))?;
+        std::fs::create_dir_all(cwd.join(".customcodex"))?;
         std::fs::write(
-            cwd.join(".codex/config.toml"),
+            cwd.join(".customcodex/config.toml"),
             format!("[skills.bundled]\nenabled = {enabled}\n"),
         )?;
         set_project_trust_level(codex_home.path(), cwd, TrustLevel::Trusted)?;
@@ -729,7 +729,7 @@ async fn skills_list_skips_cwd_roots_when_environment_disabled() -> Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
     write_skill(&codex_home, "home-skill")?;
-    let repo_skill_dir = cwd.path().join(".codex/skills/repo-skill");
+    let repo_skill_dir = cwd.path().join(".customcodex/skills/repo-skill");
     std::fs::create_dir_all(&repo_skill_dir)?;
     std::fs::write(
         repo_skill_dir.join("SKILL.md"),
@@ -829,9 +829,9 @@ enabled = false
         (third_cwd.path(), true, false),
     ] {
         std::fs::create_dir_all(cwd.join(".git"))?;
-        std::fs::create_dir_all(cwd.join(".codex"))?;
+        std::fs::create_dir_all(cwd.join(".customcodex"))?;
         std::fs::write(
-            cwd.join(".codex/config.toml"),
+            cwd.join(".customcodex/config.toml"),
             format!(
                 "[features]\nplugins = {plugins_enabled}\n[plugins.\"google-calendar@openai-api-curated\"]\nenabled = {plugin_enabled}\n"
             ),
@@ -1128,7 +1128,7 @@ async fn skills_list_uses_cached_result_after_session_default_writes_until_force
             .all(|skill| skill.name != "late-extra-skill")
     );
 
-    let skill_dir = cwd.path().join(".codex/skills/late-extra-skill");
+    let skill_dir = cwd.path().join(".customcodex/skills/late-extra-skill");
     std::fs::create_dir_all(&skill_dir)?;
     std::fs::write(
         skill_dir.join("SKILL.md"),

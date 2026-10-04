@@ -107,14 +107,14 @@ fn approved_command_grants_root_metadata_unless_explicitly_denied() {
                 glob(root_path(".agent?").inferred_native_path_string()),
                 Deny,
             ),
-            entry(root_path(".codex/private"), Deny),
+            entry(root_path(".customcodex/private"), Deny),
             entry(
-                glob(root_path(".codex/*.env").inferred_native_path_string()),
+                glob(root_path(".customcodex/*.env").inferred_native_path_string()),
                 Deny,
             ),
         ]);
         let approved = ordinary.for_approved_command(&context);
-        let metadata_paths = [".git", ".agents", ".codex"].map(root_path);
+        let metadata_paths = [".git", ".agents", ".customcodex"].map(root_path);
         assert_eq!(
             metadata_paths
                 .each_ref()
@@ -127,8 +127,8 @@ fn approved_command_grants_root_metadata_unless_explicitly_denied() {
                 .map(|path| approved.can_write_path(path, &context)),
             [false, false, true],
         );
-        assert!(approved.can_write_path(&root_path(".codex/public"), &context));
-        assert!(!approved.can_write_path(&root_path(".codex/private/file"), &context));
+        assert!(approved.can_write_path(&root_path(".customcodex/public"), &context));
+        assert!(!approved.can_write_path(&root_path(".customcodex/private/file"), &context));
         let matcher = ReadDenyMatcher::try_new_with_context(&approved, &context)
             .unwrap()
             .unwrap();
@@ -136,9 +136,9 @@ fn approved_command_grants_root_metadata_unless_explicitly_denied() {
             [
                 ".git",
                 ".agents",
-                ".codex/private/file",
-                ".codex/secret.env",
-                ".codex/public"
+                ".customcodex/private/file",
+                ".customcodex/secret.env",
+                ".customcodex/public"
             ]
             .map(|path| matcher.is_read_denied_uri(&root_path(path), &context)),
             [true, true, true, true, false],

@@ -56,7 +56,7 @@ const SYSTEM_SKILLS_DIR: Dir = include_dir::include_dir!("$CARGO_MANIFEST_DIR/sr
 
 const SYSTEM_SKILLS_DIR_NAME: &str = ".system";
 const SKILLS_DIR_NAME: &str = "skills";
-const SYSTEM_SKILLS_MARKER_FILENAME: &str = ".codex-system-skills.marker";
+const SYSTEM_SKILLS_MARKER_FILENAME: &str = ".customcodex-system-skills.marker";
 const SYSTEM_SKILLS_MARKER_SALT: &str = "v1";
 
 /// Returns the on-disk cache location for embedded system skills from an absolute CODEX_HOME.

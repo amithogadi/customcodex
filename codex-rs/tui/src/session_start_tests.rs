@@ -195,7 +195,7 @@ fn session_start_error_surfaces_archived_guidance_without_rollout_path() {
         ThreadId::from_string("019e72f4-e09a-70f2-b2c2-a153a57b8cc0").expect("thread id");
     let target_session = SessionTarget {
         path: Some(std::path::PathBuf::from(
-            "/Users/me/.codex/archived_sessions/rollout.jsonl",
+            "/Users/me/.customcodex/archived_sessions/rollout.jsonl",
         )),
         thread_id,
         cwd: None,

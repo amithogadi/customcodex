@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 const FRAGMENT_PLACEHOLDER: &str = "<!--__INLINE_VISUALIZATION_FRAGMENT__-->";
-const VIEWER_DIRECTORY_NAME: &str = ".codex-viewers";
+const VIEWER_DIRECTORY_NAME: &str = ".customcodex-viewers";
 
 // Keep these assets in sync with the bundled visualize skill's browser renderer.
 const VIEWER_STYLESHEET: &str = include_str!("../../assets/inline_visualization/visualize.css");

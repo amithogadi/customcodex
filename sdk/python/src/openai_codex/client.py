@@ -913,4 +913,4 @@ class CodexClient:
 
 
 def default_codex_home() -> str:
-    return str(Path.home() / ".codex")
+    return str(Path.home() / ".customcodex")

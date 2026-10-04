@@ -84,7 +84,7 @@ async fn rejects_skills_that_escape_user_roots_through_symlinks() -> Result<()> 
 fn invoked_skill_paths_are_deduplicated_and_bounded() {
     let mut skills = TrustedSkillInvocations::default();
     for index in 0..MAX_TRUSTED_SKILLS.saturating_mul(2) {
-        let path = format!("/home/user/.codex/skills/{index:03}/SKILL.md");
+        let path = format!("/home/user/.customcodex/skills/{index:03}/SKILL.md");
         skills.record(path.clone());
         skills.record(path);
     }
@@ -92,7 +92,7 @@ fn invoked_skill_paths_are_deduplicated_and_bounded() {
     assert_eq!(
         skills.into_paths(),
         (0..MAX_TRUSTED_SKILLS)
-            .map(|index| format!("/home/user/.codex/skills/{index:03}/SKILL.md"))
+            .map(|index| format!("/home/user/.customcodex/skills/{index:03}/SKILL.md"))
             .collect::<Vec<_>>()
     );
 

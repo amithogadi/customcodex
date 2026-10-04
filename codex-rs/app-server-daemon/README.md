@@ -41,7 +41,7 @@ remain authoritative and report connection failures.
 ## Local state
 
 State lives under `$CODEX_HOME/app-server-daemon` (normally
-`~/.codex/app-server-daemon`). It includes the daemon PID and lock files, local
+`~/.customcodex/app-server-daemon`). It includes the daemon PID and lock files, local
 logs, recovery data, and `settings.json`.
 
 `shutdownGraceSeconds` defaults to 60 and accepts values from 0 through 300.

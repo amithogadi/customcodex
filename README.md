@@ -73,10 +73,13 @@ requires_openai_auth = false
 Set `CUSTOM_PROVIDER_API_KEY` in your shell environment, then launch from `codex-rs`:
 
 ```sh
-CODEX_HOME="$HOME/.customcodex" ./target/release/codex
+./target/release/codex
 ```
 
-`CODEX_HOME` selects the configuration and session directory for that invocation.
+This fork defaults to `~/.customcodex` for configuration and session data.
+Set `CODEX_HOME` explicitly if you want to override that directory.
+Project configuration is loaded from `.customcodex/config.toml` within the project.
+Existing configuration must be moved or copied to the new location manually.
 For an endpoint without authentication, omit `env_key`. See
 [provider configuration](docs/config.md) for more options and compatibility details.
 

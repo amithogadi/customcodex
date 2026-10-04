@@ -162,9 +162,9 @@ async fn worktree_start_and_fork(backend: &str) -> anyhow::Result<()> {
         fs::create_dir(path)?;
     }
     // Forking without --cd must select the daemon using the resolved project, not this launcher.
-    fs::create_dir(launcher.join(".codex"))?;
+    fs::create_dir(launcher.join(".customcodex"))?;
     fs::write(
-        launcher.join(".codex/config.toml"),
+        launcher.join(".customcodex/config.toml"),
         "features.auth_elicitation = false\n",
     )?;
     fs::write(
@@ -172,9 +172,9 @@ async fn worktree_start_and_fork(backend: &str) -> anyhow::Result<()> {
         "committed destination instructions",
     )?;
     let server = MockServer::start().await;
-    fs::create_dir(source.join(".codex"))?;
+    fs::create_dir(source.join(".customcodex"))?;
     fs::write(
-        source.join(".codex/config.toml"),
+        source.join(".customcodex/config.toml"),
         "model = \"destination-model\"\ncli_auth_credentials_store = \"file\"\n",
     )?;
     git(&source, &["init", "--quiet"])?;
@@ -214,7 +214,7 @@ trust_level = "trusted"
         "uncommitted launcher instructions",
     )?;
     fs::write(
-        source.join(".codex/config.toml"),
+        source.join(".customcodex/config.toml"),
         "model = \"source-model\"\n",
     )?;
     let program = codex_utils_cargo_bin::cargo_bin("codex")?;
@@ -347,7 +347,10 @@ trust_level = "trusted"
             args.extend(["--cd".into(), source.display().to_string()]);
         }
         if explicit_cd {
-            args.extend(["--cd".into(), source.join(".codex").display().to_string()]);
+            args.extend([
+                "--cd".into(),
+                source.join(".customcodex").display().to_string(),
+            ]);
         }
         args.push(prompt.into());
         if previous.is_empty() {
@@ -537,7 +540,7 @@ trust_level = "trusted"
             .collect::<Vec<_>>()
             .join("\n");
         if explicit_cd {
-            let expected = format!("{checkout}/.codex").replace('\\', "/");
+            let expected = format!("{checkout}/.customcodex").replace('\\', "/");
             assert!(context.replace('\\', "/").contains(&expected), "{context}");
         }
         assert!(
@@ -609,7 +612,7 @@ trust_level = "trusted"
         server.reset().await;
     }
     // Source loads its healthy uncommitted config, but the new checkout loads malformed HEAD.
-    fs::write(source.join(".codex/config.toml"), "not = [valid toml")?;
+    fs::write(source.join(".customcodex/config.toml"), "not = [valid toml")?;
     git(
         &source,
         &[
@@ -620,7 +623,7 @@ trust_level = "trusted"
             "invalid destination",
         ],
     )?;
-    fs::write(source.join(".codex/config.toml"), "")?;
+    fs::write(source.join(".customcodex/config.toml"), "")?;
     let before = git(&source, &["worktree", "list", "--porcelain"])?;
     let output = rejected_start(
         &program,

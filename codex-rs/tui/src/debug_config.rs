@@ -739,9 +739,9 @@ interrupt_message = false
             absolute_path("/etc/codex/config.toml")
         };
         let project_folder = if cfg!(windows) {
-            absolute_path("C:\\repo\\.codex")
+            absolute_path("C:\\repo\\.customcodex")
         } else {
-            absolute_path("/repo/.codex")
+            absolute_path("/repo/.customcodex")
         };
 
         let layers = vec![
@@ -785,19 +785,19 @@ interrupt_message = false
             absolute_path("/home/alice/.gitconfig")
         };
         let sqlite_home = if cfg!(windows) {
-            absolute_path("C:\\Users\\alice\\.codex\\state")
+            absolute_path("C:\\Users\\alice\\.customcodex\\state")
         } else {
-            absolute_path("/home/alice/.codex/state")
+            absolute_path("/home/alice/.customcodex/state")
         };
         let log_dir = if cfg!(windows) {
-            absolute_path("C:\\Users\\alice\\.codex\\logs")
+            absolute_path("C:\\Users\\alice\\.customcodex\\logs")
         } else {
-            absolute_path("/home/alice/.codex/logs")
+            absolute_path("/home/alice/.customcodex/logs")
         };
         let model_catalog_json = if cfg!(windows) {
-            absolute_path("C:\\Users\\alice\\.codex\\models.json")
+            absolute_path("C:\\Users\\alice\\.customcodex\\models.json")
         } else {
-            absolute_path("/home/alice/.codex/models.json")
+            absolute_path("/home/alice/.customcodex/models.json")
         };
 
         let requirements = ConfigRequirements {
@@ -952,9 +952,9 @@ interrupt_message = false
         };
 
         let user_file = if cfg!(windows) {
-            absolute_path("C:\\users\\alice\\.codex\\config.toml")
+            absolute_path("C:\\users\\alice\\.customcodex\\config.toml")
         } else {
-            absolute_path("/home/alice/.codex/config.toml")
+            absolute_path("/home/alice/.customcodex/config.toml")
         };
         let stack = ConfigLayerStack::new(
             vec![ConfigLayerEntry::new(

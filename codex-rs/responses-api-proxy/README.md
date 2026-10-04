@@ -12,7 +12,7 @@ echo $PROVIDER_API_KEY | ./target/debug/codex-responses-api-proxy \
     --dump-dir /tmp/proxy
 
 
-# Add this to ~/.codex/config.toml:
+# Add this to ~/.customcodex/config.toml:
 
 [model_providers.codex-responses-api-proxy]
 name = 'codex-responses-api-proxy'

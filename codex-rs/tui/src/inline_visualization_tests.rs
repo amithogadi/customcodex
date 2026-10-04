@@ -233,7 +233,7 @@ fn viewer_materializes_sandboxed_static_document() {
     let viewer_path = url.to_file_path().expect("viewer file path");
     assert_eq!(
         viewer_path.parent().and_then(Path::file_name),
-        Some(std::ffi::OsStr::new(".codex-viewers"))
+        Some(std::ffi::OsStr::new(".customcodex-viewers"))
     );
     let document = fs::read_to_string(viewer_path).expect("read static viewer");
 

@@ -34,7 +34,7 @@ fn local_aliases_keep_read_only_and_deny_overrides() -> anyhow::Result<()> {
                                 protected.to_abs_path()?.as_path(),
                                 directory.path(),
                             ),
-                            matching.can_write_path(&spelling.join(".codex/config.toml")?)?,
+                            matching.can_write_path(&spelling.join(".customcodex/config.toml")?)?,
                         ),
                         (true, false, access, false),
                     );

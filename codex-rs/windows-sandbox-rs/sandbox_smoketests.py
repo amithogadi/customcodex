@@ -506,7 +506,7 @@ def main() -> int:
     # 17. WS: direct loopback blocked, proxy loopback allowed via env proxy
     if have("curl"):
         with start_loopback_proxy_fixture() as (target_port, proxy_port):
-            proxy_home = WS_ROOT / ".codex_proxy_smoke"
+            proxy_home = WS_ROOT / ".customcodex_proxy_smoke"
             remove_if_exists(proxy_home)
             proxy_home.mkdir(parents=True, exist_ok=True)
             proxy_url = f"http://127.0.0.1:{proxy_port}"
@@ -763,8 +763,8 @@ def main() -> int:
         f"rc={rc}",
     )
 
-    # 34. WS: policy tamper (.codex artifacts) denied
-    codex_home = Path(os.environ["USERPROFILE"]) / ".codex"
+    # 34. WS: policy tamper (.customcodex artifacts) denied
+    codex_home = Path(os.environ["USERPROFILE"]) / ".customcodex"
     cap_sid_target = codex_home / "cap_sid"
     rc, out, err = run_sbx(
         "workspace-write",
@@ -772,10 +772,10 @@ def main() -> int:
         WS_ROOT,
     )
     rc2, out2, err2 = run_sbx(
-        "workspace-write", ["cmd", "/c", "echo tamper > .codex\\policy.json"], WS_ROOT
+        "workspace-write", ["cmd", "/c", "echo tamper > .customcodex\\policy.json"], WS_ROOT
     )
-    add("WS: .codex cap_sid tamper denied", rc != 0, f"rc={rc}, err={err}")
-    add("WS: .codex policy tamper denied", rc2 != 0, f"rc={rc2}, err={err2}")
+    add("WS: .customcodex cap_sid tamper denied", rc != 0, f"rc={rc}, err={err}")
+    add("WS: .customcodex policy tamper denied", rc2 != 0, f"rc={rc2}, err={err2}")
 
     # 35. WS: PATH stub bypass denied (ssh before stubs)
     tools_dir = WS_ROOT / "tools"

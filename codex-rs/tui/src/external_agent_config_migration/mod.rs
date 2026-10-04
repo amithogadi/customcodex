@@ -778,7 +778,7 @@ mod tests {
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Config,
                 description:
-                    "Migrate /Users/alex/.claude/settings.json into /Users/alex/.codex/config.toml"
+                    "Migrate /Users/alex/.claude/settings.json into /Users/alex/.customcodex/config.toml"
                         .to_string(),
                 cwd: None,
                 details: None,
@@ -824,7 +824,7 @@ mod tests {
             1,
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Memory,
-                description: "Migrate memory files from /Users/alex/.claude/projects to /Users/alex/.codex/memories/extensions/external_agent_import/resources".to_string(),
+                description: "Migrate memory files from /Users/alex/.claude/projects to /Users/alex/.customcodex/memories/extensions/external_agent_import/resources".to_string(),
                 cwd: None,
                 details: Some(codex_app_server_protocol::MigrationDetails {
                     memory: vec!["project".to_string()],
@@ -900,7 +900,7 @@ mod tests {
         let items = vec![ExternalAgentConfigMigrationItem {
             item_type: ExternalAgentConfigMigrationItemType::Config,
             description:
-                "Migrate /Users/alex/.cursor/cli-config.json into /Users/alex/.codex/config.toml"
+                "Migrate /Users/alex/.cursor/cli-config.json into /Users/alex/.customcodex/config.toml"
                     .to_string(),
             cwd: None,
             details: None,

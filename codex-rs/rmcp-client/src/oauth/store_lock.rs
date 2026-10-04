@@ -85,7 +85,7 @@ impl OAuthStoreLock {
     ) -> Result<Self, OAuthStoreLockFailure> {
         // This lock intentionally follows the existing local File/Secrets credential-store
         // authority. Those stores are CODEX_HOME-backed today: if CODEX_HOME is unset they use
-        // the default home (`~/.codex`), and if an embedder has no local home/filesystem authority
+        // the default home (`~/.customcodex`), and if an embedder has no local home/filesystem authority
         // those stores already cannot operate. A future provider-backed credential store should
         // provide its own matching lock authority instead of using this local path.
         let codex_home = find_codex_home()

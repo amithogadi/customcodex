@@ -543,7 +543,7 @@ async fn windows_elevated_enforces_deny_read_and_protects_setup_marker() -> anyh
     let _user_profile_guard = EnvVarGuard::set("USERPROFILE", user_profile.path().as_os_str());
     let exact_secret = user_profile.path().join("exact-secret.txt");
     std::fs::write(&exact_secret, "exact secret\n")?;
-    let bundled_skill_dir = user_profile.path().join(".codex/plugins/cache");
+    let bundled_skill_dir = user_profile.path().join(".customcodex/plugins/cache");
     std::fs::create_dir_all(&bundled_skill_dir)?;
     let bundled_skill = bundled_skill_dir.join("SKILL.md");
     let setup_marker = codex_home.path().join(".sandbox").join("setup_marker.json");

@@ -365,7 +365,7 @@ async fn sandbox_blocks_first_time_dot_codex_creation() {
     let temp = tempfile::tempdir().expect("should be able to create temp dir");
     let repo_root = temp.path().join("repo").abs();
     create_dir_all(&repo_root).await.expect("mkdir repo");
-    let dot_codex = repo_root.join(".codex");
+    let dot_codex = repo_root.join(".customcodex");
     let config_toml = dot_codex.join("config.toml");
     let permission_profile = PermissionProfile::workspace_write_with(
         &[],
@@ -378,7 +378,7 @@ async fn sandbox_blocks_first_time_dot_codex_creation() {
         vec![
             "bash".to_string(),
             "-lc".to_string(),
-            "mkdir -p .codex && echo 'sandbox_mode = \"danger-full-access\"' > .codex/config.toml"
+            "mkdir -p .customcodex && echo 'sandbox_mode = \"danger-full-access\"' > .customcodex/config.toml"
                 .to_string(),
         ],
         repo_root.clone(),
@@ -388,12 +388,15 @@ async fn sandbox_blocks_first_time_dot_codex_creation() {
         sandbox_env,
     )
     .await
-    .expect("should spawn command creating .codex");
+    .expect("should spawn command creating .customcodex");
 
-    let status = child.wait().await.expect("should wait for .codex command");
+    let status = child
+        .wait()
+        .await
+        .expect("should wait for .customcodex command");
     assert!(
         !status.success(),
-        "sandbox unexpectedly allowed first-time .codex creation: {status:?}"
+        "sandbox unexpectedly allowed first-time .customcodex creation: {status:?}"
     );
     let dot_codex_metadata = tokio::fs::symlink_metadata(&dot_codex).await;
     if let Ok(metadata) = dot_codex_metadata {

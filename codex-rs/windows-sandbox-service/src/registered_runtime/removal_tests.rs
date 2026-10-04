@@ -91,7 +91,7 @@ fn finalizer_preserves_utf8_plan_and_requires_commit_and_stdin_eof() -> Result<(
         .find("    $finished = $false")
         .context("find cleanup boundary")?
         + start;
-    let home = r"C:\Users\Zoë-東京\.codex";
+    let home = r"C:\Users\Zoë-東京\.customcodex";
     let script = format!(
         "$ErrorActionPreference = 'Stop';
          [Console]::InputEncoding = [Text.Encoding]::GetEncoding(437);

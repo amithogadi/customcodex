@@ -811,9 +811,9 @@ async fn system_marketplace_plugin_honors_layered_activation_and_mcp_policy(
         ),
     )?;
     std::fs::create_dir_all(project.path().join(".git"))?;
-    std::fs::create_dir_all(project.path().join(".codex"))?;
+    std::fs::create_dir_all(project.path().join(".customcodex"))?;
     std::fs::write(
-        project.path().join(".codex/config.toml"),
+        project.path().join(".customcodex/config.toml"),
         format!(
             "[plugins.\"{SAMPLE_PLUGIN_CONFIG_NAME}\"]\nenabled = {plugin_enabled}\n[plugins.\"{SAMPLE_PLUGIN_CONFIG_NAME}\".mcp_servers.sample]\nenabled = {project_enabled}\ndisabled_tools = [\"echo-tool\"]\n"
         ),

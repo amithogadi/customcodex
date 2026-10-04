@@ -21,9 +21,9 @@ enum RootLayout {
 }
 
 #[test_case::test_case(RootLayout::Directory, ""; "home_cwd")]
-#[test_case::test_case(RootLayout::Directory, ".codex/visualizations/thread"; "visualization_cwd")]
+#[test_case::test_case(RootLayout::Directory, ".customcodex/visualizations/thread"; "visualization_cwd")]
 #[test_case::test_case(RootLayout::Symlink, ""; "symlink_home_cwd")]
-#[test_case::test_case(RootLayout::Symlink, ".codex/visualizations/thread"; "symlink_visualization_cwd")]
+#[test_case::test_case(RootLayout::Symlink, ".customcodex/visualizations/thread"; "symlink_visualization_cwd")]
 #[tokio::test]
 async fn sandbox_starts_with_nested_writable_metadata(layout: RootLayout, relative_cwd: &str) {
     if should_skip_bwrap_tests().await {
@@ -42,7 +42,7 @@ async fn sandbox_starts_with_nested_writable_metadata(layout: RootLayout, relati
             std::os::unix::fs::symlink(target, &home).expect("create home alias");
         }
     }
-    let codex_home = home.join(".codex");
+    let codex_home = home.join(".customcodex");
     let visualization = codex_home.join("visualizations/thread");
     std::fs::create_dir_all(&visualization).expect("create visualization directory");
     let protected_file = codex_home.join("config.toml");
@@ -61,7 +61,7 @@ async fn sandbox_starts_with_nested_writable_metadata(layout: RootLayout, relati
     ];
     // Remote clients expand generated workspace metadata rules to concrete
     // paths, including paths that do not yet exist on the executor.
-    for name in [".git", ".agents", ".codex", ".aws"] {
+    for name in [".git", ".agents", ".customcodex", ".aws"] {
         entries.push(FileSystemSandboxEntry::skip_missing_path(
             visualization.join(name).into(),
             FileSystemAccessMode::Read,
@@ -80,13 +80,13 @@ printf visualization > "$visualization/allowed.txt"
 if (rm "$workspace") 2>/dev/null; then
     exit 13
 fi
-if (printf changed > "$workspace/.codex/config.toml") 2>/dev/null; then
+if (printf changed > "$workspace/.customcodex/config.toml") 2>/dev/null; then
     exit 10
 fi
-if (touch "$workspace/.codex/forbidden.txt") 2>/dev/null; then
+if (touch "$workspace/.customcodex/forbidden.txt") 2>/dev/null; then
     exit 11
 fi
-for name in .git .agents .codex .aws; do
+for name in .git .agents .customcodex .aws; do
     test -d "$visualization/$name"
     if (touch "$visualization/$name/forbidden.txt") 2>/dev/null; then
         exit 12
@@ -125,7 +125,7 @@ printf nested-metadata-protected
     ] {
         assert_eq!(std::fs::read_to_string(path).expect("read file"), expected);
     }
-    for name in [".git", ".agents", ".codex", ".aws"] {
+    for name in [".git", ".agents", ".customcodex", ".aws"] {
         assert!(
             !visualization.join(name).exists(),
             "temporary {name} mountpoint should be cleaned up"

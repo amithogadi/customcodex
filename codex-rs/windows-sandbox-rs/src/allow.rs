@@ -320,7 +320,7 @@ mod tests {
     fn denies_codex_agents_and_aws_inside_writable_root() {
         let tmp = TempDir::new().expect("tempdir");
         let command_cwd = tmp.path().join("workspace");
-        let codex_dir = command_cwd.join(".codex");
+        let codex_dir = command_cwd.join(".customcodex");
         let agents_dir = command_cwd.join(".agents");
         let aws_dir = command_cwd.join(".aws");
         let _ = fs::create_dir_all(&codex_dir);

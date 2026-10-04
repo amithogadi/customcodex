@@ -176,8 +176,9 @@ fn bundle_layers_can_strict_validate_enterprise_managed_config() {
 fn bundle_layers_resolve_paths_and_requirements_for_the_execution_host() {
     let temp_dir = tempdir().expect("temporary directories");
     let executor_home = temp_dir.path().join("executor-home");
-    let executor_codex_home = AbsolutePathBuf::from_absolute_path(executor_home.join(".codex"))
-        .expect("absolute executor Codex home");
+    let executor_codex_home =
+        AbsolutePathBuf::from_absolute_path(executor_home.join(".customcodex"))
+            .expect("absolute executor Codex home");
     let bundle = CloudConfigBundle {
         config_toml: CloudConfigTomlBundle {
             enterprise_managed: vec![CloudConfigFragment {

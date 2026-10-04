@@ -131,6 +131,29 @@ class InstallShTest(unittest.TestCase):
             )
             self.assertTrue(os.access(host_path, os.X_OK))
 
+    def test_install_without_codex_home_uses_customcodex(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            archive_path, checksum_path, metadata_json = create_package_release(root)
+
+            result, _requests = run_installer_in(
+                root,
+                VERSION,
+                metadata_json=metadata_json,
+                archive_path=archive_path,
+                checksum_path=checksum_path,
+                force_macos=True,
+                use_default_codex_home=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            current = root / "home/.customcodex/packages/standalone/current"
+            self.assertTrue(current.is_dir())
+            self.assertEqual(
+                os.readlink(root / "install-bin/codex"), str(current / "bin/codex")
+            )
+            self.assertFalse((root / "codex-home").exists())
+
     def test_releases_latest_installs_verified_package_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -170,7 +193,7 @@ class InstallShTest(unittest.TestCase):
             self.assertEqual(pinned.returncode, 0, pinned.stderr)
             visible = root / "install-bin/codex"
             original = visible.resolve()
-            pending = visible.with_name(".codex.12345")
+            pending = visible.with_name(".customcodex.12345")
             pending.symlink_to(original)
             profile = root / "home/.profile"
             profile.write_text("unchanged profile\n")
@@ -730,6 +753,7 @@ def run_installer_in(
     fail_ps: bool = False,
     daemon_only: bool = False,
     manual_update: bool = False,
+    use_default_codex_home: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     bin_dir = root / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -889,6 +913,8 @@ def run_installer_in(
             "SHELL": "/bin/sh",
         }
     )
+    if use_default_codex_home:
+        env.pop("CODEX_HOME", None)
     env["CODEX_INSTALL_IF_CURRENT"] = "1" if manual_update else "0"
     if update_guard_from_release is None:
         env.pop("CODEX_INSTALL_IF_LATEST", None)

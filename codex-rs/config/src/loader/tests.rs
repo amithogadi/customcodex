@@ -900,7 +900,7 @@ async fn local_layers_keep_raw_paths_order_and_legacy_requirements() {
     let tmp = tempdir().expect("tempdir");
     let codex_home = tmp.path().join("codex-home");
     let project = tmp.path().join("project");
-    let dot_codex = project.join(".codex");
+    let dot_codex = project.join(".customcodex");
     let system_dir = tmp.path().join("system");
     let managed_dir = tmp.path().join("managed");
     for dir in [&codex_home, &dot_codex, &system_dir, &managed_dir] {

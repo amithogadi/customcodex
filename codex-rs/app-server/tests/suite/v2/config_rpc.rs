@@ -636,7 +636,7 @@ default_app_access = "allow"
     )?;
 
     let workspace = TempDir::new()?;
-    let project_config_dir = workspace.path().join(".codex");
+    let project_config_dir = workspace.path().join(".customcodex");
     std::fs::create_dir_all(&project_config_dir)?;
     std::fs::write(
         project_config_dir.join("config.toml"),
@@ -1141,7 +1141,7 @@ async fn config_read_includes_project_layers_for_cwd() -> Result<()> {
     write_config(&codex_home, r#"model = "gpt-user""#)?;
 
     let workspace = TempDir::new()?;
-    let project_config_dir = workspace.path().join(".codex");
+    let project_config_dir = workspace.path().join(".customcodex");
     std::fs::create_dir_all(&project_config_dir)?;
     std::fs::write(
         project_config_dir.join("config.toml"),
@@ -1184,9 +1184,9 @@ async fn config_read_respects_managed_project_root_markers() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(&codex_home, "model_context_window = 16384\n")?;
     let workspace = TempDir::new()?;
-    let ancestor_config = workspace.path().join(".codex");
+    let ancestor_config = workspace.path().join(".customcodex");
     let child = workspace.path().join("child");
-    let child_config = child.join(".codex");
+    let child_config = child.join(".customcodex");
     for dir in [
         workspace.path().join(".git"),
         ancestor_config.clone(),

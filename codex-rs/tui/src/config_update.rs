@@ -312,8 +312,8 @@ pub(crate) async fn read_remote_project_trust(
                     disabled_project
                         .and_then(|layer| layer["name"]["dotCodexFolder"].as_str())
                         .and_then(|path| {
-                            path.strip_suffix("/.codex")
-                                .or_else(|| path.strip_suffix("\\.codex"))
+                            path.strip_suffix("/.customcodex")
+                                .or_else(|| path.strip_suffix("\\.customcodex"))
                         })
                 })
         })

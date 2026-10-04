@@ -10,7 +10,7 @@ fn imports_supported_cur_hooks_and_drops_failure_policy() {
     let source_dir = root.path().join(".source");
     let source_hooks_dir = source_dir.join("hooks");
     let source_hooks = source_dir.join("hooks.json");
-    let target_hooks = root.path().join(".codex/hooks.json");
+    let target_hooks = root.path().join(".customcodex/hooks.json");
     fs::create_dir_all(&source_hooks_dir).expect("source hooks directory");
     fs::write(source_hooks_dir.join("check.sh"), "echo check\n").expect("hook script");
     fs::write(

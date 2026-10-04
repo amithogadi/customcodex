@@ -84,7 +84,7 @@ pub enum ConfigLayerSource {
         profile: Option<String>,
     },
 
-    /// Path to a .codex/ folder within a project. There could be multiple of
+    /// Path to a .customcodex/ folder within a project. There could be multiple of
     /// these between `cwd` and the project/repo root.
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]

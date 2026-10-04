@@ -89,7 +89,7 @@ fn runner_transport_request() -> RunnerTransportRequest {
         read_roots_include_platform_defaults: true,
         write_roots_override: Some(vec![PathBuf::from(r"C:\workspace\write")]),
         deny_read_paths_override: vec![PathBuf::from(r"C:\secrets")],
-        deny_write_paths_override: vec![PathBuf::from(r"C:\workspace\.codex")],
+        deny_write_paths_override: vec![PathBuf::from(r"C:\workspace\.customcodex")],
         proxy_enforced: true,
         proxy_settings_mode: WindowsSandboxProxySettingsMode::Preserve,
     }

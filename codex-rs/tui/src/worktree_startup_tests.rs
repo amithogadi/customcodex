@@ -69,7 +69,7 @@ async fn latest_directory_uses_turn_context_and_preserves_fallback() -> anyhow::
 async fn refreshed_bundle_rechecks_source_during_config_reload() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let source = dir.path().join("source");
-    let nested = source.join(".codex");
+    let nested = source.join(".customcodex");
     let destination = dir.path().join("checkout");
     for path in [&nested, &destination] {
         std::fs::create_dir_all(path)?;

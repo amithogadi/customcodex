@@ -158,9 +158,9 @@ async fn managed_defaults_win_when_a_project_setting_shadows_the_selected_profil
         "model = \"profile-model\"\n",
     )
     .expect("profile");
-    std::fs::create_dir(project.path().join(".codex")).expect("project config directory");
+    std::fs::create_dir(project.path().join(".customcodex")).expect("project config directory");
     std::fs::write(
-        project.path().join(".codex/config.toml"),
+        project.path().join(".customcodex/config.toml"),
         "model = \"project-model\"\n",
     )
     .expect("project config");

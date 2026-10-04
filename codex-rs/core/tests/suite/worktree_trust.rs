@@ -52,7 +52,7 @@ async fn forged_worktree_project_config_cannot_start_host_mcp() -> Result<()> {
             tmp.path().join(scenario)
         };
         let marker = tmp.path().join(format!("{scenario}-mcp-started"));
-        fs::create_dir_all(checkout.join(".codex"))?;
+        fs::create_dir_all(checkout.join(".customcodex"))?;
         match scenario {
             "missing" => fs::write(
                 checkout.join(".git"),
@@ -74,7 +74,7 @@ async fn forged_worktree_project_config_cannot_start_host_mcp() -> Result<()> {
             _ => unreachable!(),
         }
         fs::write(
-            checkout.join(".codex/config.toml"),
+            checkout.join(".customcodex/config.toml"),
             toml::to_string(&serde_json::json!({
                 "approval_policy": "never",
                 "sandbox_mode": "danger-full-access",

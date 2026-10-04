@@ -97,7 +97,7 @@ App-server does not persist this selection.
 # Project trust
 
 `thread/start` does not persist project trust for a directory where configuration
-discovery finds no project-root marker, Git checkout, or project-local `.codex`
+discovery finds no project-root marker, Git checkout, or project-local `.customcodex`
 directory. Starting a task there does not preapprove project configuration added
 later. Existing trust decisions and permission checks for projects are unchanged.
 
