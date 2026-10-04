@@ -246,7 +246,7 @@ impl OAuthPersistor {
         // TODO: Add a bounded persistence retry only if telemetry shows this is common; never
         // silently switch stores or continue with an unpersisted credential.
         debug!("persisting refreshed MCP OAuth credentials to the resolved store");
-        let result = self.inner.credential_store.save_with_refresh_telemetry(
+        let result = self.inner.credential_store.save_after_refresh(
             keyring_store,
             &self.inner.server_name,
             &refreshed,

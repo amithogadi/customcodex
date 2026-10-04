@@ -12,9 +12,9 @@ use crate::ExecServerError;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
+use crate::connection_metadata::ExecutorRegistration;
 use crate::noise_relay::message_framing::frame_jsonrpc_message;
 use crate::server::ConnectionProcessor;
-use crate::telemetry::ExecutorRegistration;
 
 pub(crate) struct NoiseStreamConnection<I, O> {
     pub(crate) outgoing_tx: mpsc::Sender<O>,

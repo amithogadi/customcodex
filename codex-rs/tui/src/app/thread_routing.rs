@@ -17,30 +17,12 @@ use codex_app_server_protocol::WarningNotification;
 const REALTIME_STOP_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 1);
 
 impl App {
-    pub(super) async fn stop_realtime_conversation(&mut self, app_server: &mut AppServerSession) {
-        let thread_id = self
-            .background_voice
-            .as_mut()
-            .and_then(|owner| owner.reset_realtime_conversation())
-            .or_else(|| self.chat_widget.reset_realtime_conversation());
-        self.retire_background_voice();
-        let Some(thread_id) = thread_id else {
-            return;
-        };
-        match tokio::time::timeout(
-            REALTIME_STOP_TIMEOUT,
-            app_server.thread_realtime_stop(thread_id),
-        )
-        .await
-        {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(%thread_id, %error, "failed to stop voice conversation");
-            }
-            Err(_) => {
-                tracing::warn!(%thread_id, "timed out stopping voice conversation");
-            }
+    pub(super) async fn stop_realtime_conversation(&mut self, _app_server: &mut AppServerSession) {
+        self.chat_widget.stop_realtime_conversation();
+        if let Some(owner) = self.background_voice.as_mut() {
+            owner.stop_realtime_conversation();
         }
+        self.retire_background_voice();
     }
 
     pub(super) async fn shutdown_current_thread(&mut self, app_server: &mut AppServerSession) {
@@ -302,14 +284,7 @@ impl App {
                 )),
             ),
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
-                if let Some(params) = AppLinkViewParams::from_url_app_server_request(
-                    thread_id,
-                    &params.server_name,
-                    request_id.clone(),
-                    &params.request,
-                ) {
-                    Some(ThreadInteractiveRequest::AppLink(params))
-                } else if let Some(request) =
+                if let Some(request) =
                     McpServerElicitationFormRequest::from_app_server_request(
                         thread_id,
                         request_id.clone(),
@@ -343,11 +318,30 @@ impl App {
                                 description: description.clone(),
                             },
                         }),
+                        codex_app_server_protocol::McpServerElicitationRequest::Url { message, url, .. } => {
+                            let Some(message) = crate::bottom_pane::url_elicitation_message(message, url) else {
+                                self.app_event_tx.resolve_elicitation(
+                                    thread_id, params.server_name.clone(), request_id.clone(),
+                                    codex_app_server_protocol::McpServerElicitationAction::Decline,
+                                    None, None,
+                                );
+                                return Ok(None);
+                            };
+                            Some(ThreadInteractiveRequest::Approval(
+                                ApprovalRequest::McpElicitation(McpElicitationApprovalRequest {
+                                    thread_id,
+                                    thread_label,
+                                    server_name: params.server_name.clone(),
+                                    request_id: request_id.clone(),
+                                    message,
+                                }),
+                            ))
+                        }
                         codex_app_server_protocol::McpServerElicitationRequest::OpenAiForm {
                             ..
                         }
                         | codex_app_server_protocol::McpServerElicitationRequest::OpenAiElicitationForm { .. }
-                        | codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
+                        => {
                             self.app_event_tx.resolve_elicitation(
                                 thread_id,
                                 params.server_name.clone(),
@@ -391,9 +385,6 @@ impl App {
         }
 
         match request {
-            ThreadInteractiveRequest::AppLink(params) => {
-                self.chat_widget.open_app_link_view(params);
-            }
             ThreadInteractiveRequest::Approval(request) => {
                 self.render_inactive_patch_preview(&request);
                 self.chat_widget.push_approval_request(request);
@@ -478,17 +469,6 @@ impl App {
         op: AppCommand,
     ) -> Result<()> {
         let Some(thread_id) = self.active_thread_id else {
-            if let AppCommand::RealtimeConversationSpeech { delivery_id, .. } = &op {
-                self.chat_widget
-                    .restore_undelivered_realtime_speech(*delivery_id);
-            }
-            if let AppCommand::RealtimeConversationStart { thread_id, .. }
-            | AppCommand::RealtimeConversationStop { thread_id } = &op
-                && self.chat_widget.thread_id() == Some(*thread_id)
-            {
-                self.chat_widget.record_realtime_failure();
-                self.chat_widget.reset_realtime_conversation();
-            }
             self.chat_widget
                 .add_error_message("No active thread is available.".to_string());
             return Ok(());
@@ -504,27 +484,12 @@ impl App {
         op: AppCommand,
     ) -> Result<()> {
         if self.thread_unavailable(thread_id) {
-            if let AppCommand::RealtimeConversationSpeech { delivery_id, .. } = &op {
-                self.chat_widget
-                    .restore_undelivered_realtime_speech(*delivery_id);
-            }
-            if let AppCommand::RealtimeConversationStart { thread_id, .. }
-            | AppCommand::RealtimeConversationStop { thread_id } = &op
-                && self.chat_widget.thread_id() == Some(*thread_id)
-            {
-                self.chat_widget.record_realtime_failure();
-                self.chat_widget.reset_realtime_conversation();
-            }
             self.chat_widget.add_error_message(
                 "This conversation is read-only or unavailable; no operation was sent.".into(),
             );
             return Ok(());
         }
         if self.chat_widget.rejects_misalignment_policy_op(&op) {
-            if let AppCommand::RealtimeConversationSpeech { delivery_id, .. } = &op {
-                self.chat_widget
-                    .restore_undelivered_realtime_speech(*delivery_id);
-            }
             return Ok(());
         }
 
@@ -961,63 +926,6 @@ impl App {
                 app_server
                     .thread_background_terminals_clean(thread_id)
                     .await?;
-                Ok(true)
-            }
-            AppCommand::RealtimeConversationStart {
-                thread_id: realtime_thread_id,
-                offer_sdp,
-            } => {
-                if *realtime_thread_id != thread_id {
-                    return Ok(true);
-                }
-                let model = self
-                    .chat_widget
-                    .config_ref()
-                    .experimental_realtime_ws_model
-                    .clone();
-                let voices = self.realtime_voices(app_server).await?;
-                let voice = self.effective_realtime_voice(app_server, &voices).await?;
-                app_server
-                    .thread_realtime_start(
-                        *realtime_thread_id,
-                        String::from(offer_sdp.clone()),
-                        model,
-                        voice,
-                    )
-                    .await?;
-                Ok(true)
-            }
-            AppCommand::RealtimeConversationStop {
-                thread_id: realtime_thread_id,
-            } => {
-                app_server.thread_realtime_stop(*realtime_thread_id).await?;
-                Ok(true)
-            }
-            AppCommand::RealtimeConversationSpeech {
-                thread_id: realtime_thread_id,
-                attempt_id,
-                input_generation,
-                delivery_id,
-                text,
-            } => {
-                if !self.chat_widget.has_pending_realtime_speech(*delivery_id) {
-                    return Ok(true);
-                }
-                if *realtime_thread_id != thread_id
-                    || !self.chat_widget.is_current_realtime_attempt(
-                        *realtime_thread_id,
-                        *attempt_id,
-                        *input_generation,
-                    )
-                {
-                    self.chat_widget
-                        .restore_undelivered_realtime_speech(*delivery_id);
-                    return Ok(true);
-                }
-                app_server
-                    .thread_realtime_append_speech(*realtime_thread_id, text.as_str().to_owned())
-                    .await?;
-                self.chat_widget.accept_realtime_speech(*delivery_id);
                 Ok(true)
             }
             AppCommand::RunUserShellCommand { command } => {
@@ -1648,9 +1556,6 @@ impl App {
                     self.enqueue_thread_history_entry_response(thread_id, event)
                         .await?;
                 }
-                ThreadBufferedEvent::FeedbackSubmission(event) => {
-                    self.enqueue_thread_feedback_event(thread_id, event).await;
-                }
             }
         }
         self.chat_widget
@@ -2049,17 +1954,7 @@ impl App {
             | codex_app_server_protocol::McpServerElicitationRequest::OpenAiElicitationForm {
                 ..
             } => false,
-            request @ codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => {
-                let thread_id = ThreadId::from_string(&params.thread_id)
-                    .unwrap_or_else(|_| self.chat_widget.thread_id().unwrap_or_default());
-                AppLinkViewParams::from_url_app_server_request(
-                    thread_id,
-                    &params.server_name,
-                    request_id.clone(),
-                    request,
-                )
-                .is_some()
-            }
+            codex_app_server_protocol::McpServerElicitationRequest::Url { .. } => false,
         }
     }
 
@@ -2104,9 +1999,6 @@ impl App {
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event);
             }
-            ThreadBufferedEvent::FeedbackSubmission(event) => {
-                self.handle_feedback_thread_event(event);
-            }
         }
         if needs_refresh {
             self.refresh_status_line();
@@ -2133,9 +2025,6 @@ impl App {
             }
             ThreadBufferedEvent::HistoryEntryResponse(event) => {
                 self.chat_widget.handle_history_entry_response(event)
-            }
-            ThreadBufferedEvent::FeedbackSubmission(event) => {
-                self.handle_feedback_thread_event(event);
             }
         }
     }

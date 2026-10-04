@@ -14,14 +14,12 @@ use crate::tools::handlers::DynamicToolHandler;
 use crate::tools::handlers::ExecCommandHandler;
 use crate::tools::handlers::ExecCommandHandlerOptions;
 use crate::tools::handlers::GetContextRemainingHandler;
-use crate::tools::handlers::ListAvailablePluginsToInstallHandler;
 use crate::tools::handlers::ListMcpResourceTemplatesHandler;
 use crate::tools::handlers::ListMcpResourcesHandler;
 use crate::tools::handlers::NewContextWindowHandler;
 use crate::tools::handlers::PlanHandler;
 use crate::tools::handlers::ReadMcpResourceHandler;
 use crate::tools::handlers::RequestPermissionsHandler;
-use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputAsyncHandler;
 use crate::tools::handlers::RequestUserInputHandler;
 use crate::tools::handlers::SendMessageToUserAsyncHandler;
@@ -60,12 +58,10 @@ use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::router::ToolRouter;
 use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
-use codex_connectors::apps_config_from_layer_stack;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
 use codex_features::SleepToolMode;
 use codex_login::AuthManager;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::DEFAULT_FUNCTION_NAMESPACE;
 use codex_protocol::account::PlanType;
@@ -92,7 +88,6 @@ use codex_tools::ToolSpec;
 use codex_tools::UnifiedExecShellMode;
 use codex_tools::can_request_original_image_detail;
 use codex_tools::collect_code_mode_exec_prompt_tool_definitions;
-use codex_tools::collect_request_plugin_install_entries;
 use codex_tools::default_namespace_description;
 use codex_tools::request_user_input_available_modes;
 use std::collections::BTreeMap;
@@ -195,7 +190,6 @@ fn apply_mcp_tool_exposure_policy(
     registry: &mut ToolRegistry,
 ) {
     let mut omitted_exposures_by_tool = HashMap::new();
-    let apps_config = apps_config_from_layer_stack(&turn_context.config.config_layer_stack);
     for tool in mcp.tools() {
         let tool_name = tool.canonical_tool_name();
         if !registered_mcp_tools.contains(&tool_name) {
@@ -207,19 +201,12 @@ fn apply_mcp_tool_exposure_policy(
         omitted_exposures_by_tool
             .entry(tool_name)
             .or_insert_with(|| {
-                let connector_omissions = (tool.server_name == CODEX_APPS_MCP_SERVER_NAME)
-                    .then_some(tool.connector_id.as_deref())
-                    .flatten()
-                    .and_then(|id| apps_config.as_ref()?.apps.get(id))
-                    .and_then(|app| app.omit_tools_from.as_deref())
-                    .unwrap_or_default();
                 server
                     .config()
                     .omit_tools_from
                     .as_deref()
                     .unwrap_or_default()
                     .iter()
-                    .chain(connector_omissions)
                     .copied()
                     .collect::<ToolExposures>()
             });
@@ -1233,22 +1220,6 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         }
     {
         registry.add(SleepHandler);
-    }
-
-    if tool_suggest_enabled(turn_context)
-        && let Some(candidates) = context
-            .tool_suggest_candidates
-            .filter(|candidates| !candidates.tools.is_empty())
-    {
-        if candidates.presentation == crate::tools::router::ToolSuggestPresentation::ListTool {
-            registry.add(ListAvailablePluginsToInstallHandler::new(
-                collect_request_plugin_install_entries(&candidates.tools),
-            ));
-        }
-        registry.add(RequestPluginInstallHandler::new(
-            candidates.tools.clone(),
-            candidates.presentation,
-        ));
     }
 
     if environment_mode.has_environment() && context.model_info.apply_patch_tool_type.is_some() {

@@ -346,14 +346,7 @@ impl ChatWidget {
 
         let thread_id = ThreadId::from_string(&params.thread_id)
             .unwrap_or_else(|_| self.thread_id.unwrap_or_default());
-        if let Some(params) = crate::bottom_pane::AppLinkViewParams::from_url_app_server_request(
-            thread_id,
-            &params.server_name,
-            request_id.clone(),
-            &params.request,
-        ) {
-            self.open_app_link_view(params);
-        } else if let Some(request) = McpServerElicitationFormRequest::from_app_server_request(
+        if let Some(request) = McpServerElicitationFormRequest::from_app_server_request(
             thread_id,
             request_id.clone(),
             &params,
@@ -387,9 +380,32 @@ impl ChatWidget {
                         },
                     );
                 }
+                McpServerElicitationRequest::Url { message, url, .. } => {
+                    let Some(message) = crate::bottom_pane::url_elicitation_message(&message, &url)
+                    else {
+                        self.app_event_tx.resolve_elicitation(
+                            thread_id,
+                            params.server_name,
+                            request_id,
+                            codex_app_server_protocol::McpServerElicitationAction::Decline,
+                            None,
+                            None,
+                        );
+                        return;
+                    };
+                    self.bottom_pane.push_approval_request(
+                        ApprovalRequest::McpElicitation(McpElicitationApprovalRequest {
+                            thread_id,
+                            thread_label: None,
+                            server_name: params.server_name,
+                            request_id,
+                            message,
+                        }),
+                        &self.config.features,
+                    );
+                }
                 McpServerElicitationRequest::OpenAiForm { .. }
-                | McpServerElicitationRequest::OpenAiElicitationForm { .. }
-                | McpServerElicitationRequest::Url { .. } => {
+                | McpServerElicitationRequest::OpenAiElicitationForm { .. } => {
                     self.app_event_tx.resolve_elicitation(
                         thread_id,
                         params.server_name,

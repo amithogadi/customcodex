@@ -45,7 +45,7 @@ use crate::environment::EnvironmentConnectionState;
 use crate::process::ExecProcessEvent;
 use crate::process::ExecProcessEventLog;
 use crate::process::ExecProcessEventReceiver;
-use crate::process_telemetry::trace_process_id;
+use crate::process_log::trace_process_id;
 use crate::protocol::CAPABILITY_ROOTS_DISCOVER_METHOD;
 use crate::protocol::CapabilityRootsDiscoverParams;
 use crate::protocol::CapabilityRootsDiscoverResponse;
@@ -1923,8 +1923,6 @@ mod tests {
     use futures::SinkExt;
     use futures::StreamExt;
     use http::HeaderMap;
-    use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry_sdk::trace::SdkTracerProvider;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     #[cfg(unix)]
@@ -2018,7 +2016,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn process_start_propagates_caller_trace_context_across_background_task() {
+    async fn process_start_does_not_inject_trace_context() {
         let (client_stdin, server_reader) = duplex(1 << 20);
         let (mut server_writer, client_stdout) = duplex(1 << 20);
         let server = tokio::spawn(async move {
@@ -2081,18 +2079,6 @@ mod tests {
         .await
         .expect("client should connect");
 
-        let tracer_provider = SdkTracerProvider::builder().build();
-        let tracer = tracer_provider.tracer("exec-server-test");
-        let subscriber = tracing_subscriber::registry().with(
-            tracing_opentelemetry::layer()
-                .with_tracer(tracer)
-                .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
-        );
-        let _subscriber_guard = tracing::subscriber::set_default(subscriber);
-        tracing::callsite::rebuild_interest_cache();
-        let parent_span = tracing::info_span!("process-start-parent");
-        let expected_trace = codex_otel::span_w3c_trace_context(&parent_span)
-            .expect("parent span should have trace context");
         let process_id = ProcessId::from("trace-process");
 
         let session = client
@@ -2116,7 +2102,6 @@ mod tests {
                 },
                 /*network_policy_decider*/ None,
             )
-            .instrument(parent_span)
             .await
             .expect("process start should succeed");
 
@@ -2125,17 +2110,7 @@ mod tests {
             session.sandbox_type(),
             Some(ProcessSandboxType::LinuxSeccomp)
         );
-        let trace = server.await.expect("server task").expect("trace context");
-        let expected_traceparent = expected_trace
-            .traceparent
-            .as_deref()
-            .expect("parent traceparent");
-        let traceparent = trace.traceparent.as_deref().expect("request traceparent");
-        let expected_parts = expected_traceparent.split('-').collect::<Vec<_>>();
-        let parts = traceparent.split('-').collect::<Vec<_>>();
-        assert_eq!(parts[1], expected_parts[1]);
-        assert_ne!(parts[2], expected_parts[2]);
-        assert_eq!(trace.tracestate, expected_trace.tracestate);
+        assert!(server.await.expect("server task").is_none());
     }
 
     async fn accept_websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {

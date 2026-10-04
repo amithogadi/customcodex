@@ -536,10 +536,7 @@ async fn thread_item_update_ordinals_allow_older_writers() {
         no_tx: THREAD_HISTORY_MIGRATOR.no_tx,
     };
     let pool = sqlite
-        .open_thread_history_db(
-            &pre_update_ordinal_migrator,
-            /*telemetry_override*/ None,
-        )
+        .open_thread_history_db(&pre_update_ordinal_migrator)
         .await
         .expect("pre-update-ordinal migrations should apply");
     sqlx::query(
@@ -604,7 +601,7 @@ async fn realtime_items_preserve_older_thread_history_writers() {
         no_tx: THREAD_HISTORY_MIGRATOR.no_tx,
     };
     let pool = sqlite
-        .open_thread_history_db(&older_migrator, /*telemetry_override*/ None)
+        .open_thread_history_db(&older_migrator)
         .await
         .expect("existing thread history migrations should apply");
     sqlx::query(
@@ -640,7 +637,7 @@ async fn realtime_items_preserve_older_thread_history_writers() {
     .expect("thread projection checkpoint should be inserted");
 
     let older_pool = sqlite
-        .open_thread_history_db(&older_migrator, /*telemetry_override*/ None)
+        .open_thread_history_db(&older_migrator)
         .await
         .expect("older binaries should tolerate the additive realtime migration");
     sqlx::query(

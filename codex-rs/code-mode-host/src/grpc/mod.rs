@@ -32,17 +32,6 @@ use self::waits::WaitRegistration;
 type GrpcStream<T> = Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + 'static>>;
 type GrpcFuture<'a, T> = Pin<Box<dyn Future<Output = Result<Response<T>, Status>> + Send + 'a>>;
 
-fn trace_context_from_request<T>(request: &Request<T>) -> Option<W3cTraceContext> {
-    request
-        .metadata()
-        .get("traceparent")
-        .and_then(|value| value.to_str().ok())
-        .map(|traceparent| W3cTraceContext {
-            traceparent: Some(traceparent.to_string()),
-            tracestate: None,
-        })
-}
-
 /// Serves transport-independent, leased code-mode sessions over gRPC.
 #[derive(Clone)]
 pub struct GrpcCodeModeHost {
@@ -317,12 +306,8 @@ impl CodeModeHost for GrpcCodeModeHost {
         'a: 'async_trait,
         Self: 'async_trait,
     {
-        let trace = trace_context_from_request(&request);
         let request = request.into_inner();
         let open_session_span = tracing::info_span!("code_mode_host.grpc.open_session");
-        if let Some(trace) = trace.as_ref() {
-            codex_otel::set_parent_from_w3c_trace_context(&open_session_span, trace);
-        }
         Box::pin(
             self.open_session_request(request)
                 .instrument(open_session_span),
@@ -381,7 +366,6 @@ impl CodeModeHost for GrpcCodeModeHost {
         'a: 'async_trait,
         Self: 'async_trait,
     {
-        let trace = trace_context_from_request(&request);
         let request = request.into_inner();
         let execute_span = tracing::info_span!(
             "code_mode_host.grpc.execute",
@@ -390,15 +374,7 @@ impl CodeModeHost for GrpcCodeModeHost {
             execution.id = %request.execution_id,
             call_id = %request.tool_call_id,
         );
-        if let Some(trace) = trace.as_ref() {
-            codex_otel::set_parent_from_w3c_trace_context(&execute_span, trace);
-        }
-        let callback_traceparent =
-            codex_otel::span_w3c_trace_context(&execute_span).and_then(|trace| trace.traceparent);
-        Box::pin(
-            self.execute_request(request, callback_traceparent)
-                .instrument(execute_span),
-        )
+        Box::pin(self.execute_request(request, None).instrument(execute_span))
     }
 
     fn wait<'a, 'async_trait>(

@@ -50,7 +50,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use crate::analytics_utils::analytics_events_client_from_config;
 use crate::config_manager::ConfigManager;
 use crate::error_code::OVERLOADED_ERROR_CODE;
 use crate::error_code::internal_error;
@@ -63,12 +62,10 @@ use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessage;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::QueuedOutgoingMessage;
-use crate::plugin_config_reload::PluginStartupConfig;
 use crate::transport::CHANNEL_CAPACITY;
 use crate::transport::OutboundConnectionState;
 use crate::transport::route_outgoing_envelope;
 pub use bootstrap::EmbeddedNetworkPolicy;
-use codex_analytics::AppServerRpcTransport;
 use codex_app_server_protocol::AgentMessageDelivery;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -89,7 +86,6 @@ use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
 use codex_core::resolve_installation_id;
 use codex_exec_server::EnvironmentManager;
-use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 pub use codex_rollout::StateDbHandle;
 pub use codex_state::log_db::LogDbLayer;
@@ -151,8 +147,6 @@ pub struct InProcessStartArgs {
     pub embedded_network_policy: EmbeddedNetworkPolicy,
     /// Loader used to fetch typed thread config sources before a thread starts.
     pub thread_config_loader: Arc<dyn ThreadConfigLoader>,
-    /// Feedback sink used by app-server/core telemetry and logs.
-    pub feedback: CodexFeedback,
     /// SQLite tracing layer used to flush recently emitted logs before feedback upload.
     pub log_db: Option<LogDbLayer>,
     /// Process-wide SQLite state handle shared with embedded app-server consumers.
@@ -448,19 +442,10 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
 
     let runtime_handle = tokio::spawn(async move {
         let (outgoing_tx, outgoing_rx) = mpsc::channel::<OutgoingEnvelope>(channel_capacity);
-        let analytics_events_client =
-            analytics_events_client_from_config(Arc::clone(&auth_manager), args.config.as_ref());
-        let analytics_events_flush_client = analytics_events_client.clone();
-        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(
-            outgoing_tx,
-            analytics_events_client.clone(),
-        ));
+        let outgoing_message_sender = Arc::new(OutgoingMessageSender::new(outgoing_tx));
 
-        let log_write_warning = crate::log_write_warning::LogWriteWarningReporter::new(
-            args.feedback.clone(),
-            &outgoing_message_sender,
-            &args.config,
-        );
+        let log_write_warning =
+            crate::log_write_warning::LogWriteWarningReporter::new(&outgoing_message_sender);
         if let Some(log_db) = &args.log_db {
             log_db.set_failure_reporter(log_write_warning.clone());
             if log_db.has_write_failure() {
@@ -496,12 +481,10 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
         let mut processor_handle = tokio::spawn(async move {
             let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
-                analytics_events_client,
                 arg0_paths: args.arg0_paths,
                 config: args.config,
                 config_manager,
                 environment_manager: args.environment_manager,
-                feedback: args.feedback,
                 log_db: args.log_db,
                 state_db: args.state_db,
                 config_warnings: args.config_warnings,
@@ -512,9 +495,6 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
                 auth_manager,
                 installation_id,
                 code_mode_session_provider: None,
-                rpc_transport: AppServerRpcTransport::InProcess,
-                remote_control_handle: None,
-                plugin_startup_tasks: Some(PluginStartupConfig::Current),
             }));
             let mut thread_created_rx = processor.thread_created_receiver();
             let session = Arc::new(ConnectionSessionState::new(
@@ -800,8 +780,6 @@ async fn start_uninitialized(mut args: InProcessStartArgs) -> IoResult<InProcess
             let _ = outbound_handle.await;
         }
 
-        analytics_events_flush_client.flush().await;
-
         if let Some(done_tx) = shutdown_ack {
             let _ = done_tx.send(());
         }
@@ -871,7 +849,6 @@ mod tests {
             cloud_config_bundle: CloudConfigBundleLoader::default(),
             embedded_network_policy: Default::default(),
             thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
-            feedback: CodexFeedback::new(),
             log_db: None,
             state_db: Some(state_db),
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),

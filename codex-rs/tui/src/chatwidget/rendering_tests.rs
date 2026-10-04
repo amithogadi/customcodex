@@ -131,9 +131,6 @@ async fn owned_live_history_keeps_all_sources_in_each_presentation() {
     let (mut widget, _sender, _events, _operations) = make_chatwidget_manual_with_sender().await;
     widget.transcript.active_cell = Some(Box::new(PresentationCell("active")));
     widget.realtime_conversation.live_transcript_cell = Some(Box::new(PresentationCell("voice")));
-    widget.pending_rate_limit_reset_hint = Some(history_cell::PlainHistoryCell::new(vec![
-        "rate limit hint".into(),
-    ]));
     let text = |lines: Option<Vec<HyperlinkLine>>| {
         lines
             .unwrap_or_default()
@@ -151,20 +148,14 @@ async fn owned_live_history_keeps_all_sources_in_each_presentation() {
     compact active
 
     compact voice
-
-    rate limit hint
     ---
     raw active
 
     raw voice
-
-    rate limit hint
     ---
     detailed active
 
     detailed voice
-
-    rate limit hint
     ");
 
     widget.local_settings.tui.animations = false;
@@ -184,7 +175,6 @@ async fn owned_live_history_keeps_all_sources_in_each_presentation() {
         "deferred second",
         "user caption",
         "assistant caption",
-        "rate limit hint",
     ];
 
     for latest_speaker in ["assistant", "user"] {

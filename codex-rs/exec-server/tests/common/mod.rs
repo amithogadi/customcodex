@@ -9,7 +9,6 @@ use std::time::Duration;
 use codex_exec_server::CODEX_ARG0_EXEC_HELPER_ARG1;
 use codex_exec_server::CODEX_FS_HELPER_ARG1;
 use codex_exec_server::ExecServerRuntimeOptions;
-use codex_exec_server::ExecServerTelemetry;
 use codex_exec_server::RequestDispatchMode;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
@@ -267,10 +266,9 @@ fn maybe_run_exec_server_from_test_binary(guard: Option<&TestBinaryDispatchGuard
                 codex_config::allowed_symlinked_codex_home(&config, &home),
             )
         };
-        codex_exec_server::run_main_with_telemetry(
+        codex_exec_server::run_main_with_options(
             &listen_url,
             runtime_paths,
-            ExecServerTelemetry::default(),
             http_client_factory,
             request_dispatch_mode,
             codex_websocket_auth::WebsocketAuthSettings::default(),

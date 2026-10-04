@@ -35,11 +35,6 @@ use codex_history::RolloutItem;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_models_manager::bundled_models_response;
-use codex_otel::OtelExporter;
-use codex_otel::OtelHttpProtocol;
-use codex_otel::OtelProvider;
-use codex_otel::OtelSettings;
-use codex_otel::THREAD_SKILLS_KEPT_TOTAL_METRIC;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 use codex_protocol::models::FileSystemPermissions;
@@ -110,8 +105,6 @@ use core_test_support::test_codex::test_env;
 use core_test_support::test_codex::turn_permission_fields;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_mcp_server;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
-use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -367,38 +360,9 @@ fn catalog_extensions(
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         }
     });
     (Arc::new(extensions.build()), event_rx)
-}
-
-async fn wait_for_analytics_events(
-    server: &MockServer,
-    event_type: &str,
-    expected_count: usize,
-) -> Vec<Value> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let events = server
-            .received_requests()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|request| request.url.path() == "/codex/analytics-events/events")
-            .filter_map(|request| serde_json::from_slice::<Value>(&request.body).ok())
-            .flat_map(|payload| payload["events"].as_array().cloned().unwrap_or_default())
-            .filter(|event| event["event_type"] == event_type)
-            .collect::<Vec<_>>();
-        if events.len() >= expected_count {
-            return events;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for {event_type} analytics"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
 }
 
 fn configure_catalog_test(config: &mut Config) {
@@ -644,7 +608,6 @@ async fn capability_sections_render_in_order_with_host_repo_and_plugin_skills() 
         max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: config.bundled_skills_enabled(),
         cloud_skill_enabled: config.cloud_skill_enabled,
-        shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
     });
     let mut builder = test_codex()
         .with_home(Arc::clone(&codex_home))
@@ -1053,7 +1016,6 @@ async fn opted_in_executor_provider_skips_host_discovery_but_injects_discovered_
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = test_codex()
@@ -1282,7 +1244,6 @@ async fn executor_only_provider_preserves_structured_repo_skill_without_discover
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = test_codex()
@@ -1431,7 +1392,6 @@ async fn executor_skill_tool_reads_references_under_current_permissions(
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = test_codex()
@@ -1871,7 +1831,6 @@ async fn explicit_executor_skill_prompt_rejects_oversized_resource() -> Result<(
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = test_codex()
@@ -1930,7 +1889,7 @@ async fn explicit_executor_skill_prompt_rejects_oversized_resource() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn executor_skill_invocation_is_environment_scoped_and_deduplicated() -> Result<()> {
+async fn executor_skill_commands_read_selected_environment_resources() -> Result<()> {
     skip_if_remote!(Ok(()), "executor fixture uses a host-local skill path");
     skip_if_no_network!(Ok(()));
 
@@ -2016,15 +1975,6 @@ async fn executor_skill_invocation_is_environment_scoped_and_deduplicated() -> R
         );
     }
 
-    let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 1).await;
-    assert_eq!(events.len(), 1, "executor skill should be counted once");
-    assert_eq!(events[0]["skill_name"], "selected-environment-skill");
-    assert_eq!(
-        events[0]["skill_id"],
-        format!("{:x}", sha1::Sha1::digest(SELECTED_RESOURCE.as_bytes()))
-    );
-    assert_eq!(events[0]["event_params"]["invoke_type"], "implicit");
-
     Ok(())
 }
 
@@ -2101,7 +2051,6 @@ async fn production_turn_aliases_catalogs_with_separate_cloud_budget() -> Result
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = test_codex()
@@ -2183,27 +2132,6 @@ async fn assert_catalog_model_switch(max_context_tokens: Option<usize>) -> Resul
     )
     .await;
     let codex_home = Arc::new(TempDir::new()?);
-    // Use the normal metrics sink to verify core's model attribution.
-    let telemetry = OtelProvider::try_new(&OtelSettings {
-        http_client_factory: codex_core::test_support::default_http_client_factory(),
-        environment: "test".to_string(),
-        service_name: "skills-model-switch".to_string(),
-        service_version: env!("CARGO_PKG_VERSION").to_string(),
-        codex_home: codex_home.path().to_path_buf(),
-        exporter: OtelExporter::None,
-        trace_exporter: OtelExporter::None,
-        metrics_exporter: OtelExporter::OtlpHttp {
-            endpoint: format!("{}/metrics", server.uri()),
-            headers: Default::default(),
-            protocol: OtelHttpProtocol::Json,
-            tls: None,
-        },
-        runtime_metrics: true,
-        span_attributes: Default::default(),
-        tracestate: Default::default(),
-    })
-    .map_err(|error| anyhow::anyhow!("{error}"))?
-    .expect("metrics provider");
     let skill_count = 800;
     let catalog = SkillCatalog {
         entries: (0..skill_count)
@@ -2239,7 +2167,6 @@ async fn assert_catalog_model_switch(max_context_tokens: Option<usize>) -> Resul
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = test_codex()
@@ -2380,41 +2307,6 @@ async fn assert_catalog_model_switch(max_context_tokens: Option<usize>) -> Resul
     expected_warnings.dedup();
     assert_eq!(warnings, expected_warnings);
 
-    let snapshot = telemetry.metrics().expect("metrics client").snapshot()?;
-    let metric = snapshot
-        .scope_metrics()
-        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .find(|metric| metric.name() == THREAD_SKILLS_KEPT_TOTAL_METRIC)
-        .expect("catalog metrics");
-    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
-        panic!("catalog metric should be a histogram");
-    };
-    let mut samples = histogram
-        .data_points()
-        .filter_map(|point| {
-            let attributes = point
-                .attributes()
-                .map(|attribute| (attribute.key.as_str(), attribute.value.as_str().to_string()))
-                .collect::<std::collections::BTreeMap<_, _>>();
-            (attributes.get("catalog_surface").map(String::as_str) == Some("host_world_state")
-                && matches!(
-                    attributes.get("model").map(String::as_str),
-                    Some(MODEL_A | MODEL_B)
-                ))
-            .then(|| (attributes["model"].clone(), point.count(), point.sum()))
-        })
-        .collect::<Vec<_>>();
-    samples.sort_by(|left, right| left.0.cmp(&right.0));
-    assert_eq!(
-        samples,
-        vec![
-            (MODEL_A.to_string(), 1, included_counts[0] as f64),
-            (MODEL_B.to_string(), 1, included_counts[1] as f64),
-        ]
-    );
-    telemetry
-        .shutdown_with_timeout(Duration::from_secs(/*secs*/ 5))
-        .await?;
     Ok(())
 }
 
@@ -2677,7 +2569,6 @@ async fn production_turn_uses_provider_host_catalog_and_core_snapshot_injection(
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = apps_enabled_builder(apps_server.chatgpt_base_url)
@@ -2706,17 +2597,6 @@ async fn production_turn_uses_provider_host_catalog_and_core_snapshot_injection(
     let user_text = request.message_input_texts("user").join("\n");
     assert!(user_text.contains(&snapshot_contents));
     assert!(!user_text.contains(provider_contents));
-    let app_mentioned_events =
-        wait_for_analytics_events(&server, "codex_app_mentioned", /*expected_count*/ 1).await;
-    let app_mentioned_event = &app_mentioned_events[0];
-    assert_eq!(
-        app_mentioned_event["event_params"]["connector_id"],
-        "calendar"
-    );
-    assert_eq!(
-        app_mentioned_event["event_params"]["invoke_type"],
-        "explicit"
-    );
     Ok(())
 }
 
@@ -2797,7 +2677,6 @@ async fn production_turn_suppresses_only_the_superseded_host_skill_prompt() -> R
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = test_codex()
@@ -3050,7 +2929,6 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: config.cloud_skill_enabled,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = test_codex()
@@ -3558,7 +3436,6 @@ async fn production_turn_fairly_shortens_extension_catalog_descriptions() -> Res
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = test_codex()

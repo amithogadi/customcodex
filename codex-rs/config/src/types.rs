@@ -51,7 +51,6 @@ pub use crate::tui_keymap::TuiVimOperatorKeymap;
 pub use crate::tui_keymap::TuiVimSearchKeymap;
 pub use crate::tui_rendering::TuiRendering;
 
-pub const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 pub const DEFAULT_MEMORIES_MAX_ROLLOUTS_PER_STARTUP: usize = 2;
 pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 10;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
@@ -219,21 +218,6 @@ pub enum HistoryPersistence {
 }
 
 // ===== Analytics configuration =====
-
-/// Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct AnalyticsConfigToml {
-    /// When `false`, disables analytics across Codex product surfaces in this profile.
-    pub enabled: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct FeedbackConfigToml {
-    /// When `false`, disables the feedback flow across Codex product surfaces.
-    pub enabled: Option<bool>,
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -551,135 +535,6 @@ pub struct AppsConfigToml {
 }
 
 // ===== OTEL configuration =====
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum OtelHttpProtocol {
-    /// Binary payload
-    Binary,
-    /// JSON payload
-    Json,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-#[serde(rename_all = "kebab-case")]
-pub struct OtelTlsConfig {
-    pub ca_certificate: Option<AbsolutePathBuf>,
-    pub client_certificate: Option<AbsolutePathBuf>,
-    pub client_private_key: Option<AbsolutePathBuf>,
-}
-
-/// Which OTEL exporter to use.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-#[serde(rename_all = "kebab-case")]
-pub enum OtelExporterKind {
-    None,
-    Statsig,
-    OtlpHttp {
-        endpoint: String,
-        #[serde(default)]
-        headers: HashMap<String, String>,
-        protocol: OtelHttpProtocol,
-        #[serde(default)]
-        tls: Option<OtelTlsConfig>,
-    },
-    OtlpGrpc {
-        endpoint: String,
-        #[serde(default)]
-        headers: HashMap<String, String>,
-        #[serde(default)]
-        tls: Option<OtelTlsConfig>,
-    },
-}
-
-/// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct OtelConfigToml {
-    /// Byte limit for tool-result log output; independent of model-visible output.
-    #[serde(default)]
-    pub tool_result: codex_protocol::config_types::ToolResultLogConfig,
-    /// Log user prompt in traces
-    pub log_user_prompt: Option<bool>,
-    /// Opt in to logging final main-agent and spawned-subagent responses to an OTLP log exporter.
-    /// Defaults to false. Response text can be sensitive and is capped at 64 KiB.
-    pub log_agent_responses: Option<bool>,
-    /// Opt in to logging completed Guardian assessments to an OTLP log exporter.
-    /// Defaults to false. Rationales can be sensitive and are capped at 64 KiB.
-    pub log_guardian_assessments: Option<bool>,
-
-    /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
-    pub environment: Option<String>,
-
-    /// Optional log exporter
-    pub exporter: Option<OtelExporterKind>,
-
-    /// Optional trace exporter
-    pub trace_exporter: Option<OtelExporterKind>,
-
-    /// Optional metrics exporter
-    pub metrics_exporter: Option<OtelExporterKind>,
-
-    /// Attributes to add to every exported trace span.
-    pub span_attributes: Option<BTreeMap<String, String>>,
-
-    /// Semicolon-separated `key:value` fields to upsert into W3C tracestate members.
-    pub tracestate: Option<BTreeMap<String, BTreeMap<String, String>>>,
-}
-
-/// Effective OTEL settings after defaults are applied.
-#[derive(Debug, Clone, PartialEq)]
-pub struct OtelConfig {
-    pub tool_result: codex_protocol::config_types::ToolResultLogConfig,
-    pub log_user_prompt: bool,
-    pub log_agent_responses: bool,
-    pub log_guardian_assessments: bool,
-    pub environment: String,
-    pub exporter: OtelExporterKind,
-    pub trace_exporter: OtelExporterKind,
-    pub metrics_exporter: OtelExporterKind,
-    pub span_attributes: BTreeMap<String, String>,
-    pub tracestate: BTreeMap<String, BTreeMap<String, String>>,
-}
-
-impl Default for OtelConfig {
-    fn default() -> Self {
-        OtelConfig {
-            tool_result: Default::default(),
-            log_user_prompt: false,
-            log_agent_responses: false,
-            log_guardian_assessments: false,
-            environment: DEFAULT_OTEL_ENVIRONMENT.to_owned(),
-            exporter: OtelExporterKind::None,
-            trace_exporter: OtelExporterKind::None,
-            metrics_exporter: OtelExporterKind::Statsig,
-            span_attributes: BTreeMap::new(),
-            tracestate: BTreeMap::new(),
-        }
-    }
-}
-
-impl OtelConfig {
-    /// Response text requires a separate opt-in and an explicit OTLP log destination.
-    pub fn agent_response_logging_enabled(&self) -> bool {
-        self.log_agent_responses
-            && matches!(
-                self.exporter,
-                OtelExporterKind::OtlpHttp { .. } | OtelExporterKind::OtlpGrpc { .. }
-            )
-    }
-
-    /// Assessment text requires an explicit opt-in and an OTLP log destination.
-    pub fn guardian_assessment_logging_enabled(&self) -> bool {
-        self.log_guardian_assessments
-            && matches!(
-                self.exporter,
-                OtelExporterKind::OtlpHttp { .. } | OtelExporterKind::OtlpGrpc { .. }
-            )
-    }
-}
 
 #[derive(Serialize, Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(untagged)]
@@ -1009,7 +864,8 @@ pub use crate::skills_config::SkillsConfig;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct PluginConfig {
-    #[serde(default = "default_enabled")]
+    /// Plugins must be explicitly enabled, including bundles retained in the local cache.
+    #[serde(default)]
     pub enabled: bool,
 
     /// Per-MCP-server policy overlays for MCP servers contributed by this plugin.

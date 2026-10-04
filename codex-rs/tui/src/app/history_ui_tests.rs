@@ -7,8 +7,6 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PlainHistoryCell;
 use pretty_assertions::assert_eq;
 
-
-
 fn render_cell(cell: &impl HistoryCell) -> String {
     let lines = cell.display_lines(/*width*/ 80);
     lines

@@ -31,7 +31,6 @@ async fn experimental_features_use_selected_server_profile_and_preserve_task_set
         loader,
         /*strict_config*/ false,
         Default::default(),
-        codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
         /*state_db*/ None,
         Arc::new(EnvironmentManager::default_for_tests()),

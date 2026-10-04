@@ -122,53 +122,6 @@ async fn typed_steering_restores_normal_output_for_an_existing_voice_item() {
 }
 
 #[tokio::test]
-async fn newer_voice_steering_an_existing_typed_turn_is_spoken_once() {
-    let (mut chat, _sender, mut events, mut ops) = make_chatwidget_manual_with_sender().await;
-    let thread_id = activate_voice(&mut chat);
-    let turn_id = "shared-typed-turn";
-    start_item(&mut chat, thread_id, turn_id, user_item("typed task"));
-    let earlier_typed = agent_item("typed-item", "existing typed work", /*phase*/ None);
-    start_item(&mut chat, thread_id, turn_id, earlier_typed);
-
-    chat.on_realtime_transcript_delta("user".to_string(), "spoken follow-up".to_string());
-    chat.on_realtime_transcript_done("user".to_string(), "spoken follow-up".to_string());
-    let delegation =
-        user_item("<realtime_delegation><input>spoken follow-up</input></realtime_delegation>");
-    start_item(&mut chat, thread_id, turn_id, delegation.clone());
-    complete_item(&mut chat, thread_id, turn_id, delegation);
-    let answer = agent_item(
-        "voice-item",
-        "answer to the spoken follow-up",
-        /*phase*/ None,
-    );
-    start_item(&mut chat, thread_id, turn_id, answer.clone());
-    complete_item(&mut chat, thread_id, turn_id, answer.clone());
-    finish_turn(
-        &mut chat,
-        thread_id,
-        turn_id,
-        vec![answer],
-        TurnStatus::Completed,
-    );
-
-    assert!(matches!(
-        ops.try_recv(),
-        Ok(AppCommand::RealtimeConversationSpeech { text, .. })
-            if text.as_str() == "answer to the spoken follow-up"
-    ));
-    assert!(ops.try_recv().is_err());
-    while let Ok(event) = events.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
-            assert!(
-                cell.display_lines(/*width*/ 80)
-                    .iter()
-                    .all(|line| !line.to_string().contains("realtime_delegation"))
-            );
-        }
-    }
-}
-
-#[tokio::test]
 async fn voice_handoff_preserves_started_typed_reasoning_but_hides_new_reasoning() {
     let (mut chat, _sender, mut events, _ops) = make_chatwidget_manual_with_sender().await;
     let thread_id = activate_voice(&mut chat);
@@ -268,45 +221,6 @@ async fn voice_handoff_preserves_started_typed_reasoning_but_hides_new_reasoning
     );
     assert!(!rendered.contains("private after handoff"), "{rendered}");
     insta::assert_snapshot!("typed_reasoning_through_voice_handoff", rendered);
-}
-
-#[tokio::test]
-async fn voice_delegation_without_transcript_can_steer_an_existing_typed_turn() {
-    let (mut chat, _sender, _events, mut ops) = make_chatwidget_manual_with_sender().await;
-    let thread_id = activate_voice(&mut chat);
-    let turn_id = "shared-turn-without-transcript";
-    start_item(
-        &mut chat,
-        thread_id,
-        turn_id,
-        user_item("earlier typed task"),
-    );
-    start_item(
-        &mut chat,
-        thread_id,
-        turn_id,
-        user_item("<realtime_delegation><input>new spoken request</input></realtime_delegation>"),
-    );
-    let answer = agent_item(
-        "voice-answer",
-        "new spoken answer",
-        Some(MessagePhase::FinalAnswer),
-    );
-    start_item(&mut chat, thread_id, turn_id, answer.clone());
-    complete_item(&mut chat, thread_id, turn_id, answer.clone());
-    finish_turn(
-        &mut chat,
-        thread_id,
-        turn_id,
-        vec![answer],
-        TurnStatus::Completed,
-    );
-
-    assert!(matches!(
-        ops.try_recv(),
-        Ok(AppCommand::RealtimeConversationSpeech { text, .. }) if text.as_str() == "new spoken answer"
-    ));
-    assert!(ops.try_recv().is_err());
 }
 
 #[tokio::test]
@@ -442,39 +356,5 @@ async fn stale_voice_handoff_longer_than_the_display_limit_cannot_be_revived() {
     assert!(events.try_recv().is_err());
     complete_stale_handoff(&mut chat, thread_id, &old_question);
 
-    assert!(ops.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn new_voice_handoff_without_transcript_still_speaks_after_a_typed_turn() {
-    let (mut chat, _sender, _events, mut ops) = make_chatwidget_manual_with_sender().await;
-    let thread_id = activate_voice(&mut chat);
-    chat.note_realtime_typed_input("a previous typed question");
-    let turn_id = "new-voice-turn";
-    start_item(
-        &mut chat,
-        thread_id,
-        turn_id,
-        user_item("<realtime_delegation><input>fresh spoken request</input></realtime_delegation>"),
-    );
-    let answer = agent_item(
-        "answer",
-        "The voice answer",
-        Some(MessagePhase::FinalAnswer),
-    );
-    start_item(&mut chat, thread_id, turn_id, answer.clone());
-    complete_item(&mut chat, thread_id, turn_id, answer.clone());
-    finish_turn(
-        &mut chat,
-        thread_id,
-        turn_id,
-        vec![answer],
-        TurnStatus::Completed,
-    );
-
-    assert!(matches!(
-        ops.try_recv(),
-        Ok(AppCommand::RealtimeConversationSpeech { text, .. }) if text.as_str() == "The voice answer"
-    ));
     assert!(ops.try_recv().is_err());
 }

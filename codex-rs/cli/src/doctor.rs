@@ -85,10 +85,8 @@ mod security;
 mod system;
 mod thread_inventory;
 mod title;
-mod updates;
 #[cfg(target_os = "windows")]
 mod windows_dev_drive;
-
 
 use background::background_server_check;
 use git::git_check;
@@ -103,7 +101,6 @@ use sandbox::sandbox_check;
 use system::system_check;
 use thread_inventory::thread_inventory_check;
 use title::terminal_title_check;
-use updates::updates_check;
 
 const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
@@ -160,10 +157,6 @@ pub struct DoctorCommand {
     /// Emit a redacted machine-readable report.
     #[arg(long, default_value_t = false)]
     json: bool,
-
-    /// Limit database integrity scans when collecting a feedback attachment.
-    #[arg(long, hide = true, default_value_t = false)]
-    feedback: bool,
 
     /// Only show grouped check rows and the final count summary.
     #[arg(long, default_value_t = false)]
@@ -405,7 +398,6 @@ async fn build_report(
             let (
                 config_check,
                 auth_check,
-                updates_check,
                 network_check,
                 websocket_check,
                 mcp_check,
@@ -441,7 +433,6 @@ async fn build_report(
                         ),
                     })
                 },
-                run_async_check("updates", progress.clone(), updates_check(config)),
                 async {
                     run_sync_check("network", progress.clone(), || network::check(Some(config)))
                 },
@@ -495,7 +486,6 @@ async fn build_report(
             checks.extend([
                 config_check,
                 auth_check,
-                updates_check,
                 network_check,
                 websocket_check,
                 mcp_check,
@@ -806,7 +796,7 @@ fn json_detail_value(key: &str, value: &str) -> String {
     {
         // Editor and pager configuration can contain arbitrary arguments or
         // inline environment assignments. Keep full values local to human output
-        // because the JSON report may be attached to feedback.
+        // because users may share the JSON report.
         "set".to_string()
     } else {
         value.to_string()
@@ -1399,57 +1389,27 @@ fn stored_auth_issues(
             }
         }
         AuthMode::Chatgpt => {
-            match auth.tokens.as_ref() {
-                Some(tokens) => {
-                    if tokens.access_token.trim().is_empty() {
-                        issues.push("ChatGPT auth is missing an access token");
-                    }
-                    if tokens.refresh_token.trim().is_empty() {
-                        issues.push("ChatGPT auth is missing a refresh token");
-                    }
-                }
-                None => issues.push("ChatGPT auth is missing token data"),
-            }
-            if auth.last_refresh.is_none() {
-                issues.push("ChatGPT auth is missing refresh metadata");
-            }
+            issues.push(
+                "saved OpenAI account credentials are ignored; configure provider credentials",
+            );
         }
         AuthMode::ChatgptAuthTokens => {
-            match auth.tokens.as_ref() {
-                Some(tokens) => {
-                    if tokens.access_token.trim().is_empty() {
-                        issues.push("external ChatGPT auth is missing an access token");
-                    }
-                    if tokens.account_id.is_none() && tokens.id_token.chatgpt_account_id.is_none() {
-                        issues.push("external ChatGPT auth is missing a ChatGPT account id");
-                    }
-                }
-                None => issues.push("external ChatGPT auth is missing token data"),
-            }
-            if auth.last_refresh.is_none() {
-                issues.push("external ChatGPT auth is missing refresh metadata");
-            }
+            issues.push(
+                "saved OpenAI account credentials are ignored; configure provider credentials",
+            );
         }
         AuthMode::Headers => {
             issues.push("header auth cannot be loaded from auth storage");
         }
         AuthMode::AgentIdentity => {
-            if auth
-                .agent_identity
-                .as_ref()
-                .is_none_or(|agent_identity| !agent_identity.has_auth_material())
-            {
-                issues.push("agent identity auth is missing an agent identity token");
-            }
+            issues.push(
+                "saved OpenAI account credentials are ignored; configure provider credentials",
+            );
         }
         AuthMode::PersonalAccessToken => {
-            if auth
-                .personal_access_token
-                .as_deref()
-                .is_none_or(|token| token.trim().is_empty())
-            {
-                issues.push("personal access token auth is missing a personal access token");
-            }
+            issues.push(
+                "saved OpenAI account credentials are ignored; configure provider credentials",
+            );
         }
         AuthMode::BedrockApiKey => {
             if auth.bedrock_api_key.is_none() {
@@ -2095,10 +2055,7 @@ async fn state_check(config: &Config, command: &DoctorCommand) -> DoctorCheck {
     let mut failed_databases = Vec::new();
     for db in config.sqlite_config().runtime_db_paths() {
         path_readiness(&mut details, db.label, &db.path);
-        // Feedback collection gives each database its own budget; direct runs scan fully.
-        let deadline = command
-            .feedback
-            .then(|| Instant::now() + Duration::from_secs(1));
+        let deadline = None;
         let db_status = sqlite_integrity_detail(
             config.sqlite_config(),
             &mut details,
@@ -2519,7 +2476,6 @@ struct ReachabilityEndpoint {
 enum ProviderAuthReachabilityMode {
     NotRequired,
     ApiKey,
-    Chatgpt,
 }
 
 impl ProviderAuthReachabilityMode {
@@ -2527,7 +2483,6 @@ impl ProviderAuthReachabilityMode {
         match self {
             Self::NotRequired => "provider auth",
             Self::ApiKey => "API key auth",
-            Self::Chatgpt => "ChatGPT auth",
         }
     }
 }
@@ -2560,22 +2515,17 @@ fn provider_reachability_plan(config: &Config) -> ReachabilityPlan {
         config.model_provider.base_url.as_deref(),
         query_params.as_ref(),
         config.model_provider.is_amazon_bedrock(),
-        &config.chatgpt_base_url,
     );
     plan.http_client_factory = config.http_client_factory();
     plan
 }
 
 fn default_reachability_plan() -> ReachabilityPlan {
-    provider_reachability_plan_from_parts(
-        ProviderAuthReachabilityMode::Chatgpt,
-        "openai",
-        "OpenAI",
-        /*provider_base_url*/ None,
-        /*provider_query_params*/ None,
-        /*is_amazon_bedrock*/ false,
-        "https://chatgpt.com/backend-api/",
-    )
+    ReachabilityPlan {
+        description: "configuration unavailable".to_string(),
+        endpoints: Vec::new(),
+        http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
+    }
 }
 
 fn provider_auth_reachability_mode_from_auth(
@@ -2585,31 +2535,10 @@ fn provider_auth_reachability_mode_from_auth(
     env_var_present: impl Fn(&str) -> bool,
     stored_auth: Option<&AuthDotJson>,
 ) -> ProviderAuthReachabilityMode {
-    if !requires_openai_auth {
-        return ProviderAuthReachabilityMode::NotRequired;
-    }
-    if provider_base_url.is_some_and(|url| !url.trim().is_empty())
-        && provider_env_key
-            .is_some_and(|env_key| !env_key.trim().is_empty() && env_var_present(env_key))
-        || env_var_present(CODEX_API_KEY_ENV_VAR)
-    {
-        return ProviderAuthReachabilityMode::ApiKey;
-    }
-    if env_var_present(CODEX_ACCESS_TOKEN_ENV_VAR) {
-        return ProviderAuthReachabilityMode::Chatgpt;
-    }
-    match stored_auth.map(stored_auth_mode_value) {
-        Some(AuthMode::ApiKey | AuthMode::BedrockApiKey | AuthMode::BedrockAccessKeys) => {
-            ProviderAuthReachabilityMode::ApiKey
-        }
-        Some(
-            AuthMode::Chatgpt
-            | AuthMode::ChatgptAuthTokens
-            | AuthMode::Headers
-            | AuthMode::AgentIdentity
-            | AuthMode::PersonalAccessToken,
-        )
-        | None => ProviderAuthReachabilityMode::Chatgpt,
+    if requires_openai_auth {
+        ProviderAuthReachabilityMode::ApiKey
+    } else {
+        ProviderAuthReachabilityMode::NotRequired
     }
 }
 
@@ -2620,35 +2549,21 @@ fn provider_reachability_plan_from_parts(
     provider_base_url: Option<&str>,
     provider_query_params: Option<&HashMap<String, String>>,
     is_amazon_bedrock: bool,
-    chatgpt_base_url: &str,
 ) -> ReachabilityPlan {
-    let provider_route_probe_url = provider_base_url
-        .or_else(|| {
-            (mode == ProviderAuthReachabilityMode::ApiKey).then_some("https://api.openai.com/v1")
-        })
-        .and_then(|url| {
-            should_probe_models_route(provider_name, url, is_amazon_bedrock)
-                .then(|| provider_url_for_path(url, "models", provider_query_params))
-        });
-    let endpoints = match (mode, provider_base_url) {
-        (ProviderAuthReachabilityMode::ApiKey, _) | (_, Some(_)) => vec![ReachabilityEndpoint {
+    let selected_base_url = provider_base_url.or_else(|| {
+        (provider_id == "openai" && mode == ProviderAuthReachabilityMode::ApiKey)
+            .then_some("https://api.openai.com/v1")
+    });
+    let endpoints = selected_base_url
+        .map(|base_url| ReachabilityEndpoint {
             label: format!("{provider_id} API"),
-            url: provider_url_for_path(
-                provider_base_url.unwrap_or("https://api.openai.com/v1"),
-                "responses",
-                provider_query_params,
-            ),
+            url: provider_url_for_path(base_url, "responses", provider_query_params),
             required: true,
-            route_probe_url: provider_route_probe_url,
-        }],
-        (ProviderAuthReachabilityMode::Chatgpt, None) => vec![ReachabilityEndpoint {
-            label: "ChatGPT".to_string(),
-            url: provider_url_for_path(chatgpt_base_url, "codex/responses", provider_query_params),
-            required: true,
-            route_probe_url: None,
-        }],
-        (ProviderAuthReachabilityMode::NotRequired, None) => Vec::new(),
-    };
+            route_probe_url: should_probe_models_route(provider_name, base_url, is_amazon_bedrock)
+                .then(|| provider_url_for_path(base_url, "models", provider_query_params)),
+        })
+        .into_iter()
+        .collect();
     ReachabilityPlan {
         description: mode.description().to_string(),
         endpoints,
@@ -3509,7 +3424,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_auth_validation_rejects_missing_chatgpt_tokens() {
+    fn stored_auth_validation_rejects_legacy_chatgpt_credentials() {
         let auth = AuthDotJson {
             auth_mode: None,
             openai_api_key: None,
@@ -3523,10 +3438,7 @@ mod tests {
 
         assert_eq!(
             stored_auth_issues(&auth, |_| false),
-            vec![
-                "ChatGPT auth is missing token data",
-                "ChatGPT auth is missing refresh metadata",
-            ]
+            vec!["saved OpenAI account credentials are ignored; configure provider credentials"]
         );
     }
 
@@ -3544,13 +3456,16 @@ mod tests {
         };
 
         assert_eq!(stored_auth_mode(&auth), "personal_access_token");
-        assert!(stored_auth_issues(&auth, |_| false).is_empty());
+        assert_eq!(
+            stored_auth_issues(&auth, |_| false),
+            vec!["saved OpenAI account credentials are ignored; configure provider credentials"]
+        );
 
         auth.auth_mode = Some(AuthMode::PersonalAccessToken);
         auth.personal_access_token = None;
         assert_eq!(
             stored_auth_issues(&auth, |_| false),
-            vec!["personal access token auth is missing a personal access token"]
+            vec!["saved OpenAI account credentials are ignored; configure provider credentials"]
         );
     }
 
@@ -3601,7 +3516,7 @@ mod tests {
                 |name| name == OPENAI_API_KEY_ENV_VAR,
                 Some(&chatgpt_auth),
             ),
-            ProviderAuthReachabilityMode::Chatgpt
+            ProviderAuthReachabilityMode::ApiKey
         );
         assert_eq!(
             provider_auth_reachability_mode_from_auth(
@@ -3635,7 +3550,6 @@ mod tests {
                 Some("https://example.openai.azure.com/openai/v1"),
                 /*provider_query_params*/ None,
                 /*is_amazon_bedrock*/ false,
-                "https://chatgpt.com/backend-api/",
             ),
             ReachabilityPlan {
                 description: "provider auth".to_string(),
@@ -3656,7 +3570,7 @@ mod tests {
 
         for (mode, description) in [
             (ProviderAuthReachabilityMode::NotRequired, "provider auth"),
-            (ProviderAuthReachabilityMode::Chatgpt, "ChatGPT auth"),
+            (ProviderAuthReachabilityMode::ApiKey, "API key auth"),
         ] {
             assert_eq!(
                 provider_reachability_plan_from_parts(
@@ -3666,7 +3580,6 @@ mod tests {
                     Some("https://example.com/openai/v1/"),
                     Some(&query_params),
                     /*is_amazon_bedrock*/ false,
-                    "https://chatgpt.com/backend-api/",
                 ),
                 ReachabilityPlan {
                     description: description.to_string(),
@@ -3697,7 +3610,6 @@ mod tests {
             Some("https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1"),
             /*provider_query_params*/ None,
             /*is_amazon_bedrock*/ true,
-            "https://chatgpt.com/backend-api/",
         );
 
         assert_eq!(plan.endpoints[0].route_probe_url, None);
@@ -3712,7 +3624,6 @@ mod tests {
             /*provider_base_url*/ None,
             /*provider_query_params*/ None,
             /*is_amazon_bedrock*/ false,
-            "https://chatgpt.com/backend-api/",
         );
 
         assert_eq!(
@@ -3727,16 +3638,21 @@ mod tests {
     }
 
     #[test]
-    fn provider_reachability_chatgpt_uses_inference_endpoint() {
-        assert_eq!(
-            default_reachability_plan().endpoints,
-            vec![ReachabilityEndpoint {
-                label: "ChatGPT".to_string(),
-                url: "https://chatgpt.com/backend-api/codex/responses".to_string(),
-                required: true,
-                route_probe_url: None,
-            }]
+    fn custom_provider_without_base_url_has_no_openai_fallback() {
+        let plan = provider_reachability_plan_from_parts(
+            ProviderAuthReachabilityMode::ApiKey,
+            "custom",
+            "Custom",
+            None,
+            None,
+            false,
         );
+        assert!(plan.endpoints.is_empty());
+    }
+
+    #[test]
+    fn provider_reachability_without_config_has_no_fallback_endpoint() {
+        assert!(default_reachability_plan().endpoints.is_empty());
     }
 
     #[test]
@@ -3778,7 +3694,6 @@ mod tests {
             Some(&format!("http://{addr}/xxxx")),
             /*provider_query_params*/ None,
             /*is_amazon_bedrock*/ false,
-            "https://chatgpt.com/backend-api/",
         );
 
         let check = provider_reachability_check(plan).await;
@@ -3819,7 +3734,6 @@ mod tests {
             Some(&format!("http://{addr}/v1")),
             /*provider_query_params*/ None,
             /*is_amazon_bedrock*/ false,
-            "https://chatgpt.com/backend-api/",
         );
 
         let check = provider_reachability_check(plan).await;

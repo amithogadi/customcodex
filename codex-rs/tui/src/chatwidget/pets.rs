@@ -26,7 +26,6 @@ pub(super) fn start_configured_pet_load_if_needed(
     ambient_pet_missing: bool,
     frame_requester: FrameRequester,
     app_event_tx: AppEventSender,
-    pet_http_client: codex_http_client::RouteAwareClientPool,
 ) {
     let Some(pet_id) = config.tui.pet.clone() else {
         return;
@@ -45,7 +44,6 @@ pub(super) fn start_configured_pet_load_if_needed(
                 codex_home,
                 frame_requester,
                 animations_enabled,
-                &pet_http_client,
             )
             .await
             .map(Some)
@@ -254,7 +252,6 @@ impl ChatWidget {
         let codex_home = self.local_settings.codex_home.clone();
         let frame_requester = self.frame_requester.clone();
         let tx = self.app_event_tx.clone();
-        let pet_http_client = self.pet_http_client.clone();
         spawn_pet_load(
             async move {
                 crate::pets::load_pet_with_assets(
@@ -262,7 +259,6 @@ impl ChatWidget {
                     codex_home,
                     frame_requester,
                     /*animations_enabled*/ false,
-                    &pet_http_client,
                 )
                 .await
                 .map_err(|err| err.to_string())

@@ -22,8 +22,7 @@ use crate::render::SkillMetadataBudget;
 use crate::render::render_available_skills;
 use crate::render::render_prepared_skill_catalogs;
 use crate::render::skill_metadata_budget;
-use crate::render_observability::CatalogSurface;
-use crate::render_observability::record_catalog_render;
+use crate::render_observability::trace_catalog_budget_pressure;
 use crate::sources::SkillProviders;
 use crate::state::EmittedCatalogBudgetWarnings;
 use crate::state::ExecutorSkillsStepState;
@@ -57,16 +56,6 @@ enum CatalogKind {
     Executor,
     Cloud,
     Host,
-}
-
-impl CatalogKind {
-    fn metrics_surface(self) -> CatalogSurface {
-        match self {
-            Self::Executor => CatalogSurface::ExecutorWorldState,
-            Self::Cloud => CatalogSurface::CloudWorldState,
-            Self::Host => CatalogSurface::HostWorldState,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -229,8 +218,7 @@ impl<'a> CatalogContext<'a> {
             return CatalogContribution::unavailable();
         };
 
-        let needs_catalog =
-            self.config.include_instructions || self.config.shadow_selection_enabled;
+        let needs_catalog = self.config.include_instructions;
         let catalog = if needs_catalog {
             let catalog = self
                 .providers
@@ -452,7 +440,6 @@ impl<'a> CatalogContext<'a> {
             .and_then(|rendered| rendered.into_fragment(self.include_usage))
             .map(|fragment| fragment.body());
         let include_instructions = self.config.include_instructions;
-        let metrics = self.input.extension_metrics.clone();
         let warning_emitter = Arc::clone(&self.warning_emitter);
         let render_report = report.clone();
         let on_render: CatalogRenderCallback = Box::new(move || {
@@ -460,12 +447,7 @@ impl<'a> CatalogContext<'a> {
                 return;
             }
 
-            record_catalog_render(
-                metrics.as_deref(),
-                kind.metrics_surface(),
-                budget,
-                &render_report,
-            );
+            trace_catalog_budget_pressure(budget, &render_report);
             if let Some(message) = render_report.warning_message() {
                 warning_emitter(message);
             }

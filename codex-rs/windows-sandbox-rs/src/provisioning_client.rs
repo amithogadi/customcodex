@@ -419,9 +419,7 @@ fn query_service_status() -> anyhow::Result<Services::SERVICE_STATUS_PROCESS> {
     {
         return Err(io::Error::last_os_error()).context("query sandbox provisioning service");
     }
-    if status.dwCurrentState == Services::SERVICE_STOPPED {
-        crate::service_diagnostics::record_stopped(&status, service.0);
-    }
+    if status.dwCurrentState == Services::SERVICE_STOPPED {}
     Ok(status)
 }
 

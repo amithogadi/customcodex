@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -9,7 +10,6 @@ use codex_config::LoaderOverrides;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
-use codex_feedback::CodexFeedback;
 use codex_http_client::HttpClientFactory;
 use codex_models_manager::manager::ModelsEndpointClient;
 use codex_models_manager::manager::ModelsEndpointFuture;
@@ -26,6 +26,23 @@ use tokio::sync::oneshot;
 use tracing_subscriber::layer::SubscriberExt;
 
 use super::*;
+
+#[derive(Clone, Default)]
+struct TestLog(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for TestLog {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("test log lock")
+            .extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 #[derive(Debug)]
 struct TestModelsEndpoint {
@@ -181,10 +198,16 @@ async fn background_refresh_blocks_changed_and_invalid_requirements_then_recover
         /*auth_manager*/ None,
     ));
     let catalog = Arc::new(ModelCatalog::new(config_manager, config, models_manager));
-    let feedback = CodexFeedback::new();
     // This test uses Tokio's current-thread runtime, so spawned refreshes share the subscriber.
+    let logs = TestLog::default();
+    let writer = logs.clone();
     let _subscriber_guard = tracing::subscriber::set_default(
-        tracing_subscriber::registry().with(feedback.logger_layer()),
+        tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .without_time()
+                .with_writer(move || writer.clone()),
+        ),
     );
     let worker = spawn_with_interval(&catalog, Duration::from_millis(/*millis*/ 10));
     tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
@@ -217,12 +240,7 @@ async fn background_refresh_blocks_changed_and_invalid_requirements_then_recover
     })
     .await?;
     drop(worker);
-    let logs = String::from_utf8(
-        feedback
-            .snapshot(/*session_id*/ None)
-            .log_attachment(/*logs_override*/ None)
-            .buffer,
-    )?;
+    let logs = String::from_utf8(logs.0.lock().expect("test log lock").clone())?;
     assert!(logs.contains("model catalog refresh blocked by provider requirements"));
     assert!(logs.contains("error_kind=PermissionDenied"));
     assert!(logs.contains("error_kind=InvalidData"));

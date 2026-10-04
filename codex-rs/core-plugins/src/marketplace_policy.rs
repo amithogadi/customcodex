@@ -9,10 +9,13 @@ use crate::is_openai_curated_marketplace_name;
 use crate::marketplace::marketplace_root_dir;
 use crate::marketplace_add::MarketplaceSource;
 use crate::marketplace_add::parse_marketplace_source;
-use crate::remote::RemotePluginScope;
-use crate::startup_sync::OPENAI_PLUGINS_GIT_URL;
-use crate::startup_sync::curated_plugins_api_marketplace_path;
-use crate::startup_sync::curated_plugins_repo_path;
+const OPENAI_PLUGINS_GIT_URL: &str = "https://github.com/openai/plugins.git";
+fn curated_plugins_api_marketplace_path(home: &Path) -> PathBuf {
+    home.join(".tmp/plugins/.agents/plugins/api_marketplace.json")
+}
+fn curated_plugins_repo_path(home: &Path) -> PathBuf {
+    home.join(".tmp/plugins")
+}
 use codex_config::ConfigLayerStack;
 use codex_config::ConfigRequirements;
 use codex_config::MarketplaceAllowedSourceKind;
@@ -461,7 +464,10 @@ fn is_reserved_marketplace_name(marketplace_name: &str) -> bool {
             | OPENAI_BUNDLED_MARKETPLACE_NAME
             | OPENAI_BUNDLED_ALPHA_MARKETPLACE_NAME
             | OPENAI_PRIMARY_RUNTIME_MARKETPLACE_NAME
-    ) || RemotePluginScope::from_marketplace_name(marketplace_name).is_some()
+    ) || matches!(
+        marketplace_name,
+        "openai-curated-remote" | "openai-workspace" | "openai-user"
+    )
 }
 
 fn managed_marketplace_name(

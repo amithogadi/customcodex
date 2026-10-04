@@ -4,7 +4,7 @@
 //! built-in catalog pets, a synthetic "disable" entry, and user-managed custom
 //! pets. It does not load preview images itself; instead it emits selection
 //! change events so the surrounding chat widget can coordinate async asset
-//! downloads, preview loading, and final config persistence.
+//! loading, preview rendering, and final config persistence.
 
 use std::collections::HashMap;
 use std::fs;
@@ -138,6 +138,13 @@ pub(crate) fn build_pet_picker_params(
 fn available_pet_entries(codex_home: &Path) -> Vec<PetPickerEntry> {
     let mut entries = catalog::BUILTIN_PETS
         .iter()
+        .filter(|pet| {
+            super::asset_pack::validate_cached_spritesheet(&super::builtin_spritesheet_path(
+                codex_home,
+                pet.spritesheet_file,
+            ))
+            .is_ok()
+        })
         .map(|pet| PetPickerEntry {
             selector: pet.id.to_string(),
             legacy_selector: None,
@@ -233,8 +240,9 @@ mod tests {
     }
 
     #[test]
-    fn picker_lists_app_bundled_and_custom_pets() {
+    fn picker_lists_locally_cached_and_custom_pets() {
         let codex_home = tempfile::tempdir().unwrap();
+        super::super::asset_pack::write_test_pack(codex_home.path());
         write_pet(codex_home.path(), "chefito", "Chefito");
 
         let params = build_pet_picker_params(
@@ -272,6 +280,7 @@ mod tests {
     #[test]
     fn picker_preselects_codex_without_marking_it_current_when_no_pet_is_configured() {
         let codex_home = tempfile::tempdir().unwrap();
+        super::super::asset_pack::write_test_pack(codex_home.path());
         let params = build_pet_picker_params(
             /*current_pet*/ None,
             codex_home.path(),

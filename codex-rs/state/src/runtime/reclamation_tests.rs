@@ -9,9 +9,7 @@ async fn interrupted_reclamation_releases_writer_and_resumes_without_data_loss()
 -> anyhow::Result<()> {
     let sqlite = SqliteConfig::new_for_testing(unique_temp_dir().abs());
     tokio::fs::create_dir_all(sqlite.home()).await?;
-    let pool = sqlite
-        .open_logs_db(&runtime_logs_migrator(), /*telemetry_override*/ None)
-        .await?;
+    let pool = sqlite.open_logs_db(&runtime_logs_migrator()).await?;
     sqlx::query(
         "WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM n WHERE i < 4096) \
          INSERT INTO logs(ts,ts_nanos,level,target,feedback_log_body,thread_id,process_uuid) \

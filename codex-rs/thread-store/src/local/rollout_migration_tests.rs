@@ -62,7 +62,6 @@ use super::RolloutMigrationStatus;
 #[cfg(unix)]
 use super::decompress_rollout_to_path;
 use super::migration_journal_path;
-use super::telemetry::RolloutMigrationTrigger;
 use super::thread_history;
 use super::write_migration_journal;
 use crate::ItemSortKey;
@@ -2438,7 +2437,6 @@ async fn migration_retries_a_rollout_moved_after_path_discovery() {
         .migrate_rollouts_with_progress_for_trigger(
             apply_options(),
             |_| {},
-            RolloutMigrationTrigger::Startup,
             RolloutMigrationPaths::Known(vec![active_path]),
         )
         .await

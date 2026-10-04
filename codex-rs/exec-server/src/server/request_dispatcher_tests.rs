@@ -8,16 +8,6 @@ use codex_exec_server_protocol::JSONRPCRequest;
 use codex_exec_server_protocol::RequestId;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
-use codex_otel::MetricsClient;
-use codex_otel::MetricsConfig;
-use opentelemetry::trace::SpanId;
-use opentelemetry::trace::TraceId;
-use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
-use opentelemetry_sdk::metrics::data::MetricData;
-use opentelemetry_sdk::trace::InMemorySpanExporter;
-use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use tokio::sync::Notify;
 use tokio::sync::Semaphore;
@@ -39,7 +29,6 @@ use crate::rpc::RpcServerOutboundMessage;
 use crate::rpc::invalid_request;
 use crate::server::ExecServerHandler;
 use crate::server::session_registry::SessionRegistry;
-use crate::telemetry::ExecServerTelemetry;
 
 /// Public limits reject values that cannot safely enable semaphore-backed concurrency.
 #[test]
@@ -81,102 +70,14 @@ fn request_dispatch_mode_parses_bounded_concurrency() {
     assert_eq!(max_concurrent_requests.get(), Semaphore::MAX_PERMITS);
 }
 
-/// End-to-end request spans retain the wire method and inbound trace with bounded names.
-#[test]
-fn request_span_uses_bounded_name_wire_method_and_inbound_trace_parent() {
-    let span_exporter = InMemorySpanExporter::default();
-    let tracer_provider = SdkTracerProvider::builder()
-        .with_simple_exporter(span_exporter.clone())
-        .build();
-    let tracer = tracer_provider.tracer("exec-server-test");
-    let subscriber = tracing_subscriber::registry().with(
-        tracing_opentelemetry::layer()
-            .with_tracer(tracer)
-            .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
-    );
-    let trace_id = TraceId::from_hex("00000000000000000000000000000001").expect("trace id");
-    let parent_span_id = SpanId::from_hex("0000000000000002").expect("span id");
-    let trace = codex_protocol::protocol::W3cTraceContext {
-        traceparent: Some(format!("00-{trace_id}-{parent_span_id}-01")),
-        tracestate: None,
-    };
-
-    let method = "custom/method";
-    tracing::subscriber::with_default(subscriber, || {
-        tracing::callsite::rebuild_interest_cache();
-        let request = JSONRPCRequest {
-            id: RequestId::Integer(1),
-            method: method.to_string(),
-            params: None,
-            trace: Some(trace),
-        };
-        let JsonRpcConnectionEvent::QueuedRequest { request_span, .. } =
-            JsonRpcConnectionEvent::message(JSONRPCMessage::Request(request))
-        else {
-            panic!("requests should start a server span before dispatch");
-        };
-        assert!(
-            span_exporter
-                .get_finished_spans()
-                .expect("request span export")
-                .is_empty(),
-            "the request span must remain open while the request is waiting"
-        );
-        request_span.record("otel.name", "unknown");
-        request_span.in_scope(|| {});
-        drop(request_span);
-    });
-
-    tracer_provider.force_flush().expect("flush traces");
-    let spans = span_exporter.get_finished_spans().expect("span export");
-    assert_eq!(spans.len(), 1);
-    let request_span = spans
-        .iter()
-        .find(|span| span.name.as_ref() == "unknown")
-        .expect("unknown method span");
-    assert_eq!(
-        request_span
-            .attributes
-            .iter()
-            .find(|attribute| attribute.key.as_str() == "method")
-            .map(|attribute| attribute.value.clone()),
-        Some(opentelemetry::Value::String(method.into()))
-    );
-    assert_eq!(request_span.span_context.trace_id(), trace_id);
-    assert_eq!(request_span.parent_span_id, parent_span_id);
-}
-
-/// Total request timing includes queueing without changing dispatch or queue timing.
+/// Requests wait for admission before executing.
 #[tokio::test]
-async fn request_queue_waits_for_dispatcher_admission_before_recording_telemetry() {
-    let span_exporter = InMemorySpanExporter::default();
-    let tracer_provider = SdkTracerProvider::builder()
-        .with_simple_exporter(span_exporter.clone())
-        .build();
-    let subscriber = tracing_subscriber::registry().with(
-        tracing_opentelemetry::layer()
-            .with_tracer(tracer_provider.tracer("exec-server-test"))
-            .with_filter(filter_fn(codex_otel::OtelProvider::trace_export_filter)),
-    );
-    let _subscriber = tracing::subscriber::set_default(subscriber);
-    tracing::callsite::rebuild_interest_cache();
-
-    let metrics = MetricsClient::new(
-        MetricsConfig::in_memory(
-            "test",
-            "codex-exec-server",
-            env!("CARGO_PKG_VERSION"),
-            InMemoryMetricExporter::default(),
-        )
-        .with_runtime_reader(),
-    )
-    .expect("metrics client");
-    let telemetry = ExecServerTelemetry::new(metrics.clone());
+async fn request_queue_waits_for_dispatcher_admission() {
     let (outgoing_tx, mut outgoing_rx) = mpsc::channel(/*buffer*/ 1);
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
     let requests = notifications.request_sender();
     let handler = Arc::new(ExecServerHandler::new(
-        SessionRegistry::new(telemetry.clone()),
+        SessionRegistry::new(),
         notifications,
         ExecServerRuntimeOptions::new(
             std::env::current_exe().expect("current executable"),
@@ -211,7 +112,6 @@ async fn request_queue_waits_for_dispatcher_admission_before_recording_telemetry
         outgoing_tx,
         disconnected_rx,
         requests,
-        telemetry,
         RequestDispatchMode::Concurrent {
             max_concurrent_requests: ConcurrentRequestLimit::new(
                 /*max_concurrent_requests*/ 2,
@@ -255,61 +155,15 @@ async fn request_queue_waits_for_dispatcher_admission_before_recording_telemetry
     tokio::time::sleep(Duration::from_millis(25)).await;
 
     assert!(
-        span_exporter
-            .get_finished_spans()
-            .expect("request span export")
-            .is_empty(),
-        "the end-to-end request span must remain open before admission"
+        timeout(Duration::from_millis(25), execution_started.notified())
+            .await
+            .is_err(),
+        "queued request must not execute before admission"
     );
-    let queued_snapshot = metrics.snapshot().expect("queued metrics snapshot");
-    assert!(
-        !queued_snapshot
-            .scope_metrics()
-            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-            .any(|metric| metric.name() == "exec_server_request_queue_duration_seconds"),
-        "queue latency must not be recorded before request admission"
-    );
-
     drop(occupied_permits);
     timeout(Duration::from_secs(1), execution_started.notified())
         .await
         .expect("queued request should execute after admission");
-    assert!(
-        span_exporter
-            .get_finished_spans()
-            .expect("executing span export")
-            .is_empty(),
-        "the same request span must remain open during execution"
-    );
-
-    let snapshot = metrics.snapshot().expect("metrics snapshot");
-    let queue_metric = snapshot
-        .scope_metrics()
-        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .find(|metric| metric.name() == "exec_server_request_queue_duration_seconds")
-        .expect("request queue duration metric");
-    let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = queue_metric.data() else {
-        panic!("request queue duration should be an f64 histogram");
-    };
-    let data_point = histogram
-        .data_points()
-        .next()
-        .expect("request queue duration data point");
-    let queue_duration = Duration::from_secs_f64(data_point.sum());
-
-    assert_eq!(data_point.count(), 1);
-    assert!(
-        queue_duration >= Duration::from_millis(25),
-        "queue latency should include the occupied admission lane"
-    );
-    assert_eq!(
-        data_point
-            .attributes()
-            .find(|attribute| attribute.key.as_str() == "method")
-            .map(|attribute| attribute.value.as_str().into_owned()),
-        Some("test/queued".to_string())
-    );
-
     release_execution.notify_one();
     let response = timeout(Duration::from_secs(1), outgoing_rx.recv())
         .await
@@ -326,66 +180,20 @@ async fn request_queue_waits_for_dispatcher_admission_before_recording_telemetry
         dispatcher.join_next().await,
         RequestTaskResult::Completed
     ));
-
-    tracer_provider.force_flush().expect("flush traces");
-    let spans = span_exporter.get_finished_spans().expect("span export");
-    assert_eq!(spans.len(), 1);
-    let request_span = spans.first().expect("end-to-end request span");
-    assert_eq!(request_span.name.as_ref(), "test/queued");
-    let request_duration = request_span
-        .end_time
-        .duration_since(request_span.start_time)
-        .expect("request span should have a valid interval");
-    assert!(
-        request_duration >= Duration::from_millis(25),
-        "the end-to-end request span should include the admission wait"
-    );
-    assert!(
-        queue_duration
-            <= request_duration.saturating_sub(route_setup_duration) + Duration::from_millis(5),
-        "queue latency must exclude synchronous request decoding and route setup"
-    );
-
-    let [dispatch_duration, total_duration] =
-        assert_request_completion(&metrics, "test/queued", "success");
-    assert!(dispatch_duration >= route_setup_duration + Duration::from_millis(25));
-    assert!(total_duration >= dispatch_duration);
-    assert!(
-        total_duration <= request_duration + Duration::from_millis(5),
-        "total request timing must not add admission wait twice"
-    );
-    assert!(
-        total_duration >= queue_duration + route_setup_duration - Duration::from_millis(5),
-        "total request timing must include admission and route setup exactly once"
-    );
-
-    metrics.shutdown().expect("shutdown metrics");
 }
 
-struct RequestTelemetryFixture {
-    metrics: MetricsClient,
+struct RequestFixture {
     dispatcher: RequestDispatcher,
     outgoing_rx: mpsc::Receiver<RpcServerOutboundMessage>,
     disconnected_tx: watch::Sender<bool>,
 }
 
-fn request_telemetry_fixture(router: RpcRouter<ExecServerHandler>) -> RequestTelemetryFixture {
-    let metrics = MetricsClient::new(
-        MetricsConfig::in_memory(
-            "test",
-            "codex-exec-server",
-            env!("CARGO_PKG_VERSION"),
-            InMemoryMetricExporter::default(),
-        )
-        .with_runtime_reader(),
-    )
-    .expect("metrics client");
-    let telemetry = ExecServerTelemetry::new(metrics.clone());
+fn request_fixture(router: RpcRouter<ExecServerHandler>) -> RequestFixture {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(/*buffer*/ 1);
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
     let requests = notifications.request_sender();
     let handler = Arc::new(ExecServerHandler::new(
-        SessionRegistry::new(telemetry.clone()),
+        SessionRegistry::new(),
         notifications,
         ExecServerRuntimeOptions::new(
             std::env::current_exe().expect("current executable"),
@@ -401,72 +209,19 @@ fn request_telemetry_fixture(router: RpcRouter<ExecServerHandler>) -> RequestTel
         outgoing_tx,
         disconnected_rx,
         requests,
-        telemetry,
         RequestDispatchMode::Inline,
     );
-    RequestTelemetryFixture {
-        metrics,
+    RequestFixture {
         dispatcher,
         outgoing_rx,
         disconnected_tx,
     }
 }
 
-fn assert_request_completion(metrics: &MetricsClient, method: &str, result: &str) -> [Duration; 2] {
-    let snapshot = metrics.snapshot().expect("completed request metrics");
-    let metric = snapshot
-        .scope_metrics()
-        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .find(|metric| metric.name() == "exec_server_requests_total")
-        .expect("request counter");
-    let AggregatedMetrics::U64(MetricData::Sum(sum)) = metric.data() else {
-        panic!("request counter should be a u64 sum");
-    };
-    let points: Vec<_> = sum.data_points().collect();
-    assert_eq!(points.len(), 1);
-    assert_eq!(points[0].value(), 1, "record the completion only once");
-
-    [
-        "exec_server_request_duration_seconds",
-        "exec_server_request_total_duration_seconds",
-    ]
-    .map(|name| {
-        let metric = snapshot
-            .scope_metrics()
-            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-            .find(|metric| metric.name() == name)
-            .expect("request duration histogram");
-        let AggregatedMetrics::F64(MetricData::Histogram(histogram)) = metric.data() else {
-            panic!("request duration should be an f64 histogram");
-        };
-        let points: Vec<_> = histogram.data_points().collect();
-        assert_eq!(points.len(), 1);
-        let point = points[0];
-        let attributes: BTreeMap<_, _> = point
-            .attributes()
-            .map(|attribute| {
-                (
-                    attribute.key.as_str().to_string(),
-                    attribute.value.as_str().into_owned(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            attributes,
-            BTreeMap::from([
-                ("method".to_string(), method.to_string()),
-                ("result".to_string(), result.to_string()),
-            ])
-        );
-        assert_eq!(point.count(), 1, "record each duration only once");
-        Duration::from_secs_f64(point.sum())
-    })
-}
-
-/// A synthetic receipt timestamp makes the pre-dispatch boundary deterministic for every result.
+/// Dispatch preserves success, failure, and disconnected response paths.
 #[tokio::test]
-async fn total_duration_preserves_dispatch_duration_and_completion_results() {
-    for (method, expected_method, expected_result, close_response) in [
+async fn dispatch_preserves_completion_and_disconnection_results() {
+    for (method, _expected_method, _expected_result, close_response) in [
         ("test/success", "test/success", "success", false),
         ("test/error", "test/error", "error", false),
         ("test/unknown", "unknown", "error", false),
@@ -486,7 +241,7 @@ async fn total_duration_preserves_dispatch_duration_and_completion_results() {
                 Err::<(), _>(invalid_request("synthetic route error".to_string()))
             },
         );
-        let mut fixture = request_telemetry_fixture(router);
+        let mut fixture = request_fixture(router);
         if close_response {
             fixture.outgoing_rx.close();
         }
@@ -509,16 +264,12 @@ async fn total_duration_preserves_dispatch_duration_and_completion_results() {
             matches!(result, RequestTaskResult::ConnectionClosed),
             close_response
         );
-        let [dispatch_duration, total_duration] =
-            assert_request_completion(&fixture.metrics, expected_method, expected_result);
-        assert!(total_duration >= dispatch_duration + pre_dispatch_wait);
-        fixture.metrics.shutdown().expect("shutdown metrics");
     }
 }
 
-/// Disconnecting a running request emits the same result and count for both duration definitions.
+/// Disconnecting a running request cancels its work.
 #[tokio::test]
-async fn total_duration_records_disconnection_during_execution() {
+async fn disconnection_cancels_running_request() {
     let execution_started = Arc::new(Notify::new());
     let notify_execution_started = Arc::clone(&execution_started);
     let mut router = RpcRouter::new();
@@ -533,7 +284,7 @@ async fn total_duration_records_disconnection_during_execution() {
             }
         },
     );
-    let mut fixture = request_telemetry_fixture(router);
+    let mut fixture = request_fixture(router);
     let pre_dispatch_wait = Duration::from_secs(5);
     let received_at = Instant::now() - pre_dispatch_wait;
     let dispatch = fixture.dispatcher.dispatch_request(
@@ -559,8 +310,4 @@ async fn total_duration_records_disconnection_during_execution() {
     .await
     .expect("disconnected request should finish");
     assert!(matches!(result, RequestTaskResult::ConnectionClosed));
-    let [dispatch_duration, total_duration] =
-        assert_request_completion(&fixture.metrics, "test/pending", "disconnected");
-    assert!(total_duration >= dispatch_duration + pre_dispatch_wait);
-    fixture.metrics.shutdown().expect("shutdown metrics");
 }

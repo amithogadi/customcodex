@@ -45,6 +45,5 @@ pub struct ApprovalDecisionInput<'a> {
     /// Existing retry and sensitive-action rules require a synchronous review.
     pub require_fresh_review: bool,
     pub full_access: bool,
-    pub metrics: Option<Arc<dyn crate::ExtensionMetrics>>,
     pub synchronous_reviewer: &'a dyn SynchronousApprovalReviewer,
 }

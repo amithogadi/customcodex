@@ -14,8 +14,6 @@ codex_rust_crate(
         "tests/unit/**/*.rs",
     ]),
     deps_extra = [
-        "@crates//:opentelemetry",
-        "@crates//:opentelemetry_sdk",
         "@crates//:toml",
     ],
     extra_binaries = [

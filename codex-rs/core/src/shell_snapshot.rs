@@ -20,7 +20,6 @@ use codex_network_proxy::CredentialBrokerContext;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::brokered_credential_marker_env_keys;
 use codex_network_proxy::brokered_credential_value_env_keys;
-use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ShellEnvironmentPolicy;
 use codex_protocol::shell_environment::create_env_from_vars;
@@ -55,7 +54,6 @@ pub(crate) struct ShellSnapshot {
 struct ShellSnapshotConfig {
     codex_home: AbsolutePathBuf,
     session_id: ThreadId,
-    session_telemetry: SessionTelemetry,
     state_db: Option<StateDbHandle>,
     credential_broker: Option<watch::Receiver<SnapshotCredentialBrokerState>>,
     prefer_executor_snapshots: bool,
@@ -110,7 +108,6 @@ impl ShellSnapshot {
     pub(crate) fn new(
         codex_home: AbsolutePathBuf,
         session_id: ThreadId,
-        session_telemetry: SessionTelemetry,
         state_db: Option<StateDbHandle>,
         credential_broker: Option<watch::Sender<SnapshotCredentialBrokerState>>,
         prefer_executor_snapshots: bool,
@@ -119,7 +116,6 @@ impl ShellSnapshot {
             config: Some(Arc::new(ShellSnapshotConfig {
                 codex_home,
                 session_id,
-                session_telemetry,
                 state_db,
                 credential_broker: credential_broker.as_ref().map(watch::Sender::subscribe),
                 prefer_executor_snapshots,
@@ -215,9 +211,6 @@ impl ShellSnapshot {
             } else {
                 None
             };
-            let timer = config
-                .session_telemetry
-                .start_timer("codex.shell_snapshot.duration_ms", &[("version", "v1")]);
             let snapshot = ShellSnapshot::try_create(
                 &config.codex_home,
                 config.session_id,
@@ -230,14 +223,10 @@ impl ShellSnapshot {
             )
             .await;
             let success_tag = if snapshot.is_ok() { "true" } else { "false" };
-            let _ = timer.map(|timer| timer.record(&[("success", success_tag)]));
             let mut counter_tags = vec![("version", "v1"), ("success", success_tag)];
             if let Some(failure_reason) = snapshot.as_ref().err() {
                 counter_tags.push(("failure_reason", *failure_reason));
             }
-            config
-                .session_telemetry
-                .counter("codex.shell_snapshot", /*inc*/ 1, &counter_tags);
             snapshot.ok().map(Arc::new)
         }
         .instrument(snapshot_span)

@@ -59,7 +59,6 @@ fn audited_overrides_allow_daemon_without_allowing_arbitrary_config() {
 fn monorepo_wrapper_overrides_are_eligible_and_select_only_server_features() {
     let overrides = codex_utils_cli::CliConfigOverrides {
         raw_overrides: [
-            "features.realtime_conversation=true",
             "features.worktrees=true",
             "features.remote_models=true",
             "features.api_key_model_discovery=true",
@@ -67,7 +66,6 @@ fn monorepo_wrapper_overrides_are_eligible_and_select_only_server_features() {
             "features.auth_elicitation=true",
             "features.mcp_oauth_refresh_coordination=true",
             "features.responses_websockets_v2=true",
-            "features.workspace_owner_usage_nudge=true",
             "features.tool_search_always_defer_mcp_tools=true",
             "features.remote_compaction_v2=true",
             "features.standalone_web_search=true",
@@ -117,25 +115,6 @@ fn daemon_features_follow_cli_table_replacement_and_last_value() {
         daemon_startup::server_features(&overrides),
         std::collections::BTreeMap::from([("code_mode_host".to_string(), true),])
     );
-}
-
-#[test]
-fn daemon_launch_telemetry_records_once_on_connection_or_early_return() {
-    for connected in [false, true] {
-        let observations = std::cell::RefCell::new(Vec::new());
-        let launch = daemon_telemetry::Launch(Some(|target: &AppServerTarget, actual: bool| {
-            observations.borrow_mut().push((target.clone(), actual));
-        }));
-        if connected {
-            launch.record(&AppServerTarget::Embedded, connected);
-        } else {
-            drop(launch);
-        }
-        assert_eq!(
-            observations.into_inner(),
-            vec![(AppServerTarget::Embedded, connected)]
-        );
-    }
 }
 
 #[tokio::test]
@@ -317,7 +296,6 @@ async fn daemon_startup_falls_back_only_for_implicit_endpoints() -> color_eyre::
             LoaderOverrides::default(),
             /*strict_config*/ false,
             CloudConfigBundleLoader::default(),
-            codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
             &mut state_db,
             Arc::new(EnvironmentManager::default_for_tests()),

@@ -183,23 +183,6 @@ pub(crate) async fn finalize(
                 error => CodexErr::InvalidRequest(error.to_string()),
             }
         })?;
-    for (section, cost) in context.section_costs() {
-        for (measurement, value) in cost.measurements() {
-            session
-                .services
-                .session_telemetry
-                .histogram_with_boundaries(
-                    codex_guardian_context::SECTION_COST_METRIC,
-                    i64::try_from(value).unwrap_or(i64::MAX),
-                    codex_guardian_context::SECTION_COST_BOUNDARIES,
-                    &[
-                        ("target", "sync"),
-                        ("section", section),
-                        ("measurement", measurement),
-                    ],
-                );
-        }
-    }
     match context.clone().into_annotated_user_inputs() {
         Ok((user_input, metadata)) => {
             if metadata.is_some() {

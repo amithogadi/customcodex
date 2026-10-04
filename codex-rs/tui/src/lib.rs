@@ -45,7 +45,6 @@ use codex_app_server_protocol::ThreadListCwdFilter;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
-use codex_cloud_config::cloud_config_bundle_loader_for_storage;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadError;
 use codex_config::LoaderOverrides;
@@ -101,13 +100,11 @@ pub(crate) use codex_app_server_client::legacy_core;
 pub(crate) use worktree_startup::ManagedTuiWorktree;
 
 mod additional_dirs;
-mod analytics;
 mod app;
 mod app_backtrack;
 mod app_command;
 mod app_event;
 mod app_event_sender;
-mod app_info;
 mod app_server_approval_conversions;
 mod app_server_connection;
 mod app_server_session;
@@ -132,7 +129,6 @@ mod experimental_features;
 mod markdown_copy;
 mod permission_discovery;
 mod pets;
-mod security_setup;
 mod worktree_browser;
 pub use custom_terminal::Terminal;
 mod assistant_directives;
@@ -169,7 +165,6 @@ mod line_truncation;
 pub(crate) mod live_wrap;
 mod local_settings;
 pub use live_wrap::RowBuilder;
-mod local_chatgpt_auth;
 mod managed_new_thread_defaults;
 mod markdown;
 mod markdown_render;
@@ -182,8 +177,6 @@ mod motion;
 mod multi_agents;
 mod named_session_lookup;
 mod notifications;
-#[cfg(any(not(debug_assertions), test))]
-mod npm_registry;
 pub(crate) mod onboarding;
 mod oss_selection;
 mod pager_overlay;
@@ -239,23 +232,13 @@ mod tui;
 mod turn_tip;
 mod ui_consts;
 mod unarchive_prompt;
-pub(crate) mod update_action;
-mod worktree_startup;
-pub use update_action::DaemonUpdateSource;
-pub use update_action::UpdateAction;
-#[cfg(not(debug_assertions))]
-pub use update_action::get_update_action;
-mod update_prompt;
 mod update_versions;
-mod updates;
-#[cfg(any(not(debug_assertions), test))]
-mod updates_cache;
 mod version;
 mod vim_search;
 mod width;
 mod windows_sandbox;
 mod workspace_command;
-mod workspace_messages;
+mod worktree_startup;
 
 mod wrapping;
 
@@ -279,7 +262,6 @@ pub use public_widgets::composer_input::ComposerInput;
 // (tests access modules directly within the crate)
 
 const TUI_LOG_FILE_NAME: &str = "codex-tui.log";
-const INTERACTIVE_OTEL_SHUTDOWN_TIMEOUT: Duration = Duration::from_millis(/*millis*/ 500);
 
 const AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT: std::time::Duration =
     std::time::Duration::from_millis(50);
@@ -292,7 +274,6 @@ async fn start_embedded_app_server(
     loader_overrides: LoaderOverrides,
     strict_config: bool,
     cloud_config_bundle: CloudConfigBundleLoader,
-    feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
@@ -306,7 +287,6 @@ async fn start_embedded_app_server(
         loader_overrides,
         strict_config,
         cloud_config_bundle,
-        feedback,
         log_db,
         state_db,
         environment_manager,
@@ -557,7 +537,6 @@ async fn start_app_server(
     loader_overrides: LoaderOverrides,
     strict_config: bool,
     cloud_config_bundle: CloudConfigBundleLoader,
-    feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
     state_db: &mut Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
@@ -600,7 +579,6 @@ async fn start_app_server(
         loader_overrides,
         strict_config,
         cloud_config_bundle,
-        feedback,
         log_db,
         state_db.clone(),
         environment_manager,
@@ -630,7 +608,6 @@ pub(crate) async fn start_app_server_for_picker(
         loader_overrides,
         /*strict_config*/ false,
         CloudConfigBundleLoader::default(),
-        codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
         &mut state_db,
         environment_manager,
@@ -657,7 +634,6 @@ pub(crate) async fn start_embedded_app_server_for_picker(
         LoaderOverrides::without_managed_config_for_tests(),
         /*strict_config*/ false,
         CloudConfigBundleLoader::default(),
-        codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
         &mut state_db,
         Arc::new(EnvironmentManager::default_for_tests()),
@@ -678,7 +654,6 @@ async fn start_embedded_app_server_with<F, Fut>(
     loader_overrides: LoaderOverrides,
     strict_config: bool,
     cloud_config_bundle: CloudConfigBundleLoader,
-    feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
@@ -707,7 +682,6 @@ where
         strict_config,
         cloud_config_bundle,
         embedded_network_policy,
-        feedback,
         log_db,
         state_db,
         environment_manager,
@@ -1042,22 +1016,6 @@ fn app_server_target_for_launch(
     })
 }
 
-async fn cloud_config_bundle_for_app_server_target(
-    app_server_target: &AppServerTarget,
-    bootstrap_config: &ConfigTomlLoadResult,
-    codex_home: &Path,
-    embedded_network_policy: &codex_app_server_client::EmbeddedNetworkPolicy,
-) -> std::io::Result<CloudConfigBundleLoader> {
-    cloud_config_bundle_loader_for_storage(
-        embedded_network_policy
-            .bind_bootstrap_auth(app_server_target.auth_config_for_cloud_loader(
-                bootstrap_auth_config(codex_home, bootstrap_config)?,
-            )),
-        /*enable_codex_api_key_env*/ false,
-    )
-    .await
-}
-
 fn loader_overrides_are_default(loader_overrides: &LoaderOverrides) -> bool {
     let loader_overrides_are_default = loader_overrides.user_config_path.is_none()
         && loader_overrides.user_config_profile.is_none()
@@ -1107,7 +1065,6 @@ pub async fn run_main(
                 thread_id: None,
                 resume_hint: None,
                 disconnect_info: None,
-                update_action: None,
                 exit_reason: ExitReason::UserRequested,
             }),
             Err(err) => {
@@ -1137,21 +1094,17 @@ async fn run_ratatui_app(
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     mut cloud_config_bundle: CloudConfigBundleLoader,
-    feedback: codex_feedback::CodexFeedback,
     log_db: Option<log_db::LogDbLayer>,
     mut state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
     embedded_network_policy: codex_app_server_client::EmbeddedNetworkPolicy,
     managed_worktree: Option<ManagedTuiWorktree>,
     daemon_startup_warning: Option<String>,
-    launch_telemetry: daemon_telemetry::Launch<impl FnOnce(&AppServerTarget, bool)>,
     startup_draft: startup_draft::StartupDraft,
 ) -> color_eyre::Result<AppExitInfo> {
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
     let workload_identity_selected = is_workload_identity_selected();
     color_eyre::install()?;
-
-    tooltips::announcement::prewarm(initial_config.http_client_factory());
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
@@ -1164,30 +1117,6 @@ async fn run_ratatui_app(
         prev_hook(info);
     }));
     let (mut tui, mut terminal_restore_guard, mut startup_draft) = startup_draft.into_parts();
-
-    #[cfg(not(debug_assertions))]
-    {
-        use crate::update_prompt::UpdatePromptOutcome;
-
-        let skip_update_prompt = cli.prompt.as_ref().is_some_and(|prompt| !prompt.is_empty());
-        if !skip_update_prompt {
-            startup_draft.flush_pending_events(&mut tui).await?;
-            match update_prompt::run_update_prompt_if_needed(&mut tui, &initial_config).await? {
-                UpdatePromptOutcome::Continue => {}
-                UpdatePromptOutcome::RunUpdate(action) => {
-                    terminal_restore_guard.restore()?;
-                    return Ok(AppExitInfo {
-                        token_usage: crate::token_usage::TokenUsage::default(),
-                        thread_id: None,
-                        resume_hint: None,
-                        disconnect_info: None,
-                        update_action: Some(action),
-                        exit_reason: ExitReason::UserRequested,
-                    });
-                }
-            }
-        }
-    }
 
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
@@ -1203,7 +1132,6 @@ async fn run_ratatui_app(
                 loader_overrides.clone(),
                 strict_config,
                 cloud_config_bundle.clone(),
-                feedback.clone(),
                 log_db.clone(),
                 &mut state_db,
                 environment_manager.clone(),
@@ -1211,7 +1139,6 @@ async fn run_ratatui_app(
             ),
         )
         .await;
-    launch_telemetry.record(&app_server_target, matches!(&startup_app_server, Ok(Ok(_))));
     let mut app_server_session = match startup_app_server {
         Ok(Ok(app_server)) => {
             AppServerSession::new(app_server, app_server_target.thread_params_mode())
@@ -1343,7 +1270,6 @@ async fn run_ratatui_app(
                 thread_id: None,
                 resume_hint: None,
                 disconnect_info: None,
-                update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1354,17 +1280,6 @@ async fn run_ratatui_app(
         }
         let reloaded_config = startup_draft
             .run_until(&mut tui, async {
-                // If this onboarding run included the login step, always refresh the cloud config
-                // bundle and rebuild config. This avoids missing newly available cloud-managed
-                // policy due to login status detection edge cases.
-                if show_login_screen && !uses_remote_workspace && !workload_identity_selected {
-                    cloud_config_bundle = cloud_config_bundle_loader_for_storage(
-                        embedded_network_policy.bind_bootstrap_auth(initial_config.auth_config()),
-                        /*enable_codex_api_key_env*/ false,
-                    )
-                    .await?;
-                }
-
                 // Reload config when persisted trust or auth changes alter the current process.
                 Ok::<_, std::io::Error>(
                     if !uses_remote_workspace
@@ -1424,7 +1339,6 @@ async fn run_ratatui_app(
                 thread_id: None,
                 resume_hint: None,
                 disconnect_info: None,
-                update_action: None,
                 exit_reason: ExitReason::Fatal(format!(
                     "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
                 )),
@@ -1539,7 +1453,6 @@ async fn run_ratatui_app(
                         thread_id: None,
                         resume_hint: None,
                         disconnect_info: None,
-                        update_action: None,
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1638,7 +1551,6 @@ async fn run_ratatui_app(
                     thread_id: None,
                     resume_hint: None,
                     disconnect_info: None,
-                    update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -1688,7 +1600,6 @@ async fn run_ratatui_app(
                 thread_id: None,
                 resume_hint: None,
                 disconnect_info: None,
-                update_action: None,
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1780,7 +1691,6 @@ async fn run_ratatui_app(
                     loader_overrides.clone(),
                     strict_config,
                     cloud_config_bundle.clone(),
-                    feedback.clone(),
                     log_db.clone(),
                     &mut state_db,
                     environment_manager.clone(),
@@ -1870,7 +1780,6 @@ async fn run_ratatui_app(
                     loader_overrides.clone(),
                     strict_config,
                     cloud_config_bundle.clone(),
-                    feedback.clone(),
                     log_db.clone(),
                     &mut state_db,
                     environment_manager.clone(),
@@ -1892,7 +1801,6 @@ async fn run_ratatui_app(
                     thread_id: None,
                     resume_hint: None,
                     disconnect_info: None,
-                    update_action: None,
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -1923,16 +1831,6 @@ async fn run_ratatui_app(
     );
 
     // Count launches that reach final config resolution, regardless of screen policy.
-    if config.analytics_enabled != Some(false)
-        && config.otel.metrics_exporter != codex_config::types::OtelExporterKind::None
-        && let Some(metrics) = codex_otel::global()
-    {
-        let _ = metrics.counter(
-            "codex.tui.fullscreen_transcript",
-            /*inc*/ 1,
-            &[("enabled", &config.tui_fullscreen_transcript.to_string())],
-        );
-    }
 
     // Cloud configuration and session selection can change screen policy after first paint.
     let use_alt_screen = determine_alt_screen_mode(
@@ -1971,12 +1869,7 @@ async fn run_ratatui_app(
     #[cfg(not(target_os = "windows"))]
     let should_prompt_windows_sandbox_nux_at_startup = false;
 
-    let Cli {
-        prompt,
-        shared,
-        daemon_cli_executable,
-        ..
-    } = cli;
+    let Cli { prompt, shared, .. } = cli;
     let images = shared.into_inner().images;
 
     // Persistent app-server resumes may attach to an already-running thread,
@@ -2053,7 +1946,6 @@ async fn run_ratatui_app(
         prompt,
         images,
         session_selection,
-        feedback,
         is_first_run,
         should_prompt_windows_sandbox_nux_at_startup,
         app_server_target,
@@ -2065,7 +1957,6 @@ async fn run_ratatui_app(
         daemon_startup_warning,
         startup_draft,
         managed_worktree,
-        daemon_cli_executable,
     ))
     .await;
 
@@ -2334,7 +2225,6 @@ fn should_show_bedrock_setup_wizard(
 
 mod daemon_recovery;
 mod daemon_startup;
-mod daemon_telemetry;
 
 #[cfg(test)]
 #[path = "daemon_startup_tests.rs"]
@@ -2673,7 +2563,6 @@ requires_openai_auth = {requires_openai_auth}
             LoaderOverrides::default(),
             /*strict_config*/ false,
             CloudConfigBundleLoader::default(),
-            codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
             state_db,
             Arc::new(EnvironmentManager::default_for_tests()),
@@ -3825,7 +3714,6 @@ requires_openai_auth = {requires_openai_auth}
             LoaderOverrides::default(),
             /*strict_config*/ false,
             CloudConfigBundleLoader::default(),
-            codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
             /*state_db*/ None,
             Arc::new(EnvironmentManager::default_for_tests()),

@@ -46,9 +46,6 @@ static NEXT_ELICITATION_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 
 const STRICT_AUTO_REVIEW_DECLINE_MESSAGE: &str = "Automated review of this operation failed. Do not proceed without asking the user for explicit approval.";
 
-#[path = "user_verification_elicitation.rs"]
-mod user_verification_elicitation;
-
 #[derive(Debug, Clone)]
 pub struct ElicitationReviewRequest {
     pub server_name: String,
@@ -170,18 +167,8 @@ impl ElicitationRequestRouter {
                 meta: None,
             });
         };
-        let (delivery_context, response_context) =
-            if matches!(&request, ElicitationRequest::UserVerification { .. }) {
-                (
-                    "failed to deliver user-verification request",
-                    "user-verification response channel closed",
-                )
-            } else {
-                (
-                    "failed to deliver MCP elicitation request",
-                    "elicitation request channel closed unexpectedly",
-                )
-            };
+        let delivery_context = "failed to deliver MCP elicitation request";
+        let response_context = "elicitation request channel closed unexpectedly";
         let public_request_id = format!(
             "codex-mcp-elicitation-{}",
             NEXT_ELICITATION_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
@@ -270,14 +257,8 @@ impl ElicitationRequestManager {
         &self,
         server_name: String,
         tx_event: Option<Sender<Event>>,
-        client_mcp_extensions: &ClientMcpExtensions,
+        _client_mcp_extensions: &ClientMcpExtensions,
     ) -> SendElicitation {
-        // Event receivers such as codex mcp-server do not necessarily handle verification.
-        // Only wait for a response when trusted host activation enabled this exact route.
-        let user_verification_enabled = client_mcp_extensions
-            .get(OPENAI_ELICITATION_EXTENSION_ID)
-            .and_then(|settings| settings.get("userVerification"))
-            .is_some_and(Value::is_object);
         let router = self.router.clone();
         let authority = self.authority.clone();
         Box::new(move |id, elicitation| {
@@ -290,33 +271,12 @@ impl ElicitationRequestManager {
                     .lock()
                     .ok()
                     .and_then(|authority| authority.clone());
-                if let Elicitation::UserVerification {
-                    meta,
-                    title,
-                    description,
-                    challenge,
-                } = elicitation
-                {
-                    if !user_verification_enabled {
-                        return Ok(ElicitationResponse {
-                            action: ElicitationAction::Cancel,
-                            content: None,
-                            meta: None,
-                        });
-                    }
-                    return user_verification_elicitation::route(
-                        router,
-                        tx_event,
-                        authority,
-                        server_name,
-                        ElicitationRequest::UserVerification {
-                            meta,
-                            title,
-                            description,
-                            challenge,
-                        },
-                    )
-                    .await;
+                if matches!(elicitation, Elicitation::UserVerification { .. }) {
+                    return Ok(ElicitationResponse {
+                        action: ElicitationAction::Cancel,
+                        content: None,
+                        meta: None,
+                    });
                 }
                 if router.auto_deny() {
                     return Ok(ElicitationResponse {

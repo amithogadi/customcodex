@@ -6,7 +6,6 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::LoaderOverrides;
 use codex_core::plugins_manager_for_config;
-use codex_core_plugins::PluginMarketplaceUpgradeOutcome;
 use codex_core_plugins::PluginsConfigInput;
 use codex_core_plugins::installed_marketplaces::marketplace_install_root;
 use codex_core_plugins::installed_marketplaces::resolve_configured_marketplace_root;
@@ -42,16 +41,11 @@ pub struct MarketplaceCli {
 
 #[derive(Debug, clap::Subcommand)]
 enum MarketplaceSubcommand {
-    /// Add a local or Git marketplace to the configured marketplace sources.
+    /// Add a local marketplace to the configured marketplace sources.
     Add(AddMarketplaceArgs),
 
     /// List plugin marketplaces Codex is currently considering and their roots.
     List(ListMarketplaceArgs),
-
-    /// Refresh configured Git marketplace snapshots.
-    ///
-    /// Omit MARKETPLACE_NAME to upgrade all configured Git marketplaces.
-    Upgrade(UpgradeMarketplaceArgs),
 
     /// Remove a configured marketplace source by name.
     Remove(RemoveMarketplaceArgs),
@@ -60,24 +54,12 @@ enum MarketplaceSubcommand {
 #[derive(Debug, Parser)]
 #[command(
     bin_name = "codex plugin marketplace add",
-    after_help = "Examples:\n  codex plugin marketplace add ./path/to/marketplace\n  codex plugin marketplace add owner/repo --ref main\n  codex plugin marketplace add https://github.com/owner/repo --sparse plugins/foo"
+    after_help = "Examples:\n  codex plugin marketplace add ./path/to/marketplace"
 )]
 struct AddMarketplaceArgs {
-    /// Marketplace source: a local path, owner/repo[@ref], HTTPS Git URL, or SSH Git URL.
+    /// Local marketplace directory.
     #[arg(value_name = "SOURCE")]
     source: String,
-
-    /// Git ref to fetch for Git marketplace sources.
-    #[arg(long = "ref", value_name = "REF")]
-    ref_name: Option<String>,
-
-    /// Sparse checkout path for Git marketplace sources. Can be repeated.
-    #[arg(
-        long = "sparse",
-        value_name = "PATH",
-        action = clap::ArgAction::Append
-    )]
-    sparse_paths: Vec<String>,
 
     /// Output add result as JSON.
     #[arg(long = "json")]
@@ -88,21 +70,6 @@ struct AddMarketplaceArgs {
 #[command(bin_name = "codex plugin marketplace list")]
 struct ListMarketplaceArgs {
     /// Output marketplace list as JSON.
-    #[arg(long = "json")]
-    json: bool,
-}
-
-#[derive(Debug, Parser)]
-#[command(
-    bin_name = "codex plugin marketplace upgrade",
-    after_help = "Examples:\n  codex plugin marketplace upgrade\n  codex plugin marketplace upgrade debug"
-)]
-struct UpgradeMarketplaceArgs {
-    /// Optional configured marketplace name to upgrade. Omit to upgrade all Git marketplaces.
-    #[arg(value_name = "MARKETPLACE_NAME")]
-    marketplace_name: Option<String>,
-
-    /// Output upgrade result as JSON.
     #[arg(long = "json")]
     json: bool,
 }
@@ -140,7 +107,6 @@ impl MarketplaceCli {
         match subcommand {
             MarketplaceSubcommand::Add(args) => run_add(config, args).await?,
             MarketplaceSubcommand::List(args) => run_list(config, args).await?,
-            MarketplaceSubcommand::Upgrade(args) => run_upgrade(config, args, builder).await?,
             MarketplaceSubcommand::Remove(args) => run_remove(config, args).await?,
         }
 
@@ -149,20 +115,15 @@ impl MarketplaceCli {
 }
 
 async fn run_add(config: Config, args: AddMarketplaceArgs) -> Result<()> {
-    let AddMarketplaceArgs {
-        source,
-        ref_name,
-        sparse_paths,
-        json,
-    } = args;
+    let AddMarketplaceArgs { source, json } = args;
 
     let outcome = add_marketplace(
         config.codex_home.to_path_buf(),
         config.config_layer_stack.requirements().clone(),
         MarketplaceAddRequest {
             source,
-            ref_name,
-            sparse_paths,
+            ref_name: None,
+            sparse_paths: Vec::new(),
         },
     )
     .await?;
@@ -364,40 +325,6 @@ fn configured_marketplace_sources_by_root(
         .collect()
 }
 
-async fn run_upgrade(
-    config: Config,
-    args: UpgradeMarketplaceArgs,
-    builder: codex_core::config::ConfigBuilder,
-) -> Result<()> {
-    let UpgradeMarketplaceArgs {
-        marketplace_name,
-        json,
-    } = args;
-    let manager = plugins_manager_for_config(&config, load_cli_auth_manager(&config).await?);
-    let plugins_input = config.plugins_config_input();
-    let runtime = tokio::runtime::Handle::current();
-    let reload_config: codex_core_plugins::ConfigLayerReload = std::sync::Arc::new(move || {
-        runtime
-            .block_on(builder.clone().build())
-            .map(|config| config.config_layer_stack)
-    });
-    let requested_name = marketplace_name.clone();
-    let outcome = tokio::task::spawn_blocking(move || {
-        manager.upgrade_configured_marketplaces_for_config(
-            &plugins_input,
-            requested_name.as_deref(),
-            &reload_config,
-        )
-    })
-    .await?
-    .map_err(anyhow::Error::msg)?;
-    if json {
-        print_upgrade_outcome_json(&outcome)
-    } else {
-        print_upgrade_outcome(&outcome, marketplace_name.as_deref())
-    }
-}
-
 async fn run_remove(config: Config, args: RemoveMarketplaceArgs) -> Result<()> {
     let RemoveMarketplaceArgs {
         marketplace_name,
@@ -442,146 +369,5 @@ impl JsonMarketplaceRemoveOutput {
                 .removed_installed_root
                 .map(|root| root.as_path().display().to_string()),
         }
-    }
-}
-
-fn print_upgrade_outcome_json(outcome: &PluginMarketplaceUpgradeOutcome) -> Result<()> {
-    for error in &outcome.errors {
-        eprintln!(
-            "Failed to upgrade marketplace `{}`: {}",
-            error.marketplace_name, error.message
-        );
-    }
-    if !outcome.all_succeeded() {
-        bail!("{} upgrade failure(s) occurred.", outcome.errors.len());
-    }
-
-    let output = JsonMarketplaceUpgradeOutput::from_outcome(outcome);
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct JsonMarketplaceUpgradeOutput {
-    selected_marketplaces: Vec<String>,
-    upgraded_roots: Vec<String>,
-    errors: Vec<JsonMarketplaceUpgradeError>,
-}
-
-impl JsonMarketplaceUpgradeOutput {
-    fn from_outcome(outcome: &PluginMarketplaceUpgradeOutcome) -> Self {
-        Self {
-            selected_marketplaces: outcome.selected_marketplaces.clone(),
-            upgraded_roots: outcome
-                .upgraded_roots
-                .iter()
-                .map(|root| root.display().to_string())
-                .collect(),
-            errors: outcome
-                .errors
-                .iter()
-                .map(|error| JsonMarketplaceUpgradeError {
-                    marketplace_name: error.marketplace_name.clone(),
-                    message: error.message.clone(),
-                })
-                .collect(),
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct JsonMarketplaceUpgradeError {
-    marketplace_name: String,
-    message: String,
-}
-
-fn print_upgrade_outcome(
-    outcome: &PluginMarketplaceUpgradeOutcome,
-    marketplace_name: Option<&str>,
-) -> Result<()> {
-    for error in &outcome.errors {
-        eprintln!(
-            "Failed to upgrade marketplace `{}`: {}",
-            error.marketplace_name, error.message
-        );
-    }
-    if !outcome.all_succeeded() {
-        bail!("{} upgrade failure(s) occurred.", outcome.errors.len());
-    }
-
-    let selection_label = marketplace_name.unwrap_or("all configured Git marketplaces");
-    if outcome.selected_marketplaces.is_empty() {
-        println!("No configured Git marketplaces to upgrade.");
-    } else if outcome.upgraded_roots.is_empty() {
-        if marketplace_name.is_some() {
-            println!("Marketplace `{selection_label}` is already up to date.");
-        } else {
-            println!("All configured Git marketplaces are already up to date.");
-        }
-    } else if marketplace_name.is_some() {
-        println!("Upgraded marketplace `{selection_label}` to the latest configured revision.");
-        for root in &outcome.upgraded_roots {
-            println!("Installed marketplace root: {}", root.display());
-        }
-    } else {
-        println!("Upgraded {} marketplace(s).", outcome.upgraded_roots.len());
-        for root in &outcome.upgraded_roots {
-            println!("Installed marketplace root: {}", root.display());
-        }
-    }
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn sparse_paths_parse_before_or_after_source() {
-        let sparse_before_source =
-            AddMarketplaceArgs::try_parse_from(["add", "--sparse", "plugins/foo", "owner/repo"])
-                .unwrap();
-        assert_eq!(sparse_before_source.source, "owner/repo");
-        assert_eq!(sparse_before_source.sparse_paths, vec!["plugins/foo"]);
-
-        let sparse_after_source =
-            AddMarketplaceArgs::try_parse_from(["add", "owner/repo", "--sparse", "plugins/foo"])
-                .unwrap();
-        assert_eq!(sparse_after_source.source, "owner/repo");
-        assert_eq!(sparse_after_source.sparse_paths, vec!["plugins/foo"]);
-
-        let repeated_sparse = AddMarketplaceArgs::try_parse_from([
-            "add",
-            "--sparse",
-            "plugins/foo",
-            "--sparse",
-            "skills/bar",
-            "owner/repo",
-        ])
-        .unwrap();
-        assert_eq!(repeated_sparse.source, "owner/repo");
-        assert_eq!(
-            repeated_sparse.sparse_paths,
-            vec!["plugins/foo", "skills/bar"]
-        );
-    }
-
-    #[test]
-    fn upgrade_subcommand_parses_optional_marketplace_name() {
-        let upgrade_all = UpgradeMarketplaceArgs::try_parse_from(["upgrade"]).unwrap();
-        assert_eq!(upgrade_all.marketplace_name, None);
-
-        let upgrade_one = UpgradeMarketplaceArgs::try_parse_from(["upgrade", "debug"]).unwrap();
-        assert_eq!(upgrade_one.marketplace_name.as_deref(), Some("debug"));
-    }
-
-    #[test]
-    fn remove_subcommand_parses_marketplace_name() {
-        let remove = RemoveMarketplaceArgs::try_parse_from(["remove", "debug"]).unwrap();
-        assert_eq!(remove.marketplace_name, "debug");
     }
 }

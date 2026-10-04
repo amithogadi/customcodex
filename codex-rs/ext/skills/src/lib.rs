@@ -2,7 +2,6 @@ mod aliases;
 pub mod catalog;
 mod catalog_prompt;
 mod config;
-mod dynamic_skill_selector;
 mod extension;
 mod fragments;
 mod host_aliases;
@@ -17,11 +16,9 @@ pub mod provider;
 mod render;
 mod render_observability;
 mod selection;
-mod shadow_selection_experiment;
 mod skills_extension_state;
 mod sources;
 mod state;
-mod telemetry;
 mod tools;
 mod warnings;
 mod world_state;
@@ -30,7 +27,6 @@ mod world_state_catalogs;
 pub use config::SkillsExtensionConfig;
 pub use extension::install;
 pub use extension::install_with_providers;
-pub use extension::install_with_providers_and_metrics;
 pub use host_outcome::SkillLoadOutcome;
 pub use host_prompt::HostSkillPrompts;
 pub use host_prompt::InjectedHostSkillPrompts;
@@ -46,7 +42,6 @@ pub(crate) use skills_extension_state::SkillsExtensionState;
 pub use sources::SkillProviderSource;
 pub use sources::SkillProviders;
 pub use state::SkillsThreadState;
-pub use telemetry::record_plugin_turn_usage;
 
 /// Recognizes persisted explicit skill prompts without exposing their fragment implementation.
 pub fn is_skill_prompt_fragment(text: &str) -> bool {
@@ -54,3 +49,7 @@ pub fn is_skill_prompt_fragment(text: &str) -> bool {
         text,
     )
 }
+
+pub use invocation::InvocationType;
+pub use invocation::SkillInvocation;
+pub use invocation::SkillInvocationLocation;

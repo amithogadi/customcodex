@@ -11,7 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-const AUDIT_TARGET: &str = "codex_otel.network_proxy";
+const AUDIT_TARGET: &str = "codex.network_proxy";
 const POLICY_DECISION_EVENT_NAME: &str = "codex.network_proxy.policy_decision";
 const POLICY_SCOPE_DOMAIN: &str = "domain";
 const POLICY_SCOPE_NON_DOMAIN: &str = "non_domain";
@@ -271,22 +271,12 @@ fn emit_policy_audit_event(state: &NetworkProxyState, args: PolicyAuditEventArgs
         .as_deref()
         .or(audit_metadata.conversation_id.as_deref());
     let timestamp = audit_timestamp();
-    let launch_trace_id = state
-        .launch_span_context
-        .as_ref()
-        .map(|context| context.trace_id().to_string());
-    let launch_span_id = state
-        .launch_span_context
-        .as_ref()
-        .map(|context| context.span_id().to_string());
     let executor_identity = process_log_metadata.executor_identity.as_ref();
     tracing::event!(
         target: AUDIT_TARGET,
         tracing::Level::INFO,
         event.name = POLICY_DECISION_EVENT_NAME,
         event.timestamp = %timestamp,
-        launch.trace_id = launch_trace_id.as_deref(),
-        launch.span_id = launch_span_id.as_deref(),
         conversation.id = conversation_id,
         tool.call_id = process_log_metadata.tool_call_id.as_deref(),
         executor.environment_id = executor_identity.map(|identity| identity.environment_id.as_str()),
@@ -793,7 +783,7 @@ mod tests {
         let event = find_event_by_name(&events, POLICY_DECISION_EVENT_NAME)
             .expect("expected policy decision audit event");
         assert_eq!(event.target, AUDIT_TARGET);
-        assert!(event.target.starts_with("codex_otel."));
+        assert!(event.target.starts_with("codex."));
         assert_eq!(
             event.field("network.policy.scope"),
             Some(POLICY_SCOPE_DOMAIN)

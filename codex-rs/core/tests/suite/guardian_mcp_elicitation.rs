@@ -395,9 +395,9 @@ impl McpServerContributor<Config> for BrowserMcpServer {
         _context: McpServerContributionContext<'a, Config>,
     ) -> ExtensionFuture<'a, Vec<McpServerContribution>> {
         Box::pin(async move {
-            vec![McpServerContribution::HostedApps {
+            vec![McpServerContribution::Set {
+                name: codex_mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
                 config: Box::new(self.0.clone()),
-                protocol_mode: None,
             }]
         })
     }

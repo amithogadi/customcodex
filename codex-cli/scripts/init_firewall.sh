@@ -2,18 +2,14 @@
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
 IFS=$'\n\t'       # Stricter word splitting
 
-# Read allowed domains from file
+# Read explicitly allowed domains from file.
 ALLOWED_DOMAINS_FILE="/etc/codex/allowed_domains.txt"
+ALLOWED_DOMAINS=()
 if [ -f "$ALLOWED_DOMAINS_FILE" ]; then
-    ALLOWED_DOMAINS=()
     while IFS= read -r domain; do
         ALLOWED_DOMAINS+=("$domain")
     done < "$ALLOWED_DOMAINS_FILE"
     echo "Using domains from file: ${ALLOWED_DOMAINS[*]}"
-else
-    # Fallback to default domains
-    ALLOWED_DOMAINS=("api.openai.com")
-    echo "Domains file not found, using default: ${ALLOWED_DOMAINS[*]}"
 fi
 
 # Ensure we have at least one domain
@@ -104,12 +100,4 @@ if curl --connect-timeout 5 https://example.com >/dev/null 2>&1; then
     exit 1
 else
     echo "Firewall verification passed - unable to reach https://example.com as expected"
-fi
-
-# Always verify OpenAI API access is working
-if ! curl --connect-timeout 5 https://api.openai.com >/dev/null 2>&1; then
-    echo "ERROR: Firewall verification failed - unable to reach https://api.openai.com"
-    exit 1
-else
-    echo "Firewall verification passed - able to reach https://api.openai.com as expected"
 fi

@@ -1,11 +1,7 @@
-use std::sync::Arc;
-
 use super::session::Session;
 use super::step_context::StepContext;
-use crate::connectors;
 use crate::context::TokenBudgetContext;
 use crate::context::world_state::AgentsMdState;
-use crate::context::world_state::AppsInstructionsState;
 use crate::context::world_state::CollaborationModeState;
 use crate::context::world_state::CompactPermissionsState;
 use crate::context::world_state::ContextWindowGuidanceState;
@@ -24,7 +20,6 @@ use crate::context::world_state::ToolsState;
 use crate::context::world_state::TopLevelToolsState;
 use crate::context::world_state::WorldState;
 use crate::tools::handlers::multi_agents_spec::MULTI_AGENT_V1_NAMESPACE;
-use codex_connectors::AppToolPolicyEvaluator;
 use codex_extension_api::WorldStateContributionInput;
 use codex_features::Feature;
 use codex_file_system::FileSystemSandboxContext;
@@ -153,22 +148,8 @@ impl Session {
             .and_then(|config| config.guidance_message.as_deref())
             .filter(|_| token_budget_enabled);
         world_state.add_section(ContextWindowGuidanceState::new(guidance));
-        let realtime = &step_context.realtime;
-        world_state.add_section(RealtimeState::new(
-            realtime.active,
-            realtime
-                .mode_instructions
-                .as_ref()
-                .and_then(|instructions| instructions.start.as_deref())
-                .or(turn_context
-                    .config
-                    .experimental_realtime_start_instructions
-                    .as_deref()),
-            realtime
-                .mode_instructions
-                .as_ref()
-                .and_then(|instructions| instructions.end.as_deref()),
-        ));
+        // End historical voice context when resuming a terminal thread.
+        world_state.add_section(RealtimeState::new(false, None, None));
         world_state.add_section(AgentsMdState::new(step_context.loaded_agents_md.as_deref()));
         let exec_policy = self
             .services
@@ -261,30 +242,11 @@ impl Session {
                     .features
                     .enabled(Feature::DeferredExecutor),
         ));
-        let apps_available =
-            if turn_context.config.include_apps_instructions && turn_context.apps_enabled() {
-                AppToolPolicyEvaluator::new(&turn_context.config.config_layer_stack)
-                    .apply_app_enabled_state(connectors::accessible_connectors_from_mcp_tools(
-                        step_context.mcp.tools(),
-                    ))
-                    .into_iter()
-                    .any(|connector| connector.is_accessible && connector.is_enabled)
-            } else {
-                false
-            };
-        let apps_usage_instructions_available =
-            apps_available && model_info.include_apps_usage_instructions;
-        world_state.add_section(AppsInstructionsState::new(
-            apps_usage_instructions_available,
-        ));
         let plugins_usage_instructions_available =
             step_context.mcp.plugins_available() && model_info.include_plugin_usage_instructions;
         world_state.add_section(PluginsInstructionsState::new(
             plugins_usage_instructions_available,
         ));
-        let extension_metrics = super::extension_metrics::from_session_telemetry(
-            step_context.session_telemetry.clone(),
-        );
         if turn_context
             .config
             .features
@@ -292,7 +254,6 @@ impl Session {
         {
             world_state.add_section(ToolsState::new(
                 step_context.tool_router.deferred_tool_namespaces(),
-                Arc::clone(&extension_metrics),
             ));
         }
         let environments = step_context.environments.to_selections();
@@ -313,7 +274,6 @@ impl Session {
                     executor_capability_discovery: step_context
                         .executor_capability_discovery
                         .as_deref(),
-                    extension_metrics: Some(Arc::clone(&extension_metrics)),
                     session_store: &self.services.session_extension_data,
                     thread_store: &self.services.thread_extension_data,
                     turn_store: turn_context.extension_data.as_ref(),

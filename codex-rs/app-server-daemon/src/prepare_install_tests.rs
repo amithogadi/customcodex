@@ -14,7 +14,6 @@ fn daemon(home: &std::path::Path) -> crate::Daemon {
         log_diagnostics: false,
         socket_path: state.join("app-server.sock"),
         pid_file: state.join("app-server.pid"),
-        update_pid_file: state.join("app-server-updater.pid"),
         operation_lock_file: state.join("daemon.lock"),
         settings_file: state.join("settings.json"),
         managed_codex_bin: crate::managed_install::managed_codex_bin(home),

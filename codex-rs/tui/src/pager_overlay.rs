@@ -44,7 +44,6 @@ use scrolling::render_offset_content;
 pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
-    Analytics(Box<crate::analytics::AnalyticsView>),
 }
 
 impl Overlay {
@@ -81,13 +80,11 @@ impl Overlay {
         let input = match self {
             Overlay::Transcript(_) => tui::OverlayInput::Transcript,
             Overlay::Static(_) => tui::OverlayInput::StaticPager,
-            Overlay::Analytics(_) => tui::OverlayInput::Usage,
         };
         tui.set_overlay_input(input)?;
         let result = match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
             Overlay::Static(o) => o.handle_event(tui, event),
-            Overlay::Analytics(o) => o.handle_event(tui, event),
         };
         if result.is_err() || self.is_done() {
             let restore = tui.set_overlay_input(tui::OverlayInput::Default);
@@ -100,7 +97,6 @@ impl Overlay {
         match self {
             Overlay::Transcript(o) => o.is_done(),
             Overlay::Static(o) => o.is_done(),
-            Overlay::Analytics(o) => o.is_done,
         }
     }
 }

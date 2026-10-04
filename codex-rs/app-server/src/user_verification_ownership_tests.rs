@@ -29,7 +29,7 @@ fn request(thread_id: ThreadId) -> ServerRequestPayload {
 #[tokio::test]
 async fn verification_is_delivered_to_one_owner_and_other_connections_cannot_resolve_it() {
     let (sender, mut messages) = mpsc::channel(4);
-    let outgoing = OutgoingMessageSender::new(sender, AnalyticsEventsClient::disabled());
+    let outgoing = OutgoingMessageSender::new(sender);
     outgoing
         .enable_user_verification_connection(ConnectionId(1))
         .await;
@@ -83,7 +83,7 @@ async fn verification_is_delivered_to_one_owner_and_other_connections_cannot_res
 #[tokio::test]
 async fn verification_cancels_when_its_owner_disconnects() {
     let (sender, mut messages) = mpsc::channel(4);
-    let outgoing = OutgoingMessageSender::new(sender, AnalyticsEventsClient::disabled());
+    let outgoing = OutgoingMessageSender::new(sender);
     outgoing
         .enable_user_verification_connection(ConnectionId(1))
         .await;
@@ -118,7 +118,7 @@ async fn verification_cancels_when_its_owner_disconnects() {
 #[tokio::test]
 async fn verification_disconnect_during_registration_leaves_no_callback_or_request() {
     let (sender, mut messages) = mpsc::channel(4);
-    let outgoing = OutgoingMessageSender::new(sender, AnalyticsEventsClient::disabled());
+    let outgoing = OutgoingMessageSender::new(sender);
     outgoing
         .enable_user_verification_connection(ConnectionId(1))
         .await;
@@ -159,7 +159,7 @@ async fn verification_disconnect_during_registration_leaves_no_callback_or_reque
 #[tokio::test]
 async fn verification_without_a_connected_app_has_no_pending_callback() {
     let (sender, mut messages) = mpsc::channel(4);
-    let outgoing = OutgoingMessageSender::new(sender, AnalyticsEventsClient::disabled());
+    let outgoing = OutgoingMessageSender::new(sender);
     outgoing
         .enable_user_verification_connection(ConnectionId(1))
         .await;
@@ -207,10 +207,7 @@ async fn auth_changes_cancel_user_verification() {
     let home = tempfile::tempdir().unwrap();
     let auth = auth_manager(home.path()).await;
     let (sender, mut messages) = mpsc::channel(4);
-    let outgoing = Arc::new(OutgoingMessageSender::new(
-        sender,
-        AnalyticsEventsClient::disabled(),
-    ));
+    let outgoing = Arc::new(OutgoingMessageSender::new(sender));
     outgoing.watch_user_verification_auth(Arc::clone(&auth));
     outgoing
         .enable_user_verification_connection(ConnectionId(1))
@@ -241,7 +238,7 @@ async fn account_switch_back_rejects_proof_before_the_auth_watcher_runs() {
     let home = tempfile::tempdir().unwrap();
     let auth = auth_manager(home.path()).await;
     let (sender, mut messages) = mpsc::channel(4);
-    let outgoing = OutgoingMessageSender::new(sender, AnalyticsEventsClient::disabled());
+    let outgoing = OutgoingMessageSender::new(sender);
     // Leave the watcher stopped to exercise response validation before a coalesced notification.
     assert!(outgoing.verification_auth.set(Arc::clone(&auth)).is_ok());
     outgoing
@@ -272,7 +269,7 @@ async fn account_switch_during_eligibility_lock_wait_does_not_reassign_verificat
     let home = tempfile::tempdir().unwrap();
     let auth = auth_manager(home.path()).await;
     let (sender, mut messages) = mpsc::channel(4);
-    let outgoing = OutgoingMessageSender::new(sender, AnalyticsEventsClient::disabled());
+    let outgoing = OutgoingMessageSender::new(sender);
     assert!(outgoing.verification_auth.set(Arc::clone(&auth)).is_ok());
     outgoing
         .enable_user_verification_connection(ConnectionId(1))

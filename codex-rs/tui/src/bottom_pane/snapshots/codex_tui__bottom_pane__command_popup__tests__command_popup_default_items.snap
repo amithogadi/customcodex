@@ -20,7 +20,6 @@ expression: commands
 /delete - permanently delete this session
 /resume - resume a saved chat
 /fork - fork the current chat
-/app - continue this session in the Desktop app
 /init - create an AGENTS.md file with instructions for Codex
 /compact - summarize conversation to prevent hitting the context limit
 /recap - summarize the current conversation now
@@ -44,7 +43,6 @@ expression: commands
 /mcp - list MCP tools; use /mcp verbose or /mcp login <name>
 /logout - log out of Codex
 /exit - exit Codex
-/feedback - send logs to maintainers
 /rollout - print the rollout file path
 /ps - list background terminals
 /stop - stop all background terminals

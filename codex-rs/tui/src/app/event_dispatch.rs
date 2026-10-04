@@ -58,8 +58,6 @@ impl App {
                     | AppEvent::CopySelection { .. }
                     | AppEvent::SelectTranscriptCopy { .. }
                     | AppEvent::TranscriptCopyClosed
-                    | AppEvent::ConfirmDaemonUpdate(_)
-                    | AppEvent::RunDaemonUpdate(_)
                     | AppEvent::InsertHistoryCell(_)
                     | AppEvent::CommitRealtimeTranscriptHistory
                     | AppEvent::ResetTranscriptForThreadSwitch
@@ -137,11 +135,6 @@ impl App {
         };
         match event {
             AppEvent::OpenDaemonMenu => self.open_daemon_menu(),
-            AppEvent::ConfirmDaemonUpdate(source) => self.confirm_daemon_update(source),
-            AppEvent::RunDaemonUpdate(source) => {
-                self.pending_update_action = Some(UpdateAction::Daemon(source));
-                return Ok(self.handle_exit_mode(app_server, ExitMode::Immediate).await);
-            }
             AppEvent::UserVerificationApproved { thread_id, server_name, request_id } => {
                 Box::pin(self.start_user_verification(app_server, thread_id, server_name, request_id)).await?;
             }
@@ -529,11 +522,6 @@ impl App {
                 } else {
                     "slash_command"
                 };
-                self.session_telemetry.counter(
-                    "codex.thread.fork",
-                    /*inc*/ 1,
-                    &[("source", source)],
-                );
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
                 if let Some(thread_id) = self.chat_widget.thread_id() {
@@ -840,8 +828,6 @@ impl App {
                     self.scrollback_has_older_history = app_server.has_older_history(thread_id);
                     self.deferred_history_lines.clear();
                     self.last_rendered_history_tail = None;
-                    self.last_thread_usage_status_cell = None;
-                    self.pending_thread_usage_history_refresh = false;
                     self.backtrack_render_pending = !tui.is_owned_screen();
                     self.chat_widget.set_queue_autosend_suppressed(/*suppressed*/ false);
                     self.chat_widget.emit_prompt_edit_thread_event();
@@ -905,7 +891,6 @@ impl App {
                     deferred_history_cell,
                 )?;
                 self.chat_widget.note_stream_consolidation_completed();
-                self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::ConsolidateProposedPlan(source) => {
                 let end = self.transcript_cells.len();
@@ -943,7 +928,6 @@ impl App {
                     self.maybe_finish_stream_reflow(tui)?;
                 }
                 self.chat_widget.note_stream_consolidation_completed();
-                self.insert_pending_usage_output_after_stream_shutdown(tui);
             }
             AppEvent::StartCommitAnimation => {
                 self.commit_animation.get_or_insert_with(|| {
@@ -1066,23 +1050,6 @@ impl App {
                         .apply_reserve_fallback_to_pending_turn(&mut op);
                 }
                 let is_user_turn = matches!(&op, AppCommand::UserTurn { .. });
-                let is_realtime_stop = matches!(&op, AppCommand::RealtimeConversationStop { .. });
-                let realtime_stop_thread_id = match &op {
-                    AppCommand::RealtimeConversationStop { thread_id } => Some(*thread_id),
-                    _ => None,
-                };
-                let realtime_speech_delivery_id = match &op {
-                    AppCommand::RealtimeConversationSpeech { delivery_id, .. } => {
-                        Some(*delivery_id)
-                    }
-                    _ => None,
-                };
-                let is_realtime_conversation = matches!(
-                    &op,
-                    AppCommand::RealtimeConversationStart { .. }
-                        | AppCommand::RealtimeConversationStop { .. }
-                        | AppCommand::RealtimeConversationSpeech { .. }
-                );
                 if is_user_turn {
                     let screen_size = tui.terminal.last_known_screen_size;
                     self.handle_draw_pre_render(tui, screen_size)?;
@@ -1093,43 +1060,13 @@ impl App {
                     self.chat_widget.pre_draw_tick();
                     self.render_chat_widget_frame(tui, screen_size)?;
                 }
-                let parked_voice = match &op {
-                    AppCommand::RealtimeConversationStart { thread_id, .. }
-                    | AppCommand::RealtimeConversationStop { thread_id }
-                    | AppCommand::RealtimeConversationSpeech { thread_id, .. } => self
-                        .background_voice
-                        .as_ref()
-                        .is_some_and(|owner| owner.thread_id() == Some(*thread_id)),
-                    _ => false,
-                };
-                let visible_thread = self.active_thread_id;
-                if parked_voice
-                    && let Some(owner) = self.background_voice.as_mut()
-                {
-                    std::mem::swap(&mut self.chat_widget, owner);
-                    self.active_thread_id = self.chat_widget.thread_id();
-                }
                 self.chat_widget.prepare_local_op_submission(&op);
                 let result = self.submit_active_thread_op(app_server, op).await;
-                if result.is_err()
-                    && let Some(delivery_id) = realtime_speech_delivery_id
-                {
-                    self.chat_widget.restore_undelivered_realtime_speech(delivery_id);
-                }
-                if parked_voice
-                    && let Some(owner) = self.background_voice.as_mut()
-                {
-                    std::mem::swap(&mut self.chat_widget, owner);
-                    self.active_thread_id = visible_thread;
-                }
                 if let Err(err) = result {
                     if self.recover_transport_error(&err) {
                         return Ok(AppRunControl::Continue);
                     }
-                    let chat_widget = match self.background_voice.as_deref_mut() {
-                        Some(owner) if parked_voice => owner,
-                        _ => &mut self.chat_widget,
-                    };
+                    let chat_widget = &mut self.chat_widget;
                     let unsupported_permissions = err
                         .downcast_ref::<UnsupportedLegacyPermissionProfile>()
                         .is_some();
@@ -1145,19 +1082,7 @@ impl App {
                         ) || unsupported_permissions)
                         && chat_widget
                             .handle_turn_start_rejection(format!("Failed to start turn: {err:#}"));
-                    if is_realtime_conversation {
-                        let message = format!("Voice conversation failed: {err:#}");
-                        if is_realtime_stop {
-                            if chat_widget.thread_id() == realtime_stop_thread_id {
-                                chat_widget.record_realtime_failure();
-                                chat_widget.reset_realtime_conversation();
-                                chat_widget.add_realtime_error(message);
-                            }
-                        } else {
-                            chat_widget.on_realtime_error(message);
-                        }
-                        tracing::error!(error = ?err, "realtime conversation request failed");
-                    } else if handled {
+                    if handled {
                         tracing::error!(error = ?err, "failed to start turn through app server");
                     } else {
                         return Err(err);
@@ -1256,41 +1181,6 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::OpenAppLink {
-                app_id,
-                title,
-                description,
-                instructions,
-                url,
-                is_installed,
-                is_enabled,
-            } => {
-                self.chat_widget
-                    .open_app_link_view(crate::bottom_pane::AppLinkViewParams {
-                        app_id,
-                        title,
-                        description,
-                        instructions,
-                        url,
-                        is_installed,
-                        is_enabled,
-                        suggest_reason: None,
-                        suggestion_type: None,
-                        elicitation_target: None,
-                    });
-            }
-            AppEvent::AccountEmailLoaded { request_id, email } => {
-                if self.account_email_request_id == Some(request_id) {
-                    self.account_email_request_id = None;
-                    self.chat_widget.on_account_email_loaded(email);
-                }
-            }
-            AppEvent::SecuritySetupLoaded { request_id, identity, notice } => {
-                tracing::debug!(current = request_id == self.chat_widget.security_setup_request_id, "handling security setup notice");
-                if request_id == self.chat_widget.security_setup_request_id {
-                    self.chat_widget.show_security_setup(identity, notice);
-                }
-            }
             AppEvent::OpenUrlInBrowser { url } => {
                 self.open_url_in_browser(url);
             }
@@ -1317,34 +1207,6 @@ impl App {
             }
             AppEvent::ConfiguredPetLoaded { pet_id, result } => {
                 self.handle_configured_pet_loaded(tui, pet_id, result);
-            }
-            AppEvent::RefreshConnectors { force_refetch } => {
-                self.chat_widget.refresh_connectors(force_refetch);
-            }
-            AppEvent::FetchConnectorsList {
-                force_refetch,
-                generation,
-            } => {
-                if generation == self.chat_widget.connector_scope_generation() {
-                    self.fetch_connectors_list(app_server, force_refetch);
-                }
-            }
-            AppEvent::FetchInstalledConnectorMentions {
-                force_refresh,
-                generation,
-            } => {
-                if generation == self.chat_widget.connector_scope_generation() {
-                    self.fetch_installed_connector_mentions(app_server, force_refresh, generation);
-                }
-            }
-            AppEvent::PluginInstallAuthAdvance { refresh_connectors } => {
-                if refresh_connectors {
-                    self.chat_widget.refresh_connectors(/*force_refetch*/ true);
-                }
-                self.chat_widget.advance_plugin_install_auth_flow();
-            }
-            AppEvent::PluginInstallAuthAbandon => {
-                self.chat_widget.abandon_plugin_install_auth_flow();
             }
             AppEvent::FetchPluginsList { cwd } => {
                 self.fetch_plugins_list(app_server, cwd);
@@ -1373,10 +1235,6 @@ impl App {
                 self.chat_widget
                     .open_marketplace_remove_loading_popup(&marketplace_display_name);
             }
-            AppEvent::OpenMarketplaceUpgradeLoading { marketplace_name } => {
-                self.chat_widget
-                    .open_marketplace_upgrade_loading_popup(marketplace_name.as_deref());
-            }
             AppEvent::OpenPluginDetailLoading {
                 plugin_display_name,
             } => {
@@ -1401,28 +1259,11 @@ impl App {
             AppEvent::OpenPluginsList { cwd, response } => {
                 self.chat_widget.open_plugins_list(cwd, response);
             }
-            AppEvent::PluginRemoteSectionsLoaded {
-                cwd,
-                marketplaces,
-                section_errors,
-            } => {
-                self.chat_widget.on_plugin_remote_sections_loaded(
-                    cwd,
-                    marketplaces,
-                    section_errors,
-                );
-            }
             AppEvent::HooksLoaded { cwd, result } => {
                 self.chat_widget.on_hooks_loaded(cwd, result);
             }
             AppEvent::FetchMarketplaceAdd { cwd, source } => {
                 self.fetch_marketplace_add(app_server, cwd, source);
-            }
-            AppEvent::FetchMarketplaceUpgrade {
-                cwd,
-                marketplace_name,
-            } => {
-                self.fetch_marketplace_upgrade(app_server, cwd, marketplace_name);
             }
             AppEvent::MarketplaceAddLoaded {
                 cwd,
@@ -1433,18 +1274,6 @@ impl App {
                 self.chat_widget
                     .on_marketplace_add_loaded(cwd.clone(), source, result);
                 if add_succeeded && self.chat_widget.config_ref().cwd.as_path() == cwd.as_path() {
-                    self.fetch_plugins_list(app_server, cwd);
-                }
-            }
-            AppEvent::MarketplaceUpgradeLoaded { cwd, result } => {
-                let marketplace_contents_changed =
-                    matches!(&result, Ok(response) if !response.upgraded_roots.is_empty());
-                if marketplace_contents_changed {
-                    self.refresh_plugin_mentions_after_config_write();
-                }
-                self.chat_widget
-                    .on_marketplace_upgrade_loaded(cwd.clone(), result);
-                if self.chat_widget.config_ref().cwd.as_path() == cwd.as_path() {
                     self.fetch_plugins_list(app_server, cwd);
                 }
             }
@@ -1714,9 +1543,6 @@ impl App {
                     self.chat_widget.on_task_search_result(&query, matches);
                 }
             }
-            AppEvent::RefreshRateLimits { origin } => {
-                self.refresh_rate_limits(app_server, origin);
-            }
             AppEvent::ApplyBackendBannerFallback { thread_id } => {
                 if self.active_thread_id == Some(thread_id)
                     && self.chat_widget.thread_id() == Some(thread_id)
@@ -1725,17 +1551,7 @@ impl App {
                     if !self.rate_limit_refresh_state.has_pending_recovery() {
                         self.chat_widget.finish_rate_limit_recovery();
                     }
-                    self.refresh_rate_limits(app_server, RateLimitRefreshOrigin::Periodic);
                 }
-            }
-            AppEvent::RefreshThreadUsage {
-                thread_id,
-                request_id,
-            } => {
-                self.refresh_thread_usage(app_server, thread_id, request_id);
-            }
-            AppEvent::RefreshStatusLineWorkspaceHeadline { request_id } => {
-                self.refresh_status_line_workspace_headline(app_server, request_id);
             }
             AppEvent::OpenThreadGoalMenu { thread_id } => {
                 self.open_thread_goal_menu(app_server, thread_id).await;
@@ -1757,296 +1573,6 @@ impl App {
             }
             AppEvent::ClearThreadGoal { thread_id } => {
                 self.clear_thread_goal(app_server, thread_id).await;
-            }
-            AppEvent::SendAddCreditsNudgeEmail { credit_type } => {
-                if let Some(request_id) = self
-                    .chat_widget
-                    .start_add_credits_nudge_email_request(credit_type)
-                {
-                    self.send_add_credits_nudge_email(app_server, request_id, credit_type);
-                }
-            }
-            AppEvent::AddCreditsNudgeEmailFinished { request_id, result } => {
-                self.chat_widget
-                    .finish_add_credits_nudge_email_request(request_id, result);
-            }
-            AppEvent::RateLimitsLoaded {
-                request_id,
-                origin,
-                hard_stop_generation,
-                result,
-            } => {
-                let accepted = match self.rate_limit_refresh_state.finish(
-                    request_id,
-                    hard_stop_generation,
-                    self.rate_limit_hard_stop_generation,
-                    if result.is_ok() {
-                        RateLimitReadStatus::Succeeded
-                    } else {
-                        RateLimitReadStatus::Failed
-                    },
-                ) {
-                    RateLimitRefreshOutcome::Apply => true,
-                    RateLimitRefreshOutcome::Ignore => false,
-                    RateLimitRefreshOutcome::RefreshRecovery => {
-                        // Start in this account's event turn; a queued refresh could cross an account change.
-                        self.refresh_rate_limits(app_server, RateLimitRefreshOrigin::Recovery);
-                        false
-                    }
-                };
-                match result {
-                Ok(response) => {
-                    let rate_limit_reset_credits = response.rate_limit_reset_credits.clone();
-                    let snapshots = if accepted
-                    {
-                        self.chat_widget.apply_usage_notice_read(request_id);
-                        self.chat_widget.update_backend_banner(&response);
-                        self.apply_backend_banner_fallback(app_server).await;
-                        app_server_rate_limit_snapshots(response)
-                    } else {
-                        Vec::new()
-                    };
-                    match origin {
-                        RateLimitRefreshOrigin::Recovery | RateLimitRefreshOrigin::Periodic => {
-                            for snapshot in snapshots {
-                                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
-                            }
-                        }
-                        RateLimitRefreshOrigin::StartupPrefetch {
-                            reset_hint_request_id,
-                        } => {
-                            if self.chat_widget.finish_rate_limit_reset_hint_refresh(
-                                reset_hint_request_id,
-                                snapshots,
-                                rate_limit_reset_credits.ok_or_else(|| {
-                                    "account/rateLimits/read response did not include rateLimitResetCredits"
-                                        .to_string()
-                                }),
-                            ) {
-                                self.insert_pending_usage_output_if_ready(tui);
-                            }
-                            tui.frame_requester().schedule_frame();
-                        }
-                        RateLimitRefreshOrigin::ResetConsume { request_id } => {
-                            self.chat_widget.finish_post_consume_reset_credits_refresh(
-                                request_id,
-                                snapshots,
-                                rate_limit_reset_credits.ok_or_else(|| {
-                                    "account/rateLimits/read response did not include rateLimitResetCredits"
-                                        .to_string()
-                                }),
-                            );
-                            tui.frame_requester().schedule_frame();
-                        }
-                        RateLimitRefreshOrigin::StatusCommand { request_id } => {
-                            self.chat_widget
-                                .finish_status_rate_limit_refresh(request_id, snapshots);
-                        }
-                        RateLimitRefreshOrigin::UsageMenu { request_id } => {
-                            self.chat_widget.finish_usage_menu_rate_limit_refresh(
-                                request_id,
-                                snapshots,
-                                rate_limit_reset_credits.ok_or_else(|| {
-                                    "account/rateLimits/read response did not include rateLimitResetCredits"
-                                    .to_string()
-                                }),
-                            );
-                        }
-                        RateLimitRefreshOrigin::ResetPicker { request_id } => {
-                            self.chat_widget.finish_rate_limit_reset_credits_refresh(
-                                request_id,
-                                snapshots,
-                                rate_limit_reset_credits.ok_or_else(|| {
-                                    "account/rateLimits/read response did not include rateLimitResetCredits"
-                                        .to_string()
-                                }),
-                            );
-                        }
-                    }
-                }
-                Err(err) => {
-                    // A failed read is not authoritative recovery. Keep the last valid banner.
-                    tracing::warn!("account/rateLimits/read failed during TUI refresh: {err}");
-                    match origin {
-                        RateLimitRefreshOrigin::Recovery | RateLimitRefreshOrigin::Periodic => {
-                            // Re-evaluate snapshot age even when the backend cannot refresh it.
-                            // This updates display freshness without authorizing model recovery.
-                            self.chat_widget.refresh_status_surfaces();
-                        },
-                        RateLimitRefreshOrigin::StartupPrefetch {
-                            reset_hint_request_id,
-                        } => {
-                            self.chat_widget.finish_rate_limit_reset_hint_refresh(
-                                reset_hint_request_id,
-                                Vec::new(),
-                                Err(err),
-                            );
-                        }
-                        RateLimitRefreshOrigin::ResetConsume { request_id } => {
-                            self.chat_widget.finish_post_consume_reset_credits_refresh(
-                                request_id,
-                                Vec::new(),
-                                Err(err),
-                            );
-                        }
-                        RateLimitRefreshOrigin::StatusCommand { request_id } => {
-                            self.chat_widget
-                                .finish_status_rate_limit_refresh(request_id, Vec::new());
-                        }
-                        RateLimitRefreshOrigin::UsageMenu { request_id } => {
-                            self.chat_widget.finish_usage_menu_rate_limit_refresh(
-                                request_id,
-                                Vec::new(),
-                                Err(err),
-                            );
-                        }
-                        RateLimitRefreshOrigin::ResetPicker { request_id } => {
-                            self.chat_widget.finish_rate_limit_reset_credits_refresh(
-                                request_id,
-                                Vec::new(),
-                                Err(err),
-                            );
-                        }
-                    }
-                }
-                }
-                if (accepted || matches!(
-                    origin,
-                    RateLimitRefreshOrigin::Recovery | RateLimitRefreshOrigin::ResetConsume { .. }
-                )) && !self.rate_limit_refresh_state.has_pending_recovery()
-                {
-                    self.chat_widget.finish_rate_limit_recovery();
-                }
-            },
-            AppEvent::OpenAnalytics { view: summary_view } => {
-                tui.enter_alt_screen()?;
-                let mut view = self.retained_analytics.take().unwrap_or_else(|| {
-                    Box::new(crate::analytics::AnalyticsView::new(self.keymap.list.clone()))
-                });
-                view.keymap = self.keymap.list.clone();
-                if summary_view.is_some() {
-                    view.select_summary(summary_view);
-                }
-                view.open(
-                    app_server.request_handle(),
-                    tui.frame_requester(),
-                    self.model_catalog.try_list_models()?,
-                    std::sync::Arc::new(self.config.clone()),
-                );
-                self.overlay = Some(Overlay::Analytics(view));
-                tui.frame_requester().schedule_frame();
-            }
-            AppEvent::OpenRateLimitResetCredits => {
-                let request_id = self.chat_widget.show_rate_limit_reset_loading_popup();
-                self.refresh_rate_limits(
-                    app_server,
-                    RateLimitRefreshOrigin::ResetPicker { request_id },
-                );
-            }
-            AppEvent::OpenRateLimitResetConfirmation {
-                picker_request_id,
-                confirmation_gate,
-                credit_id,
-                reset_title,
-                reset_detail,
-                reset_description,
-            } => {
-                self.chat_widget.show_rate_limit_reset_confirmation(
-                    picker_request_id,
-                    confirmation_gate,
-                    credit_id,
-                    reset_title,
-                    reset_detail,
-                    reset_description,
-                );
-            }
-            AppEvent::ConsumeRateLimitResetCredit {
-                idempotency_key,
-                credit_id,
-            } => {
-                if let Some(request_id) = self
-                    .chat_widget
-                    .start_rate_limit_reset_consumption(&idempotency_key)
-                {
-                    self.consume_rate_limit_reset_credit(
-                        app_server,
-                        request_id,
-                        idempotency_key,
-                        credit_id,
-                    );
-                }
-            }
-            AppEvent::RateLimitResetCreditConsumed {
-                request_id,
-                idempotency_key,
-                credit_id,
-                result,
-            } => {
-                if let Err(err) = &result {
-                    tracing::warn!(
-                        "account/rateLimitResetCredit/consume failed during TUI request: {err}"
-                    );
-                }
-                if self.chat_widget.finish_rate_limit_reset_consume(
-                    request_id,
-                    idempotency_key,
-                    credit_id,
-                    result,
-                ) {
-                    // Reads started before redemption must not restore the pre-reset banner.
-                    self.rate_limit_hard_stop_generation =
-                        self.rate_limit_hard_stop_generation.wrapping_add(1);
-                    self.rate_limit_refresh_state.invalidate_recovery();
-                    self.chat_widget.clear_backend_banner();
-                    self.refresh_rate_limits(
-                        app_server,
-                        RateLimitRefreshOrigin::ResetConsume { request_id },
-                    );
-                }
-            }
-            AppEvent::ThreadUsageLoaded {
-                thread_id,
-                request_id,
-                result,
-            } => {
-                self.finish_thread_usage_refresh(tui, thread_id, request_id, result)?;
-            }
-            AppEvent::AgentsOverviewUsageLoaded { thread_id, request_id, result } => {
-                self.finish_agents_overview_usage(thread_id, request_id, result);
-            }
-            AppEvent::CommitPendingUsageOutput => {
-                self.insert_pending_usage_output_if_ready(tui);
-            }
-            AppEvent::CommitPendingUsageOutputAfterStreamShutdown => {
-                self.insert_pending_usage_output_after_stream_shutdown(tui);
-            }
-            AppEvent::ConnectorsLoaded {
-                thread_id,
-                cwd,
-                generation,
-                result,
-                is_final,
-            } => {
-                if thread_id == self.current_displayed_thread_id()
-                    && cwd.as_path() == self.chat_widget.config_ref().cwd.as_path()
-                    && generation == self.chat_widget.connector_scope_generation()
-                {
-                    self.chat_widget.on_connectors_loaded(result, is_final);
-                }
-            }
-            AppEvent::InstalledConnectorMentionsLoaded {
-                thread_id,
-                cwd,
-                generation,
-                result,
-            } => {
-                if thread_id == self.current_displayed_thread_id()
-                    && cwd.as_path() == self.chat_widget.config_ref().cwd.as_path()
-                    && generation == self.chat_widget.connector_scope_generation()
-                {
-                    self.chat_widget
-                        .on_connector_mentions_loaded(generation, result);
-                }
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort.clone());
@@ -2085,50 +1611,6 @@ impl App {
             }
             AppEvent::RealtimeConversationStateChanged => {
                 self.repaint_agents_overview();
-            }
-            AppEvent::VoiceControl { thread_id, control } => {
-                if thread_id == self.chat_widget.thread_id() || self.voice_owner_thread_id().is_some() {
-                    self.control_voice(control);
-                }
-            }
-            AppEvent::RealtimeWebrtcOfferCreated {
-                thread_id,
-                attempt_id,
-                result,
-            } => {
-                if let Some(owner) = self.voice_widget_for_thread(thread_id) {
-                    owner.on_realtime_webrtc_offer_created(thread_id, attempt_id, result);
-                } else if let Ok(offer) = result {
-                    offer.handle.close();
-                }
-            }
-            AppEvent::RealtimeWebrtcConnected {
-                thread_id,
-                attempt_id,
-                result,
-            } => {
-                if let Some(owner) = self.voice_widget_for_thread(thread_id) {
-                    owner.on_realtime_webrtc_connected(attempt_id, result);
-                }
-            }
-            AppEvent::StopRealtimeConversation { thread_id } => {
-                match tokio::time::timeout(
-                    SHUTDOWN_FIRST_EXIT_TIMEOUT,
-                    app_server.thread_realtime_stop(thread_id),
-                )
-                .await
-                {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => tracing::warn!(
-                        %thread_id,
-                        %error,
-                        "failed to stop voice conversation after switching threads"
-                    ),
-                    Err(_) => tracing::warn!(
-                        %thread_id,
-                        "timed out stopping voice conversation after switching threads"
-                    ),
-                }
             }
             AppEvent::SettingsSelectionClosed => {
                 self.app_event_tx.send(AppEvent::SettingsSelectionSettled);
@@ -2262,32 +1744,7 @@ impl App {
             AppEvent::ApplyPermissionShortcut { thread_id, selection } => {
                 self.apply_permission_shortcut(app_server, thread_id, selection).await;
             }
-            AppEvent::OpenFeedbackNote {
-                category,
-                include_logs,
-            } => {
-                self.chat_widget.open_feedback_note(category, include_logs, self.feedback_audience);
-            }
-            AppEvent::OpenFeedbackConsent { category } => {
-                self.chat_widget.open_feedback_consent(category);
-            }
-            AppEvent::SubmitFeedback {
-                category,
-                reason,
-                turn_id,
-                include_logs,
-            } => {
-                self.submit_feedback(app_server, category, reason, turn_id, include_logs);
-            }
-            AppEvent::FeedbackSubmitted {
-                origin_thread_id,
-                category,
-                include_logs,
-                result,
-            } => {
-                self.handle_feedback_submitted(origin_thread_id, category, include_logs, result)
-                    .await;
-            }
+
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {
                     self.launch_external_editor(tui).await;
@@ -2310,18 +1767,8 @@ impl App {
                 preset,
                 profile_selection,
             } => {
-                self.session_telemetry.counter(
-                    "codex.windows_sandbox.fallback_prompt_shown",
-                    /*inc*/ 1,
-                    &[],
-                );
                 self.chat_widget.clear_windows_sandbox_setup_status();
                 if let Some(started_at) = self.windows_sandbox.setup_started_at.take() {
-                    self.session_telemetry.record_duration(
-                        "codex.windows_sandbox.elevated_setup_duration_ms",
-                        started_at.elapsed(),
-                        &[("result", "failure")],
-                    );
                 }
                 self.chat_widget
                     .open_windows_sandbox_fallback_prompt(preset, profile_selection);
@@ -2367,11 +1814,6 @@ impl App {
                     if let Some(started_at) = self.windows_sandbox.setup_started_at.take()
                         && mode == WindowsSandboxEnableMode::Elevated
                     {
-                        self.session_telemetry.record_duration(
-                            "codex.windows_sandbox.elevated_setup_duration_ms",
-                            started_at.elapsed(),
-                            &[("result", "success")],
-                        );
                     }
                     let selected_mode = match mode {
                         WindowsSandboxEnableMode::Elevated => WindowsSandboxSetupMode::Elevated,
@@ -2503,28 +1945,6 @@ impl App {
                     plugins = None;
                 }
                 self.chat_widget.on_plugin_mentions_loaded(plugins);
-            }
-            AppEvent::OpenRealtimeSettings => self.chat_widget.open_realtime_settings(),
-            AppEvent::OpenRealtimeSoundDevices => self.chat_widget.open_realtime_sound_devices(),
-            AppEvent::OpenRealtimeVoices => self.open_realtime_voices(app_server).await,
-            AppEvent::OpenRealtimeDevicePicker { kind } => self.list_realtime_devices(kind),
-            AppEvent::OpenRealtimeInputChannels { device } => self.chat_widget.open_realtime_input_channels(device),
-            AppEvent::RealtimeDevicesListed { origin, kind, result } => {
-                if origin == self.active_thread_id {
-                    match result {
-                        Ok(devices) => self.chat_widget.open_realtime_device_picker(kind, devices),
-                        Err(error) => self.chat_widget.add_error_message(error),
-                    }
-                }
-            }
-            AppEvent::PersistRealtimeDevice { kind, name } => {
-                self.persist_realtime_device(kind, name).await;
-            }
-            AppEvent::PersistRealtimeInputChannel { channel } => {
-                self.persist_realtime_input_channel(channel).await;
-            }
-            AppEvent::PersistRealtimeVoiceSelection { voice } => {
-                self.persist_realtime_voice(app_server, voice).await;
             }
             AppEvent::PersistServiceTierSelection { service_tier } => {
                 self.refresh_status_line();
@@ -2980,41 +2400,6 @@ impl App {
                     }
                 }
             }
-            AppEvent::SetAppEnabled { id, enabled } => {
-                let edits = if enabled {
-                    vec![
-                        crate::config_update::clear_config_value(
-                            crate::config_update::app_scoped_key_path(&id, "enabled"),
-                        ),
-                        crate::config_update::clear_config_value(
-                            crate::config_update::app_scoped_key_path(&id, "disabled_reason"),
-                        ),
-                    ]
-                } else {
-                    vec![
-                        crate::config_update::replace_config_value(
-                            crate::config_update::app_scoped_key_path(&id, "enabled"),
-                            serde_json::json!(false),
-                        ),
-                        crate::config_update::replace_config_value(
-                            crate::config_update::app_scoped_key_path(&id, "disabled_reason"),
-                            serde_json::json!("user"),
-                        ),
-                    ]
-                };
-                match crate::config_update::write_config_batch(app_server.request_handle(), edits)
-                    .await
-                {
-                    Ok(_) => {
-                        self.chat_widget.update_connector_enabled(&id, enabled);
-                    }
-                    Err(err) => {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to update app config for {id}: {err}"
-                        ));
-                    }
-                }
-            }
             AppEvent::SetHookEnabled { key, enabled } => {
                 self.set_hook_enabled(app_server, key, enabled);
             }
@@ -3199,14 +2584,6 @@ impl App {
             AppEvent::StatusLineGitSummaryUpdated { cwd, summary } => {
                 self.chat_widget.set_status_line_git_summary(cwd, summary);
                 self.refresh_status_line();
-            }
-            AppEvent::StatusLineWorkspaceHeadlineUpdated { request_id, result } => {
-                if self
-                    .chat_widget
-                    .set_status_line_workspace_headline(request_id, result)
-                {
-                    tui.frame_requester().schedule_frame();
-                }
             }
             AppEvent::StatusLineSetupCancelled => {
                 self.chat_widget.cancel_status_line_setup();
@@ -3471,8 +2848,6 @@ impl App {
     fn refresh_plugin_mentions_after_config_write(&mut self) {
         self.chat_widget.refresh_plugin_mentions();
         self.chat_widget.submit_op(AppCommand::reload_user_config());
-        self.chat_widget
-            .refresh_connector_mentions(/*force_refresh*/ true);
     }
 
     async fn apply_keymap_clear(&mut self, context: String, action: String) {

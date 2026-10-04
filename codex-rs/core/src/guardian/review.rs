@@ -4,9 +4,6 @@
 #[path = "review_request.rs"]
 mod request;
 
-use codex_analytics::GuardianApprovalRequestSource;
-use codex_analytics::GuardianReviewAnalyticsResult;
-use codex_core_plugins::PluginCommandAttribution;
 use codex_features::Feature;
 use codex_guardian_reviewer::GuardianReviewError;
 use codex_guardian_reviewer::GuardianReviewOutcome;
@@ -14,6 +11,8 @@ use codex_guardian_reviewer::GuardianReviewOutcome;
 use codex_guardian_reviewer::GuardianReviewSessionLimits;
 use codex_guardian_reviewer::ReviewModel;
 use codex_prompts::ResolvedModelMessages;
+use codex_protocol::guardian_review::GuardianApprovalRequestSource;
+use codex_protocol::guardian_review::GuardianReviewDetails;
 use codex_protocol::openai_models::GuardianScope;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::InternalSessionSource;
@@ -21,7 +20,6 @@ use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -45,54 +43,6 @@ use super::review_session::GuardianReviewSessionParams;
 use super::review_session::build_guardian_review_session_config;
 use codex_guardian_reviewer::guardian_output_schema;
 
-const GUARDIAN_PLUGIN_ATTRIBUTION_TIMEOUT: Duration = Duration::from_secs(5);
-
-async fn plugin_attribution_for_guardian_request(
-    context: &GuardianReviewContext,
-    request: &GuardianApprovalRequest,
-) -> Option<PluginCommandAttribution> {
-    let turn = context.turn();
-    match request {
-        GuardianApprovalRequest::ExecCommand {
-            environment_id,
-            command,
-            cwd,
-            ..
-        } => {
-            let turn_environment =
-                context
-                    .environments()
-                    .turn_environments()
-                    .find(|environment| {
-                        environment.selection.environment_id.as_str() == environment_id
-                    })?;
-            if turn_environment.environment.is_remote() {
-                let file_system = turn_environment.environment.get_filesystem();
-                turn.plugin_attribution_for_executor_command(command, cwd, file_system.as_ref())
-                    .await
-            } else {
-                cwd.to_abs_path()
-                    .ok()
-                    .and_then(|cwd| turn.plugin_attribution_for_command(command, &cwd))
-            }
-        }
-        #[cfg(unix)]
-        GuardianApprovalRequest::Execve {
-            program, argv, cwd, ..
-        } => {
-            let command = if argv.is_empty() {
-                vec![program.clone()]
-            } else {
-                std::iter::once(program.clone())
-                    .chain(argv.iter().skip(1).cloned())
-                    .collect()
-            };
-            turn.plugin_attribution_for_command(&command, cwd)
-        }
-        _ => None,
-    }
-}
-
 pub(crate) fn new_guardian_review_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -111,7 +61,6 @@ pub(crate) fn is_basic_session_source(session_source: &SessionSource) -> bool {
 pub(crate) struct GuardianReviewOptions {
     /// Requires Guardian rather than a manual approval; cached evidence may still satisfy it.
     pub(crate) require_guardian: bool,
-    pub(crate) plugin_attribution_override: Option<PluginCommandAttribution>,
     pub(crate) approval_request_source: GuardianApprovalRequestSource,
     pub(crate) external_cancel: Option<CancellationToken>,
     /// Escalate from extension fast approval to the synchronous Guardian reviewer.
@@ -194,13 +143,13 @@ async fn run_guardian_review_session_before_deadline(
     reasons: ApprovalRequestReasons,
     external_cancel: Option<CancellationToken>,
     deadline: Instant,
-) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+) -> (GuardianReviewOutcome, GuardianReviewDetails) {
     let Some(pool) = session.guardian_review_session() else {
         return (
             GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(anyhow::anyhow!(
                 "Guardian extension is not installed for this thread"
             ))),
-            GuardianReviewAnalyticsResult::without_session(),
+            GuardianReviewDetails::without_session(),
         );
     };
     let session_config = match guardian_review_session_config(session.as_ref(), &context).await {
@@ -208,7 +157,7 @@ async fn run_guardian_review_session_before_deadline(
         Err(err) => {
             return (
                 GuardianReviewOutcome::Error(GuardianReviewError::prompt_build(err)),
-                GuardianReviewAnalyticsResult::without_session(),
+                GuardianReviewDetails::without_session(),
             );
         }
     };
@@ -245,7 +194,7 @@ pub(super) async fn run_guardian_review_session_with_retry(
     reasons: ApprovalRequestReasons,
     external_cancel: Option<CancellationToken>,
     max_attempts: i64,
-) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+) -> (GuardianReviewOutcome, GuardianReviewDetails) {
     run_guardian_review_session_with_retry_before_deadline(
         session,
         context,
@@ -268,7 +217,7 @@ async fn run_guardian_review_session_with_retry_before_deadline(
     reasons: ApprovalRequestReasons,
     external_cancel: Option<CancellationToken>,
     limits: GuardianReviewSessionLimits,
-) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+) -> (GuardianReviewOutcome, GuardianReviewDetails) {
     let context = context.into();
     let (outcome, analytics, _) =
         codex_guardian_reviewer::run_with_retry(limits, external_cancel.as_ref(), |deadline| {

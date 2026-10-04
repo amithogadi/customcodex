@@ -17,9 +17,6 @@ pub(crate) fn is_startup_cell(cell: &dyn HistoryCell) -> bool {
         || cell.as_any().is::<history_cell::SessionInfoCell>()
         || cell.as_any().is::<history_cell::StartupWarningsCell>()
         || cell.as_any().is::<history_cell::DeprecationNoticeCell>()
-        || cell
-            .as_any()
-            .is::<history_cell::UpdateAvailableHistoryCell>()
         || cell.as_any().is::<history_cell::SessionNoticeCell>()
         || cell
             .as_any()

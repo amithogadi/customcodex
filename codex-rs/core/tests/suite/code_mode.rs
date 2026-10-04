@@ -4,7 +4,6 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_analytics::AnalyticsEventsClient;
 use codex_config::types::McpServerConfig;
 use codex_config::types::McpServerTransportConfig;
 use codex_core::StartThreadOptions;
@@ -31,7 +30,6 @@ use codex_http_client::DestinationPolicy;
 use codex_http_client::NetworkPolicyController;
 use codex_login::CodexAuth;
 use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
-use codex_mcp::codex_apps_mcp_server_config;
 use codex_models_manager::bundled_models_response;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
@@ -587,7 +585,6 @@ text(result);
     let mut extension_builder = ExtensionRegistryBuilder::<Config>::new();
     install_web_search_extension(&mut extension_builder, auth_manager);
     let mut builder = test_codex()
-        .with_auth(auth)
         .with_extensions(Arc::new(extension_builder.build()))
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
@@ -1974,33 +1971,26 @@ async fn mount_result_metadata_app(
     Ok(apps_server)
 }
 
-fn result_metadata_apps_builder(base_url: String, account_email: &str) -> TestCodexBuilder {
-    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
-        serde_json::json!({
-            "email": account_email,
-            "https://api.openai.com/auth": { "chatgpt_account_id": "account_id" },
-        })
-        .to_string(),
-    );
-    let auth = CodexAuth::from_external_chatgpt_tokens(
-        &format!("e30.{payload}.signature"),
-        "account_id",
-        /*chatgpt_plan_type*/ None,
-    )
-    .unwrap();
-    search_capable_apps_builder(base_url)
-        .with_auth(auth)
-        .with_config(|config| {
-            // Keep this mock provider ungranted to cover custom-provider filtering.
-            config.model_provider.include_internal_metadata = false;
-            for feature in [
-                Feature::CodeMode,
-                Feature::CodeModeOnly,
-                Feature::ExecutedToolCallMetadata,
-            ] {
-                config.features.enable(feature).unwrap();
-            }
-        })
+fn explicit_test_mcp_config(base_url: &str) -> codex_config::McpServerConfig {
+    let url = format!("{base_url}/api/codex/ps/mcp");
+    toml::from_str(&format!(
+        "url = {url:?}\ndefault_tools_approval_mode = 'approve'\nsupports_parallel_tool_calls = true"
+    ))
+    .expect("explicit MCP config")
+}
+
+fn result_metadata_apps_builder(base_url: String, _account_email: &str) -> TestCodexBuilder {
+    search_capable_apps_builder(base_url).with_config(|config| {
+        // Keep this mock provider ungranted to cover custom-provider filtering.
+        config.model_provider.include_internal_metadata = false;
+        for feature in [
+            Feature::CodeMode,
+            Feature::CodeModeOnly,
+            Feature::ExecutedToolCallMetadata,
+        ] {
+            config.features.enable(feature).unwrap();
+        }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2014,13 +2004,9 @@ async fn code_mode_mcp_metadata_keeps_originating_window_after_compaction() -> R
     let (reached_tx, reached_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     let control = Arc::new(ResultMetadataTestControl {
-        server: Mutex::new(McpServerContribution::HostedApps {
-            config: Box::new(codex_apps_mcp_server_config(
-                &apps_server.chatgpt_base_url,
-                /*apps_mcp_product_sku*/ None,
-                /*originator*/ None,
-            )),
-            protocol_mode: None,
+        server: Mutex::new(McpServerContribution::Set {
+            name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            config: Box::new(explicit_test_mcp_config(&apps_server.chatgpt_base_url)),
         }),
         gate: Mutex::new(Some((reached_tx, release_rx))),
     });
@@ -2154,11 +2140,6 @@ fn assert_result_metadata_call(
     assert!(metadata.get("tool_result_metadata").is_none());
 }
 
-enum ResultMetadataAnalytics {
-    Config(Option<bool>),
-    HostDisabled(Option<bool>),
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn direct_result_metadata_retained_budget_preserves_resource_access() -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -2199,7 +2180,7 @@ async fn direct_result_metadata_retained_budget_preserves_resource_access() -> R
         .map(|call_id| {
             responses::ev_function_call_with_namespace(
                 call_id,
-                "mcp__codex_apps__messagesearch",
+                "mcp__codex_apps",
                 RESULT_METADATA_TOOL,
                 &arguments.to_string(),
             )
@@ -2213,7 +2194,7 @@ async fn direct_result_metadata_retained_budget_preserves_resource_access() -> R
         sse(vec![
             responses::ev_function_call_with_namespace(
                 &call_ids[32],
-                "mcp__codex_apps__messagesearch",
+                "mcp__codex_apps",
                 RESULT_METADATA_TOOL,
                 &arguments.to_string(),
             ),
@@ -2402,7 +2383,7 @@ async fn result_metadata_preserves_results_within_request_budget(
             .map(|(arguments, call_id)| {
                 responses::ev_function_call_with_namespace(
                     call_id,
-                    "mcp__codex_apps__messagesearch",
+                    "mcp__codex_apps",
                     RESULT_METADATA_TOOL,
                     &arguments.to_string(),
                 )
@@ -2492,7 +2473,7 @@ async fn result_metadata_preserves_results_within_request_budget(
     );
     let captured = serde_json::to_value(captured)?;
     for (input, expected_metadata) in [
-        // Ungranted custom inference endpoints strip raw metadata, including omission markers.
+        // The configured provider strips raw result metadata; local history retains it.
         (request.input(), None),
         (
             captured.as_array().unwrap().clone(),
@@ -2524,192 +2505,6 @@ async fn result_metadata_preserves_results_within_request_budget(
         assert_eq!(calls, expected_calls);
     }
     test.codex.shutdown_and_wait().await?;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(true, true, true, false, "user@example.com", ToolMode::CodeModeOnly, ResultMetadataAnalytics::Config(None); "copies_full_metadata_without_rules")]
-#[test_case(true, true, true, true, "user@example.com", ToolMode::CodeModeOnly, ResultMetadataAnalytics::Config(None); "accepted_error_keeps_metadata")]
-#[test_case(true, true, false, false, "user@example.com", ToolMode::CodeModeOnly, ResultMetadataAnalytics::Config(None); "missing_metadata_stays_absent")]
-#[test_case(false, true, true, false, "user@example.com", ToolMode::CodeModeOnly, ResultMetadataAnalytics::Config(None); "feature_off_does_not_record")]
-#[test_case(true, false, true, false, "user@example.com", ToolMode::CodeModeOnly, ResultMetadataAnalytics::Config(None); "extension_owned_apps_do_not_record")]
-#[test_case(true, true, true, false, "employee@openai.com", ToolMode::CodeModeOnly, ResultMetadataAnalytics::Config(None); "employee_keeps_metadata")]
-#[test_case(true, true, true, false, "user@example.com", ToolMode::Direct, ResultMetadataAnalytics::Config(None); "direct_keeps_metadata")]
-#[test_case(true, true, true, true, "user@example.com", ToolMode::Direct, ResultMetadataAnalytics::Config(None); "direct_accepted_error_keeps_metadata")]
-#[test_case(true, true, false, false, "user@example.com", ToolMode::Direct, ResultMetadataAnalytics::Config(None); "direct_missing_metadata_stays_absent")]
-#[test_case(false, true, true, false, "user@example.com", ToolMode::Direct, ResultMetadataAnalytics::Config(None); "direct_feature_off_does_not_record")]
-#[test_case(true, false, true, false, "user@example.com", ToolMode::Direct, ResultMetadataAnalytics::Config(None); "direct_extension_owned_apps_do_not_record")]
-#[test_case(true, true, true, false, "user@example.com", ToolMode::CodeModeOnly, ResultMetadataAnalytics::Config(Some(true)); "analytics_enabled_keeps_metadata")]
-#[test_case(true, true, true, false, "user@example.com", ToolMode::CodeModeOnly, ResultMetadataAnalytics::Config(Some(false)); "analytics_disabled_omits_metadata")]
-#[test_case(true, true, true, false, "user@example.com", ToolMode::Direct, ResultMetadataAnalytics::Config(Some(true)); "direct_analytics_enabled_keeps_metadata")]
-#[test_case(true, true, true, false, "user@example.com", ToolMode::Direct, ResultMetadataAnalytics::Config(Some(false)); "direct_analytics_disabled_omits_metadata")]
-#[test_case(true, true, true, false, "user@example.com", ToolMode::CodeModeOnly, ResultMetadataAnalytics::HostDisabled(None); "host_analytics_disabled_with_config_unset_omits_metadata")]
-#[test_case(true, true, true, false, "user@example.com", ToolMode::CodeModeOnly, ResultMetadataAnalytics::HostDisabled(Some(true)); "host_analytics_disabled_with_config_enabled_omits_metadata")]
-#[test_case(true, true, true, false, "user@example.com", ToolMode::Direct, ResultMetadataAnalytics::HostDisabled(None); "direct_host_analytics_disabled_with_config_unset_omits_metadata")]
-#[test_case(true, true, true, false, "user@example.com", ToolMode::Direct, ResultMetadataAnalytics::HostDisabled(Some(true)); "direct_host_analytics_disabled_with_config_enabled_omits_metadata")]
-async fn result_metadata_follows_call_binding(
-    metadata_enabled: bool,
-    host_owned: bool,
-    has_metadata: bool,
-    is_error: bool,
-    account_email: &str,
-    tool_mode: ToolMode,
-    analytics: ResultMetadataAnalytics,
-) -> Result<()> {
-    skip_if_no_network!(Ok(()));
-    let (analytics_enabled, host_disables_analytics) = match analytics {
-        ResultMetadataAnalytics::Config(enabled) => (enabled, false),
-        ResultMetadataAnalytics::HostDisabled(enabled) => (enabled, true),
-    };
-    let effective_analytics_enabled = analytics_enabled != Some(false) && !host_disables_analytics;
-    let direct = matches!(tool_mode, ToolMode::Direct);
-    let server = responses::start_mock_server().await;
-    let result_metadata = has_metadata.then(|| {
-        serde_json::json!({
-            "openai/resource_access": {
-                "resource_coverage": "incomplete",
-                "coverage_reasons": ["tool_error"],
-            },
-            "provider_state": {
-                "items": [{ "id": "room-42", "labels": ["one", "two"] }],
-                "ready": true,
-                "count": 2,
-                "missing": null,
-            },
-        })
-    });
-    let apps_server = mount_result_metadata_app(&server, result_metadata.clone(), is_error).await?;
-    let mut builder =
-        result_metadata_apps_builder(apps_server.chatgpt_base_url.clone(), account_email)
-            .with_config(move |config| {
-                config.analytics_enabled = analytics_enabled;
-                if direct {
-                    config.features.disable(Feature::CodeModeOnly).unwrap();
-                    config.features.disable(Feature::CodeMode).unwrap();
-                }
-                if !metadata_enabled {
-                    config
-                        .features
-                        .disable(Feature::ExecutedToolCallMetadata)
-                        .unwrap();
-                }
-            });
-    if host_disables_analytics {
-        builder = builder.with_analytics_events_client(AnalyticsEventsClient::disabled());
-    }
-    if !host_owned {
-        let mut extensions = ExtensionRegistryBuilder::<Config>::new();
-        extensions.mcp_server_contributor(Arc::new(ResultMetadataTestControl {
-            server: Mutex::new(McpServerContribution::Set {
-                name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-                config: Box::new(codex_apps_mcp_server_config(
-                    &apps_server.chatgpt_base_url,
-                    /*apps_mcp_product_sku*/ None,
-                    /*originator*/ None,
-                )),
-            }),
-            gate: Mutex::new(None),
-        }));
-        builder = builder.with_extensions(Arc::new(extensions.build()));
-    }
-    let arguments = serde_json::json!({ "search": "launch plan" });
-    let (test, follow_up) = if direct {
-        let test = builder.build(&server).await?;
-        responses::mount_sse_once(
-            &server,
-            sse(vec![
-                responses::ev_function_call_with_namespace(
-                    "call-1",
-                    "mcp__codex_apps__messagesearch",
-                    RESULT_METADATA_TOOL,
-                    &arguments.to_string(),
-                ),
-                ev_completed("resp-1"),
-            ]),
-        )
-        .await;
-        let follow_up = responses::mount_sse_once(&server, sse(vec![ev_completed("resp-2")])).await;
-        test.submit_turn("Search a connected app").await?;
-        (test, follow_up)
-    } else {
-        let code = format!(
-            "const tool = ALL_TOOLS.find(({{ name }}) => name.endsWith(\"{RESULT_METADATA_TOOL}\")); \
-             const result = await tools[tool.name]({arguments}); \
-             text(JSON.stringify({{ isError: Boolean(result.isError), hasMeta: Object.hasOwn(result, \"_meta\") }}));"
-        );
-        run_code_mode_turn_with_builder(&server, "Search a connected app", &code, builder).await?
-    };
-    assert_eq!(test.codex.analytics_enabled(), effective_analytics_enabled);
-    let request = follow_up.single_request();
-    assert_eq!(recorded_apps_tool_calls(&server).await.len(), 1);
-    let output = if direct {
-        let output = request.function_call_output("call-1");
-        assert!(
-            output["output"]
-                .to_string()
-                .contains(RESULT_METADATA_PRIVATE_RESULT)
-        );
-        assert!(!output["output"].to_string().contains("provider_state"));
-        output
-    } else {
-        assert!(
-            !request
-                .body_json()
-                .to_string()
-                .contains(RESULT_METADATA_PRIVATE_RESULT)
-        );
-        let (body, success) = custom_tool_output_body_and_success(&request, "call-1");
-        assert_ne!(success, Some(false), "Code Mode failed: {body}");
-        assert_eq!(
-            serde_json::from_str::<Value>(&body)?,
-            serde_json::json!({ "isError": is_error, "hasMeta": false }),
-        );
-        request.custom_tool_call_output("call-1")
-    };
-    assert_eq!(
-        result_metadata_fixture_calls(&request.input()).count(),
-        usize::from(metadata_enabled),
-    );
-    let captured = codex_core::test_support::history_with_tool_call_metadata(&test.codex).await;
-    if direct {
-        let result = captured
-            .iter()
-            .find_map(|item| match item {
-                codex_protocol::models::ResponseItem::FunctionCallOutput {
-                    call_id,
-                    output,
-                    ..
-                } if call_id.as_deref() == Some("call-1") => Some(output),
-                _ => None,
-            })
-            .expect("captured direct output");
-        assert_eq!(result.success, Some(!is_error));
-    }
-    if metadata_enabled {
-        // The ungranted custom endpoint gets no raw metadata; inspect capture independently.
-        assert_result_metadata_call(&output, &arguments, /*expected_metadata*/ None);
-        let captured = serde_json::to_value(captured)?;
-        let captured_output = captured
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|item| item["type"] == output["type"] && item["call_id"] == "call-1")
-            .expect("captured tool output");
-        let expected_metadata = (host_owned && effective_analytics_enabled)
-            .then_some(result_metadata)
-            .flatten();
-        assert_result_metadata_call(captured_output, &arguments, expected_metadata);
-        assert_eq!(
-            output["internal_chat_message_metadata_passthrough"]["tool_calls_complete"],
-            true
-        );
-    } else {
-        assert!(
-            output["internal_chat_message_metadata_passthrough"]
-                .get("tool_calls_complete")
-                .is_none()
-        );
-    }
     Ok(())
 }
 
@@ -2838,13 +2633,9 @@ async fn code_mode_result_metadata_keeps_prepared_call_binding_across_runtime_re
     let (reached_tx, reached_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     let control = Arc::new(ResultMetadataTestControl {
-        server: Mutex::new(McpServerContribution::HostedApps {
-            config: Box::new(codex_apps_mcp_server_config(
-                &apps_server.chatgpt_base_url,
-                /*apps_mcp_product_sku*/ None,
-                /*originator*/ None,
-            )),
-            protocol_mode: None,
+        server: Mutex::new(McpServerContribution::Set {
+            name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            config: Box::new(explicit_test_mcp_config(&apps_server.chatgpt_base_url)),
         }),
         gate: Mutex::new(Some((reached_tx, release_rx))),
     });
@@ -2905,14 +2696,10 @@ async fn code_mode_result_metadata_keeps_prepared_call_binding_across_runtime_re
         original_output["internal_chat_message_metadata_passthrough"]["tool_calls_complete"],
         true
     );
-    // The next call uses an extension-owned binding, but the held call keeps its host proof.
+    // The held call keeps its original binding while the next call uses the refreshed server.
     *control.server.lock().unwrap() = McpServerContribution::Set {
         name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        config: Box::new(codex_apps_mcp_server_config(
-            &refreshed_apps.chatgpt_base_url,
-            /*apps_mcp_product_sku*/ None,
-            /*originator*/ None,
-        )),
+        config: Box::new(explicit_test_mcp_config(&refreshed_apps.chatgpt_base_url)),
     };
     let current_config = test.codex.config().await;
     let _ = test
@@ -2956,7 +2743,11 @@ async fn code_mode_result_metadata_keeps_prepared_call_binding_across_runtime_re
             original_output["type"].as_str().unwrap(),
             expected_metadata,
         ),
-        ("call-3", "function_call_output", None),
+        (
+            "call-3",
+            "function_call_output",
+            Some(serde_json::json!({ "provider": { "origin": "refreshed" } })),
+        ),
     ] {
         let output = request.call_output(call_id, call_type);
         assert_result_metadata_call(&output, &arguments, /*expected_metadata*/ None);
@@ -2989,13 +2780,9 @@ async fn code_mode_late_truncated_result_metadata_survives_waits() -> Result<()>
     let (reached_tx, reached_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     let control = Arc::new(ResultMetadataTestControl {
-        server: Mutex::new(McpServerContribution::HostedApps {
-            config: Box::new(codex_apps_mcp_server_config(
-                &apps_server.chatgpt_base_url,
-                /*apps_mcp_product_sku*/ None,
-                /*originator*/ None,
-            )),
-            protocol_mode: None,
+        server: Mutex::new(McpServerContribution::Set {
+            name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            config: Box::new(explicit_test_mcp_config(&apps_server.chatgpt_base_url)),
         }),
         gate: Mutex::new(Some((reached_tx, release_rx))),
     });
@@ -3083,8 +2870,8 @@ async fn code_mode_late_truncated_result_metadata_survives_waits() -> Result<()>
         /*expected_metadata*/ None,
     );
 
-    // The custom inference endpoint strips raw result metadata. Inspect both the actual
-    // request inventory and the recorder's unfiltered capture, including after another wait.
+    // The configured provider strips raw result metadata; retained local history keeps it.
+    // Keep the executed call inventory stable across subsequent waits.
     for phase in 0..2 {
         let captured = codex_core::test_support::history_with_tool_call_metadata(&test.codex).await;
         let captured = serde_json::to_value(captured)?;

@@ -19,7 +19,6 @@ impl ChatWidget {
     pub(crate) fn park_voice(&mut self) {
         self.app_event_tx.voice_only.store(true, Ordering::Relaxed);
         self.set_queue_autosend_suppressed(/*suppressed*/ true);
-        self.stop_rate_limit_poller();
     }
 
     pub(crate) fn prepare_background_voice_replay(
@@ -53,8 +52,6 @@ impl ChatWidget {
         // Keep its pending insertions, while preserving the live call's partials,
         // delivery acknowledgments, and input generations.
         self.realtime_conversation.pending_history_cells = replay.pending_history_cells;
-        self.update_realtime_footer();
         self.refresh_terminal_title();
-        self.refresh_thread_usage_after_turn();
     }
 }

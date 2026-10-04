@@ -47,7 +47,6 @@ async fn pending_request(
             authorization,
             thread,
             ready,
-            metrics: None,
             sampling: LunaSamplingRequest {
                 instructions,
                 input: Vec::new(),
@@ -128,13 +127,7 @@ async fn admission_orders_delayed_preparation_and_bounds_active_plus_pending_wor
     assert!(cached.has_unscored_failure);
     assert_eq!(cached.action_risk, Some(1.0));
     assert_eq!(
-        cached_approval(
-            &fixture.registry,
-            store,
-            "review action",
-            /*metrics*/ None
-        )
-        .await,
+        cached_approval(&fixture.registry, store, "review action",).await,
         None
     );
     let c = reservations.remove(/*index*/ 2);

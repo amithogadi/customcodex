@@ -175,7 +175,7 @@ async fn worktree_start_and_fork(backend: &str) -> anyhow::Result<()> {
     fs::create_dir(source.join(".codex"))?;
     fs::write(
         source.join(".codex/config.toml"),
-        "model = \"destination-model\"\nanalytics.enabled = false\ncli_auth_credentials_store = \"file\"\n",
+        "model = \"destination-model\"\ncli_auth_credentials_store = \"file\"\n",
     )?;
     git(&source, &["init", "--quiet"])?;
     git(&source, &["add", "."])?;
@@ -188,17 +188,12 @@ async fn worktree_start_and_fork(backend: &str) -> anyhow::Result<()> {
         format!(
             r#"
 cli_auth_credentials_store = "file"
-chatgpt_base_url = "{}/source/backend-api"
-analytics.enabled = false
-check_for_update_on_startup = false
 features.daemon_auto_start = {}
 model_provider = "local"
 model = "test-model"
 sandbox_mode = "workspace-write"
 windows.sandbox = "unelevated"
 tui.disable_paste_burst = true
-[otel]
-metrics_exporter = {{ otlp-http = {{ endpoint = "{}/metrics", protocol = "json" }} }}
 [model_providers.local]
 name = "local test"
 base_url = "{}/v1"
@@ -208,9 +203,7 @@ trust_level = "trusted"
 [projects.{}]
 trust_level = "trusted"
 "#,
-            server.uri(),
             backend == "daemon",
-            server.uri(),
             server.uri(),
             serde_json::to_string(&source)?,
             serde_json::to_string(&launcher)?
@@ -222,16 +215,7 @@ trust_level = "trusted"
     )?;
     fs::write(
         source.join(".codex/config.toml"),
-        "model = \"source-model\"\nanalytics.enabled = true\n",
-    )?;
-    app_test_support::write_chatgpt_auth(
-        &home,
-        app_test_support::ChatGptAuthFixture::new("test-token")
-            .account_id("workspace-123")
-            .chatgpt_account_id("workspace-123")
-            .chatgpt_user_id("user-123")
-            .plan_type("enterprise"),
-        codex_config::types::AuthCredentialsStoreMode::File,
+        "model = \"source-model\"\n",
     )?;
     let program = codex_utils_cargo_bin::cargo_bin("codex")?;
     // Keep cold Rosetta translation outside the timed startup assertions.
@@ -252,7 +236,6 @@ trust_level = "trusted"
     env.insert("no_proxy".into(), "127.0.0.1,localhost".into());
     env.insert("TERM".into(), "xterm-256color".into());
     env.insert("TERM_PROGRAM".into(), "unrecognized-terminal".into());
-    env.insert("OTEL_METRIC_EXPORT_INTERVAL".into(), "100".into());
     for key in [
         "CODEX_EXEC_SERVER_URL",
         "CODEX_ACCESS_TOKEN",
@@ -286,7 +269,7 @@ trust_level = "trusted"
         fs::create_dir(home.join("app-server-daemon"))?;
         fs::write(
             home.join("app-server-daemon/settings.json"),
-            r#"{"shutdownGraceSeconds":0,"updater":{"autoUpdateEnabled":false}}"#,
+            r#"{"shutdownGraceSeconds":0}"#,
         )?;
         let mut daemon_stop = Command::new(&program);
         daemon_stop
@@ -310,48 +293,7 @@ trust_level = "trusted"
     let mut owner = None;
     let mut previous: Vec<String> = Vec::new();
     let prompt = "describe checkout";
-    for (fork, explicit_cd, analytics, auth_failure) in [
-        (false, false, false, false),
-        (true, false, false, false),
-        (true, true, false, false),
-        (false, false, true, false),
-        (false, false, false, true),
-    ] {
-        if auth_failure {
-            fs::write(
-                source.join(".codex/config.toml"),
-                "forced_login_method = \"api\"\n",
-            )?;
-            git(
-                &source,
-                &[
-                    "commit",
-                    "--quiet",
-                    "--no-gpg-sign",
-                    "-am",
-                    "require API login",
-                ],
-            )?;
-            fs::write(source.join(".codex/config.toml"), "")?;
-        }
-        let (metric_tx, mut metric_rx) = tokio::sync::mpsc::unbounded_channel();
-        Mock::given(wiremock::matchers::path("/metrics"))
-            .respond_with(move |_: &wiremock::Request| {
-                let _ = metric_tx.send(());
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({}))
-            })
-            .mount(&server)
-            .await;
-        Mock::given(wiremock::matchers::method("GET"))
-            .and(wiremock::matchers::path(
-                "/source/backend-api/wham/config/bundle",
-            ))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "config_toml": { "enterprise_managed": [{ "id": "test", "name": "test",
-                    "contents": "developer_instructions = \"managed cloud instructions\"" }] }
-            })))
-            .mount(&server)
-            .await;
+    for (fork, explicit_cd) in [(false, false), (true, false), (true, true)] {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let response = app_test_support::create_final_assistant_message_sse_response("done")?;
         let observed_source = source.clone();
@@ -406,9 +348,6 @@ trust_level = "trusted"
         }
         if explicit_cd {
             args.extend(["--cd".into(), source.join(".codex").display().to_string()]);
-        }
-        if analytics {
-            args.extend(["-c".into(), "analytics.enabled=true".into()]);
         }
         args.push(prompt.into());
         if previous.is_empty() {
@@ -471,25 +410,13 @@ trust_level = "trusted"
                         let bytes = bytes.context("TUI exited before model request")?;
                         let text = String::from_utf8_lossy(&bytes);
                         output.push_str(&text);
-                        if auth_failure && output.contains("API key login is required") && output.contains("Do not use --force.") {
-                            anyhow::bail!("observed required API login rejection");
-                        }
                         let replies = queries.feed(&bytes);
                         if !replies.is_empty() { session.writer_sender().send(replies).await?; }
                     }
                 }
             }
-        }).await;
-        if auth_failure {
-            assert!(observed.is_ok_and(|result| result.is_err()), "{output}");
-            let exit =
-                tokio::time::timeout(Duration::from_secs(/*secs*/ 10), spawned.exit_rx).await??;
-            assert_ne!(exit, 0);
-            assert!(output.contains("API key login is required"), "{output}");
-            assert!(!home.join("auth.json").exists());
-            assert!(output.contains("The checkout was kept"), "{output}");
-            continue;
-        }
+        })
+        .await;
         let renamed = if !fork && let Ok(Ok((_, _, metadata))) = &observed {
             tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
                 session
@@ -524,7 +451,7 @@ trust_level = "trusted"
         } else {
             Ok(())
         };
-        if backend == "daemon" && !analytics && matches!(observed, Ok(Ok(_))) {
+        if backend == "daemon" && matches!(observed, Ok(Ok(_))) {
             session.writer_sender().send(b"/status\r".to_vec()).await?;
             tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
                 while !output.contains("Local background server") {
@@ -543,11 +470,6 @@ trust_level = "trusted"
             .await
             .with_context(|| format!("daemon status timed out: {output}"))??;
         }
-        if analytics {
-            tokio::time::timeout(Duration::from_secs(/*secs*/ 10), metric_rx.recv())
-                .await?
-                .context("metrics export while the TUI is running")?;
-        }
         let startup_result = observed.as_ref().map(|result| result.as_ref().map(|_| ()));
         assert!(
             !output.contains("Under-development features enabled:"),
@@ -562,29 +484,7 @@ trust_level = "trusted"
             );
         }
         if matches!(startup_result, Ok(Ok(()))) && renamed.is_ok() {
-            if !fork && backend == "embedded" {
-                for (input, expected) in [
-                    ("/daemon\r", "Install latest public stable"),
-                    ("\r", "Update and exit"),
-                    ("\x1b[B\r", "Updating the local background server..."),
-                ] {
-                    session
-                        .writer_sender()
-                        .send(input.as_bytes().to_vec())
-                        .await?;
-                    tokio::time::timeout(Duration::from_secs(/*secs*/ 10), async {
-                        while !output.contains(expected) {
-                            let bytes = stdout.recv().await.context("TUI exited before handoff")?;
-                            output.push_str(&String::from_utf8_lossy(&bytes));
-                        }
-                        Ok::<_, anyhow::Error>(())
-                    })
-                    .await
-                    .with_context(|| format!("waiting for {expected}: {output}"))??;
-                }
-            } else {
-                session.writer_sender().send(b"/quit\r".to_vec()).await?;
-            }
+            session.writer_sender().send(b"/quit\r".to_vec()).await?;
         } else {
             session.terminate();
         }
@@ -597,85 +497,8 @@ trust_level = "trusted"
             }
         })
         .await;
-        let elevated_handoff = cfg!(windows)
-            && output.contains("start the Windows daemon from a non-elevated terminal");
-        assert_eq!(exit, i32::from(elevated_handoff), "{output}");
+        assert_eq!(exit, 0, "{output}");
         assert!(!output.contains("The checkout was kept"), "{output}");
-        let metrics = server
-            .received_requests()
-            .await
-            .context("requests")?
-            .into_iter()
-            .filter(|request| request.url.path() == "/metrics")
-            .map(|request| serde_json::from_slice::<Value>(&request.body))
-            .collect::<serde_json::Result<Vec<_>>>()?;
-        if analytics {
-            let exported = metrics
-                .iter()
-                .flat_map(|payload| payload["resourceMetrics"].as_array().into_iter().flatten())
-                .flat_map(|resource| resource["scopeMetrics"].as_array().into_iter().flatten())
-                .flat_map(|scope| scope["metrics"].as_array().into_iter().flatten())
-                .collect::<Vec<_>>();
-            if backend == "embedded" {
-                let update = exported
-                    .iter()
-                    .find(|metric| metric["name"] == "codex.daemon.update")
-                    .context("handoff metric")?;
-                let update_point = &update["sum"]["dataPoints"][0];
-                assert_eq!(update_point["asInt"], 1);
-            }
-            let point = exported
-                .iter()
-                .filter(|metric| metric["name"] == "codex.tui.start")
-                .flat_map(|metric| metric["sum"]["dataPoints"].as_array().into_iter().flatten())
-                .next()
-                .context("codex.tui.start data point")?;
-            let tags = point["attributes"]
-                .as_array()
-                .context("codex.tui.start attributes")?
-                .iter()
-                .map(|attribute| {
-                    Ok((
-                        attribute["key"].as_str().context("metric tag key")?,
-                        attribute["value"]["stringValue"]
-                            .as_str()
-                            .context("metric tag value")?,
-                    ))
-                })
-                .collect::<anyhow::Result<HashMap<_, _>>>()?;
-            let mut expected_tags = HashMap::from([
-                ("app_server_mode", "in_process"),
-                ("terminal_name", "unknown"),
-                ("multiplexer", "none"),
-                ("daemon_selection_reason", "incompatible_option"),
-                (
-                    "daemon_auto_start",
-                    if backend == "daemon" {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    },
-                ),
-                ("auto_update", "enabled"),
-                ("auto_update_setting", "default"),
-                ("update_interval_setting", "default"),
-                ("shutdown_grace_setting", "default"),
-            ]);
-            #[cfg(windows)]
-            if codex_app_server_daemon::is_elevated()? {
-                expected_tags.insert("daemon_selection_reason", "elevated_windows");
-            }
-            if backend == "daemon" {
-                expected_tags.extend([
-                    ("auto_update", "disabled"),
-                    ("auto_update_setting", "configured"),
-                    ("shutdown_grace_setting", "configured"),
-                ]);
-            }
-            assert_eq!(tags, expected_tags);
-        } else {
-            assert!(metrics.is_empty(), "analytics disabled");
-        }
         let (body, checkout, metadata) = observed
             .with_context(|| {
                 format!(
@@ -732,7 +555,6 @@ trust_level = "trusted"
             );
         }
         assert_eq!(body["model"], "destination-model");
-        assert!(context.contains("managed cloud instructions"), "{context}");
         if previous.is_empty() {
             // A legacy summary still says launcher A, but persisted turns use checkout B.
             let sqlite = codex_state::SqliteConfig::from_sqlite_home(
@@ -745,27 +567,20 @@ trust_level = "trusted"
                 .execute(&db)
                 .await?;
             db.close().await;
-            // B inherits trust from its primary repository; no exact trusted entry masks cloud distrust.
+            // A local policy override must reject a fork using its resolved owner checkout.
             let home_config = home.join("config.toml");
             let launcher_config = fs::read_to_string(&home_config)?;
             fs::write(
                 &home_config,
-                launcher_config.replace(
-                    "cli_auth_credentials_store = \"file\"",
-                    "cli_auth_credentials_store = \"ephemeral\"",
+                format!(
+                    "{launcher_config}\n[projects.{}]\ntrust_level = \"untrusted\"\n",
+                    serde_json::to_string(&codex_config::loader::project_trust_key(Path::new(
+                        &checkout
+                    )))?,
                 ),
             )?;
-            let cache = home.join("cloud-config-bundle-cache.json");
-            if cache.exists() {
-                fs::remove_file(&cache)?;
-            }
-            let request_count = server.received_requests().await.context("requests")?.len();
-            Mock::given(wiremock::matchers::path("/source/backend-api/wham/config/bundle"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "config_toml": {"enterprise_managed": [{"id":"distrust", "name":"distrust",
-                        "contents": format!("[projects.{}]\ntrust_level = \"untrusted\"\n", serde_json::to_string(&codex_config::loader::project_trust_key(Path::new(&checkout)))?)}]}
-                }))).with_priority(/*priority*/ 1).mount(&server).await;
             let before = git(&source, &["worktree", "list", "--porcelain"])?;
+            let request_count = server.received_requests().await.context("requests")?.len();
             rejected_start(
                 &program,
                 &[
@@ -781,70 +596,13 @@ trust_level = "trusted"
                 "cannot create a checkout from an explicitly untrusted source",
             )
             .await?;
-            assert!(
-                server
-                    .received_requests()
-                    .await
-                    .context("requests")?
-                    .iter()
-                    .skip(request_count)
-                    .any(|request| request.url.path() == "/source/backend-api/wham/config/bundle")
-            );
             assert_eq!(git(&source, &["worktree", "list", "--porcelain"])?, before);
-            server.reset().await;
-            if cache.exists() {
-                fs::remove_file(&cache)?;
-            }
-            let count = server.received_requests().await.context("requests")?.len();
-            Mock::given(wiremock::matchers::path("/source/backend-api/wham/config/bundle"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                    "config_toml": {"enterprise_managed": [{"id":"distrust-source", "name":"distrust-source",
-                        "contents": format!("[projects.{}]\ntrust_level = \"untrusted\"\n", serde_json::to_string(&codex_config::loader::project_trust_key(&source.join(".codex")))?)}]}
-                }))).mount(&server).await;
-            let output = rejected_start(
-                &program,
-                &[
-                    "--worktree".into(),
-                    "--enable".into(),
-                    "worktrees".into(),
-                    "--no-alt-screen".into(),
-                    "--cd".into(),
-                    source.join(".codex").display().to_string(),
-                ],
-                &launcher,
-                &env,
-                "cannot create a checkout from an explicitly untrusted source",
-            )
-            .await?;
-            let requests = server.received_requests().await.context("requests")?;
-            let paths = requests
-                .iter()
-                .skip(count)
-                .map(|r| r.url.path())
-                .collect::<Vec<_>>();
-            assert!(paths.contains(&"/source/backend-api/wham/config/bundle"));
-            assert!(!paths.contains(&"/v1/responses"));
-            let after = git(&source, &["worktree", "list", "--porcelain"])?;
-            let retained = after
-                .lines()
-                .filter_map(|line| line.strip_prefix("worktree "))
-                .find(|path| {
-                    !before
-                        .lines()
-                        .any(|line| line.strip_prefix("worktree ") == Some(*path))
-                })
-                .context("retained untrusted checkout")?;
-            assert!(output.contains("The checkout was kept"), "{output}");
-            let metadata = git(
-                Path::new(retained),
-                &["rev-parse", "--git-path", "codex-thread.json"],
-            )?;
-            assert!(!Path::new(retained).join(metadata).exists());
-            previous.push(retained.to_owned());
+            assert_eq!(
+                server.received_requests().await.context("requests")?.len(),
+                request_count,
+                "untrusted local policy must be rejected before contacting the provider",
+            );
             fs::write(&home_config, launcher_config)?;
-            if cache.exists() {
-                fs::remove_file(&cache)?;
-            }
         }
         previous.push(checkout);
         owner = Some(next_owner);

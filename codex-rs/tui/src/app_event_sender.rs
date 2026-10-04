@@ -45,17 +45,9 @@ impl AppEventSender {
         if self.voice_only.load(Ordering::Relaxed)
             && !matches!(
                 &event,
-                AppEvent::CodexOp(
-                    AppCommand::RealtimeConversationStart { .. }
-                        | AppCommand::RealtimeConversationStop { .. }
-                        | AppCommand::RealtimeConversationSpeech { .. }
-                ) | AppEvent::RealtimeWebrtcOfferCreated { .. }
-                    | AppEvent::RealtimeWebrtcConnected { .. }
-                    | AppEvent::StopRealtimeConversation { .. }
-                    | AppEvent::RealtimeConversationStateChanged
+                AppEvent::RealtimeConversationStateChanged
                     | AppEvent::BackgroundVoiceError { .. }
                     | AppEvent::SyncThreadGitBranch { .. }
-                    | AppEvent::RefreshRateLimits { .. }
             )
         {
             return;

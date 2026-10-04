@@ -4,9 +4,6 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use codex_connectors::AppToolPolicyEvaluator;
-use codex_connectors::AppToolPolicyInput;
-use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_mcp::McpBinding;
 use codex_mcp::ToolInfo as McpToolInfo;
 use codex_mcp::tool_is_model_visible;
@@ -63,8 +60,8 @@ impl McpHandlerCache {
 #[instrument(level = "trace", skip_all)]
 fn append_mcp_tools(
     all_mcp_tools: &[McpToolInfo],
-    config: &Config,
-    apps_enabled: bool,
+    _config: &Config,
+    _apps_enabled: bool,
     mcp_server_catalog: &codex_mcp::ResolvedMcpCatalog,
     search_tool_enabled: bool,
     handlers: &mut HashMap<ToolName, CachedMcpHandler>,
@@ -76,12 +73,6 @@ fn append_mcp_tools(
         .collect();
     handlers.retain(|name, _| current_tools.contains(name));
 
-    // Keep regular MCP tools first; Apps tools also require connector and policy checks.
-    let non_app_tools = filter_non_codex_apps_mcp_tools_only(all_mcp_tools);
-    let app_tools = apps_enabled
-        .then(|| filter_codex_apps_mcp_tools(all_mcp_tools, config))
-        .into_iter()
-        .flatten();
     let exposure = if search_tool_enabled {
         ToolExposure::Deferred
     } else {
@@ -89,7 +80,10 @@ fn append_mcp_tools(
     };
     let mut registered_tools = HashSet::new();
     let mut agent_plugin_bytes = 0usize;
-    for tool in non_app_tools.chain(app_tools) {
+    for tool in all_mcp_tools
+        .iter()
+        .filter(|tool| tool_is_model_visible(tool))
+    {
         let tool_name = tool.canonical_tool_name();
         let server = mcp_server_catalog.server(&tool.server_name);
         let agent_plugin = server.is_some_and(|server| server.source().is_agent_plugin());
@@ -158,44 +152,6 @@ fn append_mcp_tools(
         }
     }
     registered_tools
-}
-
-fn filter_non_codex_apps_mcp_tools_only(
-    mcp_tools: &[McpToolInfo],
-) -> impl Iterator<Item = &McpToolInfo> + '_ {
-    mcp_tools.iter().filter(|tool| {
-        tool.server_name != CODEX_APPS_MCP_SERVER_NAME && tool_is_model_visible(tool)
-    })
-}
-
-fn filter_codex_apps_mcp_tools<'a>(
-    mcp_tools: &'a [McpToolInfo],
-    config: &'a Config,
-) -> impl Iterator<Item = &'a McpToolInfo> + 'a {
-    let app_tool_policy = AppToolPolicyEvaluator::new(&config.config_layer_stack);
-
-    mcp_tools.iter().filter(move |tool| {
-        if tool.server_name != CODEX_APPS_MCP_SERVER_NAME {
-            return false;
-        }
-        if !tool_is_model_visible(tool) {
-            return false;
-        }
-        let Some(connector_id) = tool.connector_id.as_deref() else {
-            return false;
-        };
-        let annotations = tool.tool.annotations.as_ref();
-        app_tool_policy
-            .policy(AppToolPolicyInput {
-                connector_id: Some(connector_id),
-                link_id: None,
-                tool_name: &tool.tool.name,
-                tool_title: tool.tool.title.as_deref(),
-                destructive_hint: annotations.and_then(|annotations| annotations.destructive_hint),
-                open_world_hint: annotations.and_then(|annotations| annotations.open_world_hint),
-            })
-            .enabled
-    })
 }
 
 #[cfg(test)]

@@ -34,7 +34,6 @@ use crate::thread_startup_metadata::ThreadStartupMetadata;
 use codex_agent_graph_store::AgentGraphStore;
 use codex_agent_graph_store::LocalAgentGraphStore;
 use codex_agent_message_board_extension::LocalAgentMessageBoard;
-use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::ThreadHistoryBuilder;
 use codex_app_server_protocol::TurnStatus;
 use codex_attachment_store::AttachmentStore;
@@ -280,7 +279,6 @@ pub struct StartThreadOptions {
     pub session_source: Option<SessionSource>,
     pub thread_source: Option<ThreadSource>,
     pub dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
-    pub metrics_service_name: Option<String>,
     pub parent_trace: Option<W3cTraceContext>,
     pub environments: Option<Vec<TurnEnvironmentSelection>>,
     /// Existing environment bindings captured by an internal caller.
@@ -309,7 +307,6 @@ impl StartThreadOptions {
             session_source: None,
             thread_source: None,
             dynamic_tools: Vec::new(),
-            metrics_service_name: None,
             parent_trace: None,
             environments: None,
             inherited_environments: None,
@@ -361,31 +358,13 @@ impl ThreadSpawnRequest {
     }
 }
 
-fn originator_from_service_name(service_name: Option<&str>) -> Option<String> {
-    let service_name = service_name?.trim();
-    for originator in [
-        "codex_work_desktop",
-        "codex_work_web",
-        "codex_work_mobile",
-        "codex_work_cca",
-        "chatgpt_cca",
-    ] {
-        if service_name.eq_ignore_ascii_case(originator) {
-            return Some(originator.to_string());
-        }
-    }
-    None
-}
-
 fn effective_originator_value(
-    metrics_service_name: Option<&str>,
     env_originator: Option<String>,
     persisted_originator: Option<String>,
     inherited_originator: Option<String>,
     default_originator: String,
 ) -> String {
-    originator_from_service_name(metrics_service_name)
-        .or(persisted_originator)
+    persisted_originator
         .or(inherited_originator)
         .or(env_originator)
         .unwrap_or(default_originator)
@@ -432,7 +411,6 @@ pub(crate) struct ThreadManagerState {
     external_time_provider: Option<Arc<dyn TimeProvider>>,
     session_source: SessionSource,
     installation_id: String,
-    analytics_events_client: Option<AnalyticsEventsClient>,
     // Captures submitted ops for testing purpose when test mode is enabled.
     ops_log: Option<SharedCapturedOps>,
 }
@@ -535,7 +513,6 @@ impl ThreadManager {
         environment_manager: Arc<EnvironmentManager>,
         extensions: Arc<ExtensionRegistry<Config>>,
         user_instructions_provider: Arc<dyn UserInstructionsProvider>,
-        analytics_events_client: Option<AnalyticsEventsClient>,
         image_store: Arc<dyn AttachmentStore>,
         thread_store: Arc<dyn ThreadStore>,
         agent_graph_store: Option<Arc<dyn AgentGraphStore>>,
@@ -554,7 +531,6 @@ impl ThreadManager {
         let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.to_path_buf(),
             restriction_product,
-            Arc::clone(&auth_manager),
             skills_service.clone(),
         ));
         let mcp_manager = Arc::new(McpManager::new_with_extensions(
@@ -595,7 +571,6 @@ impl ThreadManager {
                 auth_manager,
                 session_source,
                 installation_id,
-                analytics_events_client,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -727,7 +702,6 @@ impl ThreadManager {
         let plugins_manager = Arc::new(PluginsManager::new_with_options(
             codex_home.clone(),
             restriction_product,
-            Arc::clone(&auth_manager),
             skills_service.clone(),
         ));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
@@ -770,7 +744,6 @@ impl ThreadManager {
                 auth_manager,
                 session_source: SessionSource::Exec,
                 installation_id,
-                analytics_events_client: None,
                 ops_log: should_use_test_thread_manager_behavior()
                     .then(|| Arc::new(std::sync::Mutex::new(Vec::new()))),
             }),
@@ -1862,7 +1835,6 @@ impl ThreadManagerState {
     async fn effective_originator(
         &self,
         initial_history: &InitialHistory,
-        metrics_service_name: Option<&str>,
         session_source: &SessionSource,
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
@@ -1893,7 +1865,6 @@ impl ThreadManagerState {
             .is_ok()
             .then(|| originator().value);
         effective_originator_value(
-            metrics_service_name,
             env_originator,
             persisted_originator,
             inherited_originator.or(parent_originator),
@@ -1916,7 +1887,6 @@ impl ThreadManagerState {
             /*parent_thread_id*/ None,
             /*forked_from_thread_id*/ None,
             /*thread_source*/ None,
-            /*metrics_service_name*/ None,
             /*inherited_environments*/ None,
             /*inherited_exec_policy*/ None,
             /*environments*/ None,
@@ -1935,7 +1905,6 @@ impl ThreadManagerState {
         parent_thread_id: Option<ThreadId>,
         forked_from_thread_id: Option<ThreadId>,
         thread_source: Option<ThreadSource>,
-        metrics_service_name: Option<String>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
         environments: Option<Vec<TurnEnvironmentSelection>>,
@@ -1945,7 +1914,6 @@ impl ThreadManagerState {
             history_mode,
             session_source: Some(session_source),
             thread_source,
-            metrics_service_name,
             environments,
             client_mcp_extensions,
             dynamic_tools,
@@ -2085,7 +2053,6 @@ impl ThreadManagerState {
             session_source,
             thread_source,
             dynamic_tools,
-            metrics_service_name,
             parent_trace,
             environments,
             inherited_environments: captured_environments,
@@ -2267,7 +2234,6 @@ impl ThreadManagerState {
         let originator = self
             .effective_originator(
                 &initial_history,
-                metrics_service_name.as_deref(),
                 &session_source,
                 parent_thread_id,
                 forked_from_thread_id,
@@ -2328,7 +2294,6 @@ impl ThreadManagerState {
             originator,
             agent_control,
             dynamic_tools,
-            metrics_service_name,
             inherited_environments,
             inherited_exec_policy,
             parent_rollout_thread_trace,
@@ -2339,7 +2304,6 @@ impl ThreadManagerState {
             turn_extension_init,
             client_mcp_extensions,
             reserved_thread_id,
-            analytics_events_client: self.analytics_events_client.clone(),
             image_store: Arc::clone(&self.image_store),
             thread_store: Arc::clone(&self.thread_store),
             attestation_provider: self.attestation_provider.clone(),

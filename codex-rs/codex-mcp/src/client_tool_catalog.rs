@@ -20,15 +20,6 @@ use crate::tools::ToolInfo;
 
 type ToolCatalogUpdates = watch::Receiver<Option<Arc<ConnectorRuntimeSnapshot<ToolInfo>>>>;
 
-/// The exact Apps catalog returned by an awaited refresh of one published runtime.
-pub struct CodexAppsToolSnapshot {
-    /// Raw installed tools, including tools hidden or disabled for the model.
-    pub tools: Vec<ToolInfo>,
-    /// Raw MCP tool names allowed by the same runtime's generic MCP policy.
-    /// App-specific policy is applied by the caller.
-    pub model_visible_tool_names: HashSet<String>,
-}
-
 pub(crate) struct ClientToolCatalog {
     current: RwLock<CatalogState>,
     /// Serialize fetches without blocking calls against the current catalog.

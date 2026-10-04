@@ -4,7 +4,6 @@
 //! Each lease resolves workspace routing before reusing a socket or starting HTTP.
 //! Constrained HTTP clients reject redirects, including after a cache policy change.
 
-use super::super::metrics::sampler_failure_reason;
 use super::INITIAL_WEBSOCKET_CONNECTIONS;
 use super::LunaSamplerConfig;
 use super::LunaSamplerError;
@@ -29,8 +28,6 @@ use codex_login::default_client::add_originator_header;
 use codex_login::default_client::create_client_for_route_async;
 use codex_login::default_client::default_headers;
 use codex_model_provider::ACCOUNT_ROUTING_HEADER;
-use codex_model_provider::AgentIdentitySessionFallback;
-use codex_model_provider::ProviderAuthScope;
 use codex_model_provider::ResolvedResponsesProvider;
 use codex_model_provider::ResponsesConnectionKey;
 use codex_protocol::ThreadId;
@@ -305,17 +302,13 @@ impl ConnectionPool {
         } = self
             .config
             .provider
-            .responses_api_provider(&self.config.workspace_routing)
+            .responses_api_provider()
             .await
             .map_err(LunaSamplerError::Provider)?;
         let auth = self
             .config
             .provider
-            .api_auth_for_scope(ProviderAuthScope {
-                agent_identity_policy: self.config.agent_identity_policy,
-                session_source: self.config.session_source.clone(),
-                agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
-            })
+            .api_auth_for_request()
             .await
             .map_err(LunaSamplerError::Provider)?
             .auth;
@@ -418,25 +411,12 @@ impl ConnectionPool {
             headers,
             default_headers(),
             /*turn_state*/ None,
-            /*telemetry*/ None,
         );
-        let started_at = Instant::now();
+        let _started_at = Instant::now();
         let result = tokio::time::timeout(provider_info.websocket_connect_timeout(), connect)
             .await
             .map_err(|_| LunaSamplerError::ConnectionTimeout)
             .and_then(|result| result.map_err(LunaSamplerError::Api));
-        if let Some(metrics) = self.config.metrics.as_deref() {
-            let outcome = if result.is_ok() { "success" } else { "failure" };
-            let mut tags = vec![("endpoint", "/responses"), ("outcome", outcome)];
-            if let Err(error) = &result {
-                tags.push(("failure_reason", sampler_failure_reason(error)));
-            }
-            metrics.histogram(
-                "codex.guardian_v2.connection.duration_ms",
-                i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
-                &tags,
-            );
-        }
         let connection = result?;
         if auth_changes
             .as_ref()

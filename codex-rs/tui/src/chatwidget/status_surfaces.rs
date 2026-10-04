@@ -10,8 +10,6 @@ use crate::chatwidget::limit_label_for_window;
 use crate::chatwidget::rate_limits::get_limits_duration;
 use crate::legacy_core::config::Config;
 use crate::model_catalog::LUNA_RESERVE_MODEL;
-use crate::status::format_credit_micros;
-use crate::status::format_estimated_usd_micros;
 use crate::status::format_tokens_compact;
 use codex_app_server_protocol::AskForApproval;
 use codex_config::ConfigLayerSource;
@@ -70,25 +68,6 @@ impl StatusSurfaceSelections {
             || self
                 .status_line_items
                 .contains(&StatusLineItem::BranchChanges)
-    }
-
-    fn uses_workspace_headline(&self) -> bool {
-        self.status_line_items
-            .contains(&StatusLineItem::WorkspaceHeadline)
-    }
-
-    fn uses_thread_usage(&self) -> bool {
-        self.status_line_items.iter().any(|item| {
-            matches!(
-                item,
-                StatusLineItem::ThreadCredits | StatusLineItem::EstimatedThreadCost
-            )
-        }) || self.terminal_title_items.iter().any(|item| {
-            matches!(
-                item,
-                TerminalTitleItem::ThreadCredits | TerminalTitleItem::EstimatedThreadCost
-            )
-        })
     }
 }
 
@@ -181,21 +160,6 @@ impl ChatWidget {
             if !self.status_line_git_summary_lookup_complete {
                 self.request_status_line_git_summary(cwd);
             }
-        }
-
-        if !selections.uses_workspace_headline() {
-            self.status_line_workspace_headline = None;
-            self.status_line_workspace_headline_pending_request_id = None;
-            self.status_line_workspace_headline_last_requested_at = None;
-            self.status_line_workspace_messages_disabled = false;
-        } else {
-            self.request_status_line_workspace_headline_if_due(Instant::now());
-        }
-
-        if selections.uses_thread_usage() {
-            self.ensure_thread_usage_requested();
-        } else {
-            self.cancel_thread_usage_polling();
         }
     }
 
@@ -332,11 +296,7 @@ impl ChatWidget {
     ) -> Option<String> {
         if self.terminal_title_shows_action_required_with_selections(selections) {
             let title = self.action_required_terminal_title_text(selections, now);
-            return Some(if self.realtime_microphone_is_listening() {
-                format!("● {title}")
-            } else {
-                title
-            });
+            return Some(title);
         }
 
         let mut previous = None;
@@ -625,85 +585,6 @@ impl ChatWidget {
         });
     }
 
-    fn request_status_line_workspace_headline_if_due(&mut self, now: Instant) {
-        if !self.status_line_workspace_headline_should_fetch(now) {
-            return;
-        }
-        let request_id = self.next_status_line_workspace_headline_request_id;
-        self.next_status_line_workspace_headline_request_id = self
-            .next_status_line_workspace_headline_request_id
-            .wrapping_add(/*rhs*/ 1);
-        self.status_line_workspace_headline_pending_request_id = Some(request_id);
-        self.status_line_workspace_headline_last_requested_at = Some(now);
-        self.app_event_tx
-            .send(AppEvent::RefreshStatusLineWorkspaceHeadline { request_id });
-    }
-
-    fn status_line_workspace_headline_should_fetch(&self, now: Instant) -> bool {
-        if self
-            .status_line_workspace_headline_pending_request_id
-            .is_some()
-            || self.status_line_workspace_messages_disabled
-            || !self.has_codex_backend_auth
-        {
-            return false;
-        }
-
-        self.status_line_workspace_headline_last_requested_at
-            .is_none_or(|last_requested_at| {
-                now.saturating_duration_since(last_requested_at)
-                    >= crate::workspace_messages::WORKSPACE_HEADLINE_REFRESH_INTERVAL
-            })
-    }
-
-    pub(super) fn refresh_status_line_if_workspace_headline_due(&mut self) {
-        let now = Instant::now();
-        if self.status_line_workspace_headline_should_fetch(now)
-            && self
-                .status_line_items_with_invalids()
-                .0
-                .contains(&StatusLineItem::WorkspaceHeadline)
-        {
-            self.refresh_status_line();
-        }
-    }
-
-    pub(crate) fn set_status_line_workspace_headline(
-        &mut self,
-        request_id: u64,
-        result: Result<crate::workspace_messages::WorkspaceHeadlineFetchResult, String>,
-    ) -> bool {
-        if self.status_line_workspace_headline_pending_request_id != Some(request_id) {
-            return false;
-        }
-        self.status_line_workspace_headline_pending_request_id = None;
-        match result {
-            Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::Available(headline)) => {
-                self.status_line_workspace_messages_disabled = false;
-                self.status_line_workspace_headline = headline;
-            }
-            Ok(crate::workspace_messages::WorkspaceHeadlineFetchResult::FeatureDisabled) => {
-                self.status_line_workspace_messages_disabled = true;
-                self.status_line_workspace_headline = None;
-            }
-            Err(err) => {
-                tracing::debug!(error = %err, "failed to fetch workspace headline");
-            }
-        }
-
-        if !self.status_line_workspace_messages_disabled
-            && self
-                .status_line_items_with_invalids()
-                .0
-                .contains(&StatusLineItem::WorkspaceHeadline)
-        {
-            self.frame_requester
-                .schedule_frame_in(crate::workspace_messages::WORKSPACE_HEADLINE_REFRESH_INTERVAL);
-        }
-        self.refresh_status_line();
-        true
-    }
-
     /// Resolves a display string for one configured status-line item.
     ///
     /// Returning `None` means "omit this item for now", not "configuration error". Callers rely on
@@ -789,14 +670,6 @@ impl ChatWidget {
                     format_tokens_compact(self.status_line_total_usage().output_tokens)
                 )
             }),
-            StatusLineItem::ThreadCredits => self
-                .estimated_thread_usage()
-                .map(|usage| usage.estimated_usage_credits_micros)
-                .map(|credits| format!("{} credits", format_credit_micros(credits))),
-            StatusLineItem::EstimatedThreadCost => self
-                .estimated_thread_usage()
-                .and_then(|usage| usage.estimated_usage_usd_micros)
-                .and_then(format_estimated_usd_micros),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
             StatusLineItem::FastMode => self
                 .model_catalog
@@ -831,7 +704,6 @@ impl ChatWidget {
                 .as_deref()
                 .and_then(normalize_thread_name)
                 .or_else(|| self.thread_id.map(|id| id.to_string())),
-            StatusLineItem::WorkspaceHeadline => self.status_line_workspace_headline.clone(),
             StatusLineItem::TaskProgress => self.terminal_title_task_progress(),
         }
     }
@@ -871,13 +743,10 @@ impl ChatWidget {
             StatusSurfacePreviewItem::UsedTokens => StatusLineItem::UsedTokens,
             StatusSurfacePreviewItem::TotalInputTokens => StatusLineItem::TotalInputTokens,
             StatusSurfacePreviewItem::TotalOutputTokens => StatusLineItem::TotalOutputTokens,
-            StatusSurfacePreviewItem::ThreadCredits => StatusLineItem::ThreadCredits,
-            StatusSurfacePreviewItem::EstimatedThreadCost => StatusLineItem::EstimatedThreadCost,
             StatusSurfacePreviewItem::SessionId => StatusLineItem::SessionId,
             StatusSurfacePreviewItem::FastMode => StatusLineItem::FastMode,
             StatusSurfacePreviewItem::Daybreak => StatusLineItem::Daybreak,
             StatusSurfacePreviewItem::RawOutput => StatusLineItem::RawOutput,
-            StatusSurfacePreviewItem::WorkspaceHeadline => StatusLineItem::WorkspaceHeadline,
             StatusSurfacePreviewItem::Model => StatusLineItem::ModelName,
             StatusSurfacePreviewItem::ModelWithReasoning => StatusLineItem::ModelWithReasoning,
             StatusSurfacePreviewItem::Reasoning => StatusLineItem::Reasoning,
@@ -939,12 +808,6 @@ impl ChatWidget {
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::TotalOutputTokens => self
                 .status_line_value_for_item(StatusLineItem::TotalOutputTokens)
-                .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
-            TerminalTitleItem::ThreadCredits => self
-                .status_line_value_for_item(StatusLineItem::ThreadCredits)
-                .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
-            TerminalTitleItem::EstimatedThreadCost => self
-                .status_line_value_for_item(StatusLineItem::EstimatedThreadCost)
                 .map(|value| Self::truncate_terminal_title_part(value, /*max_chars*/ 32)),
             TerminalTitleItem::SessionId => {
                 let value = self
@@ -1027,12 +890,6 @@ impl ChatWidget {
             && self.local_settings.tui.effects.progress
             && self.terminal_title_has_active_progress())
         .then(|| self.terminal_title_spinner_frame_at(now));
-        if self.realtime_microphone_is_listening() {
-            return Some(match spinner {
-                Some(frame) => format!("● {frame}"),
-                None => "●".to_string(),
-            });
-        }
 
         spinner.map(str::to_string)
     }

@@ -88,7 +88,6 @@ fn lock_sandbox_dir_blocks_inherited_write_for_runner_files() {
             deny_write_paths: Vec::new(),
             proxy_ports: Vec::new(),
             allow_local_binding: false,
-            otel: None,
             real_user,
             user_profile: None,
             mode: setup_mode,

@@ -84,11 +84,6 @@ impl ChatWidget {
                 thread_id: session.thread_id,
             });
         }
-        self.realtime_conversation_available_for_thread =
-            self.config.features.enabled(Feature::RealtimeConversation)
-                && codex_realtime_webrtc::RealtimeWebrtcSession::is_supported();
-        self.bottom_pane
-            .set_voice_command_enabled(self.realtime_conversation_available_for_thread);
         self.bottom_pane
             .set_queue_submissions(/*queue_submissions*/ false);
         if previous_thread_id != self.thread_id {
@@ -96,7 +91,6 @@ impl ChatWidget {
             self.automatic_model_switch_state =
                 backend_banners::AutomaticModelSwitchState::default();
             self.review.recent_auto_review_denials = RecentAutoReviewDenials::default();
-            self.clear_thread_usage_state();
         }
         self.turn_lifecycle.reset_thread();
         self.clear_safety_buffering();
@@ -113,9 +107,7 @@ impl ChatWidget {
         if self.daybreak_enabled && previous_thread_id != self.thread_id {
             self.add_info_message("Daybreak is on for new turns.".into(), /*hint*/ None);
         }
-        if connector_scope_changed {
-            self.invalidate_connector_scope();
-        }
+        if connector_scope_changed {}
         let runtime_workspace_roots = session.runtime_workspace_roots.clone();
         self.config.workspace_roots = runtime_workspace_roots.clone();
         self.config
@@ -186,19 +178,6 @@ impl ChatWidget {
             .set_active_reasoning_effort_baseline(effort.as_ref());
         self.refresh_model_display();
         self.refresh_status_surfaces();
-        if previous_thread_id != self.thread_id
-            && self.should_prefetch_rate_limits()
-            && (self.current_model() == crate::model_catalog::LUNA_RESERVE_MODEL
-                || self.backend_banner_fallback().is_some())
-        {
-            // Reconcile this task with retained account state before sending its initial/queued
-            // prompt. Do not wait for the next usage poll after /new, /resume or a thread switch.
-            self.hold_rate_limit_recovery();
-            self.app_event_tx
-                .send(AppEvent::ApplyBackendBannerFallback {
-                    thread_id: session.thread_id,
-                });
-        }
         self.sync_service_tier_commands();
         self.sync_worktrees_enabled();
         self.sync_plugins_command_enabled();
@@ -229,7 +208,6 @@ impl ChatWidget {
         }
         self.transcript.saw_copy_source_this_turn = false;
         self.refresh_skills_for_current_cwd(/*force_reload*/ true);
-        self.refresh_connector_mentions(/*force_refresh*/ false);
         let initial_user_message_pending = self.initial_user_message.is_some();
         self.submit_initial_user_message_if_pending();
         if self.mcp_startup_status.is_none()
@@ -353,7 +331,6 @@ impl ChatWidget {
         self.transcript.last_plan_progress = None;
         self.last_rendered_user_message_display = None;
         self.last_rendered_user_message_client_id = None;
-        self.clear_pending_rate_limit_reset_hint();
         self.set_token_info(/*info*/ None);
         self.bottom_pane.clear_pending_questions();
         self.bottom_pane.set_task_running(/*running*/ false);

@@ -258,26 +258,8 @@ async fn compute_auth_status(
         // EMA connections are not enabled until the runtime stage of the stack.
         return Ok(McpAuthState::Unsupported);
     }
-    let has_runtime_auth = matches!(config.auth, McpServerAuth::ChatGpt)
-        && auth.is_some_and(CodexAuth::uses_codex_backend)
-        && matches!(
-            &config.transport,
-            McpServerTransportConfig::StreamableHttp {
-                bearer_token_env_var: None,
-                ..
-            }
-        );
-
-    if matches!(config.auth, McpServerAuth::ChatGpt) && !config.is_local_environment() {
-        return Ok(if has_explicit_http_authorization(config) {
-            McpAuthState::BearerToken
-        } else {
-            McpAuthState::Unsupported
-        });
-    }
-
-    if has_runtime_auth {
-        return Ok(McpAuthState::BearerToken);
+    if matches!(config.auth, McpServerAuth::ChatGpt) {
+        return Ok(McpAuthState::Unsupported);
     }
 
     match &config.transport {

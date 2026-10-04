@@ -9,11 +9,9 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event::PluginLocation;
-use crate::app_event::PluginRemoteSectionError;
 use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_event::RunningTaskExitAction;
 use crate::app_event::ThreadTitleDestination;
@@ -24,12 +22,9 @@ use crate::app_server_session::AppServerBootstrap;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::TurnPermissionsOverride;
-use crate::app_server_session::app_server_rate_limit_snapshots;
-use crate::bottom_pane::AppLinkViewParams;
 use crate::bottom_pane::ApplyPatchApprovalRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::ExecApprovalRequest;
-use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpElicitationApprovalRequest;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::PermissionsApprovalRequest;
@@ -49,8 +44,6 @@ use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
 use crate::history_cell::HistoryCell;
-#[cfg(not(debug_assertions))]
-use crate::history_cell::UpdateAvailableHistoryCell;
 use crate::hooks_rpc::HookTrustUpdate;
 use crate::key_hint::KeyBindingListExt;
 use crate::keymap::KeyChordMatcher;
@@ -87,14 +80,12 @@ use crate::token_usage::TokenUsage;
 use crate::transcript_reflow::TranscriptReflowState;
 use crate::tui;
 use crate::tui::TuiEvent;
-use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use crate::workspace_command::AppServerWorkspaceCommandRunner;
 use crate::workspace_command::WorkspaceCommandRunner;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
-use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CodexErrorInfo as AppServerCodexErrorInfo;
@@ -102,8 +93,6 @@ use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadResponse;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::ConfigWriteResponse;
-use codex_app_server_protocol::FeedbackUploadParams;
-use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::HooksListEntry;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -123,7 +112,6 @@ use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
 use codex_app_server_protocol::SandboxMode as AppServerSandboxMode;
-use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillErrorInfo;
@@ -148,8 +136,6 @@ use codex_features::Feature;
 use codex_features::FeaturesToml;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
-use codex_otel::SessionTelemetry;
-use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ActivePermissionProfile;
 use codex_protocol::models::BUILT_IN_PERMISSION_PROFILE_WORKSPACE;
@@ -194,7 +180,6 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use toml::Value as TomlValue;
 use uuid::Uuid;
-mod account_status;
 mod agent_message_consolidation;
 mod agent_navigation;
 mod agent_picker;
@@ -216,14 +201,12 @@ mod backend_banner_fallback;
 mod background_requests;
 mod composer_hints;
 mod config_persistence;
-mod connector_mentions;
 mod daemon_menu;
 mod daybreak;
 mod empty_state_policy;
 mod event_dispatch;
 mod exit_summary;
 mod experimental_features;
-mod feedback_upload;
 mod file_change_approvals;
 mod history_pagination;
 mod history_ui;
@@ -246,7 +229,6 @@ mod platform_actions;
 mod plugin_mentions;
 mod rate_limit_refresh;
 mod realtime_delivery;
-mod realtime_settings;
 mod reasoning_replay;
 mod recap;
 mod reconnect;
@@ -297,7 +279,6 @@ const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue."
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
 
 enum ThreadInteractiveRequest {
-    AppLink(AppLinkViewParams),
     Approval(ApprovalRequest),
     McpServerElicitation(McpServerElicitationFormRequest),
     UserVerification {
@@ -455,7 +436,6 @@ pub struct AppExitInfo {
     pub thread_id: Option<ThreadId>,
     pub resume_hint: Option<ResumableThread>,
     pub disconnect_info: Option<DisconnectInfo>,
-    pub update_action: Option<UpdateAction>,
     pub exit_reason: ExitReason,
 }
 
@@ -466,7 +446,6 @@ impl AppExitInfo {
             thread_id: None,
             resume_hint: None,
             disconnect_info: None,
-            update_action: None,
             exit_reason: ExitReason::Fatal(message.into()),
         }
     }
@@ -527,7 +506,6 @@ struct InitialHistoryReplayBuffer {
 pub(crate) struct App {
     feature_write_lock: Arc<tokio::sync::Mutex<()>>,
     model_catalog: Arc<ModelCatalog>,
-    pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     workspace_command_runner: Option<WorkspaceCommandRunner>,
@@ -555,12 +533,9 @@ pub(crate) struct App {
     turn_tips: turn_tips::TurnTips,
     pub(crate) transcript_view: crate::transcript_view::TranscriptView,
     last_rendered_history_tail: Option<history_ui::RenderedHistoryTail>,
-    last_thread_usage_status_cell: Option<history_ui::ThreadUsageStatusHistory>,
-    pub(crate) pending_thread_usage_history_refresh: bool,
 
     // Alternate-screen overlays: transcript, diff, and analytics.
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) retained_analytics: Option<Box<crate::analytics::AnalyticsView>>,
     pub(crate) deferred_history_lines: Vec<crate::terminal_hyperlinks::HyperlinkLine>,
     has_emitted_history_lines: bool,
     transcript_reflow: TranscriptReflowState,
@@ -587,16 +562,12 @@ pub(crate) struct App {
     ///
     /// This keeps scrollback consistent with the retained transcript after backtracking.
     pub(crate) backtrack_render_pending: bool,
-    pub(crate) feedback: codex_feedback::CodexFeedback,
-    feedback_audience: FeedbackAudience,
     environment_manager: Arc<EnvironmentManager>,
     app_server_target: AppServerTarget,
     reconnect: reconnect::ReconnectState,
     pending_right_click_paste: Option<right_click_paste::PendingPaste>,
     right_click_paste_environment: right_click_paste::PasteEnvironment,
     /// Set when the user confirms an update; propagated on exit.
-    daemon_cli_executable: Option<AbsolutePathBuf>,
-    pub(crate) pending_update_action: Option<UpdateAction>,
 
     /// Tracks the thread we intentionally shut down while exiting the app.
     ///
@@ -654,8 +625,6 @@ pub(crate) struct App {
     startup_protected_input_boundary: bool,
     /// Keeps that boundary armed while a startup approval waits for the typing-idle timer.
     startup_pending_protected_request: bool,
-    /// Invalidates in-flight full rate-limit reads when a newer rolling hard stop arrives.
-    account_email_request_id: Option<uuid::Uuid>,
     rate_limit_hard_stop_generation: u64,
     rate_limit_refresh_state: rate_limit_refresh::RateLimitRefreshState,
     pending_mcp_login_start: Option<PendingMcpLoginStart>,
@@ -827,9 +796,7 @@ impl App {
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),
             requires_openai_auth: self.chat_widget.requires_openai_auth,
-            has_codex_backend_auth: self.chat_widget.has_codex_backend_auth(),
             model_catalog: self.model_catalog.clone(),
-            feedback: self.feedback.clone(),
             is_first_run: false,
             status_account_display: self.chat_widget.status_account_display().cloned(),
             initial_plan_type: self.chat_widget.current_plan_type(),
@@ -837,7 +804,6 @@ impl App {
             startup_tooltip_override: None,
             status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
             terminal_title_invalid_items_warned: self.terminal_title_invalid_items_warned.clone(),
-            session_telemetry: self.session_telemetry.clone(),
         }
     }
 
@@ -936,21 +902,7 @@ impl App {
         };
 
         self.cancel_primed_browsing_for_event(&event);
-        let voice_toggle = |app: &Self, key: KeyEvent| {
-            key.kind == KeyEventKind::Press
-                && app
-                    .active_keymap_contexts()
-                    .contains_action(crate::keymap::KeymapActionId {
-                        context: crate::keymap::KeymapContext::Chat,
-                        action: "toggle_voice",
-                    })
-                && app.keymap.chat.toggle_voice.is_pressed(key)
-        };
-        // Find consumes otherwise-unhandled keys; let enabled voice controls reach App.
-        if !matches!(&event, TuiEvent::Key(key)
-            if voice_toggle(self, *key) && !self.transcript_view.owns_interaction_key(*key))
-            && self.handle_owned_transcript_event(tui, app_server, &event)?
-        {
+        if self.handle_owned_transcript_event(tui, app_server, &event)? {
             return Ok(AppRunControl::Continue);
         }
         // Leave browsing before unhandled editing input reaches shortcuts or offline input.
@@ -974,27 +926,6 @@ impl App {
                 };
                 event = TuiEvent::Key(key);
             }
-        }
-        if let TuiEvent::Key(key_event) = &event
-            && voice_toggle(self, *key_event)
-        {
-            self.cancel_transcript_browsing(tui);
-            if !self.chat_widget.handle_startup_submission_key(*key_event) {
-                self.control_voice(crate::app_event::VoiceControl::Toggle);
-            }
-            return Ok(AppRunControl::Continue);
-        }
-        if let TuiEvent::Key(key_event) = &event
-            && key_event.kind == KeyEventKind::Press
-            && self
-                .active_keymap_contexts()
-                .contains(crate::keymap::KeymapContext::Voice)
-            && self.keymap.chat.toggle_voice_mute.is_pressed(*key_event)
-        {
-            if !self.chat_widget.handle_startup_submission_key(*key_event) {
-                self.control_voice(crate::app_event::VoiceControl::Mute);
-            }
-            return Ok(AppRunControl::Continue);
         }
         if self.reconnect.offline
             && !self.chat_widget.keymap_contexts().is_warnings()
@@ -1097,11 +1028,8 @@ impl App {
                     }
                     // Allow widgets to process any pending timers before rendering.
                     let had_active_modal = self.chat_widget.has_active_modal();
-                    if let Some(owner) = self.background_voice.as_mut() {
-                        owner.refresh_realtime_microphone_level();
-                    }
+                    if let Some(owner) = self.background_voice.as_mut() {}
                     self.chat_widget.pre_draw_tick();
-                    self.refresh_agents_overview_usage(app_server, tui.frame_requester());
                     let rendered_area = self.render_chat_widget_frame(tui, screen_size)?;
                     if tui.is_owned_screen()
                         && self.transcript_view.history

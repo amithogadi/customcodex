@@ -5,12 +5,8 @@ use codex_core::ModelClient;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_features::Feature;
-use codex_login::CodexAuth;
-use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
-use codex_otel::SessionTelemetry;
-use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::models::ContentItem;
@@ -107,27 +103,13 @@ async fn responses_stream_includes_subagent_header_on_review() {
     let config = Arc::new(config);
 
     let thread_id = ThreadId::new();
-    let auth_mode = TelemetryAuthMode::Chatgpt;
     let session_source = SessionSource::SubAgent(SubAgentSource::Review);
     let model_info =
         codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
     let expected_window_id = format!("{thread_id}:0");
-    let session_telemetry = SessionTelemetry::new(
-        thread_id,
-        model.as_str(),
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        Some("test@test.com".to_string()),
-        Some(auth_mode),
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        session_source.clone(),
-    );
 
     let client = ModelClient::new(
-        /*auth_manager*/ None,
-        AgentIdentityAuthPolicy::JwtOnly,
+        None,
         thread_id,
         provider.clone(),
         session_source.clone(),
@@ -135,13 +117,11 @@ async fn responses_stream_includes_subagent_header_on_review() {
         config.model_verbosity,
         config.features.enabled(Feature::ContentItemKinds),
         config.features.enabled(Feature::ReasoningEffortOverride),
-        /*enable_request_compression*/ false,
-        /*include_timing_metrics*/ false,
-        /*beta_features_header*/ None,
-        /*concurrent_reasoning_summaries_enabled*/ false,
-        /*attestation_provider*/ None,
+        false,
+        None,
+        false,
+        None,
         config.http_client_factory(),
-        config.workspace_routing_context(),
         Vec::new(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
@@ -162,7 +142,6 @@ async fn responses_stream_includes_subagent_header_on_review() {
         .stream(
             &prompt,
             &model_info,
-            &session_telemetry,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
             /*service_tier*/ None,
@@ -251,27 +230,12 @@ async fn responses_stream_includes_subagent_header_on_other() {
     let config = Arc::new(config);
 
     let thread_id = ThreadId::new();
-    let auth_mode = TelemetryAuthMode::Chatgpt;
     let session_source = SessionSource::SubAgent(SubAgentSource::Other("my-task".to_string()));
     let model_info =
         codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
 
-    let session_telemetry = SessionTelemetry::new(
-        thread_id,
-        model.as_str(),
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        Some("test@test.com".to_string()),
-        Some(auth_mode),
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        session_source.clone(),
-    );
-
     let client = ModelClient::new(
-        /*auth_manager*/ None,
-        AgentIdentityAuthPolicy::JwtOnly,
+        None,
         thread_id,
         provider.clone(),
         session_source.clone(),
@@ -279,13 +243,11 @@ async fn responses_stream_includes_subagent_header_on_other() {
         config.model_verbosity,
         config.features.enabled(Feature::ContentItemKinds),
         config.features.enabled(Feature::ReasoningEffortOverride),
-        /*enable_request_compression*/ false,
-        /*include_timing_metrics*/ false,
-        /*beta_features_header*/ None,
-        /*concurrent_reasoning_summaries_enabled*/ false,
-        /*attestation_provider*/ None,
+        false,
+        None,
+        false,
+        None,
         config.http_client_factory(),
-        config.workspace_routing_context(),
         Vec::new(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
@@ -306,7 +268,6 @@ async fn responses_stream_includes_subagent_header_on_other() {
         .stream(
             &prompt,
             &model_info,
-            &session_telemetry,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
             /*service_tier*/ None,
@@ -377,30 +338,13 @@ async fn responses_respects_model_info_overrides_from_config() {
     let config = Arc::new(config);
 
     let thread_id = ThreadId::new();
-    let auth_mode =
-        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"))
-            .auth_mode()
-            .map(TelemetryAuthMode::from);
     let session_source =
         SessionSource::SubAgent(SubAgentSource::Other("override-check".to_string()));
     let model_info =
         codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
-    let session_telemetry = SessionTelemetry::new(
-        thread_id,
-        model.as_str(),
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        Some("test@test.com".to_string()),
-        auth_mode,
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        session_source.clone(),
-    );
 
     let client = ModelClient::new(
-        /*auth_manager*/ None,
-        AgentIdentityAuthPolicy::JwtOnly,
+        None,
         thread_id,
         provider.clone(),
         session_source.clone(),
@@ -408,13 +352,11 @@ async fn responses_respects_model_info_overrides_from_config() {
         config.model_verbosity,
         config.features.enabled(Feature::ContentItemKinds),
         config.features.enabled(Feature::ReasoningEffortOverride),
-        /*enable_request_compression*/ false,
-        /*include_timing_metrics*/ false,
-        /*beta_features_header*/ None,
-        /*concurrent_reasoning_summaries_enabled*/ false,
-        /*attestation_provider*/ None,
+        false,
+        None,
+        false,
+        None,
         config.http_client_factory(),
-        config.workspace_routing_context(),
         Vec::new(),
     );
     let responses_metadata = test_turn_responses_metadata(&client, thread_id, &session_source);
@@ -435,7 +377,6 @@ async fn responses_respects_model_info_overrides_from_config() {
         .stream(
             &prompt,
             &model_info,
-            &session_telemetry,
             effort,
             summary.unwrap_or(model_info.default_reasoning_summary),
             /*service_tier*/ None,
@@ -481,11 +422,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
         responses::ev_completed("resp-1"),
     ]);
 
-    let test = test_codex()
-        .with_config(|config| config.analytics_enabled = Some(true))
-        .build(&server)
-        .await
-        .expect("build test codex");
+    let test = test_codex().build(&server).await.expect("build test codex");
     let cwd = test.cwd_path();
 
     let first_request = responses::mount_sse_once(&server, response_body.clone()).await;
@@ -538,7 +475,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
             initial_parsed["analytics_enabled"].as_bool(),
             body_metadata["analytics_enabled"].as_bool(),
         ),
-        (Some(true), Some(true)),
+        (None, None),
     );
     assert_eq!(
         body_metadata

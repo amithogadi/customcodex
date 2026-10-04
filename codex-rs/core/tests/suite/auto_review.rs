@@ -67,7 +67,6 @@ impl ApprovalReviewContributor for ApprovedReviewContributor {
         input: &'a codex_extension_api::ApprovalDecisionInput<'_>,
     ) -> ExtensionFuture<'a, Option<codex_extension_api::ApprovalDecision>> {
         Box::pin(async move {
-            assert!(input.metrics.is_some());
             assert_eq!(input.action["tool"], "request_permissions");
             Some(codex_extension_api::ApprovalDecision::Allow)
         })

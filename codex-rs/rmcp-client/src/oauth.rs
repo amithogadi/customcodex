@@ -25,7 +25,6 @@ mod refresh_transaction;
 mod resolved_store;
 mod runtime;
 mod store_lock;
-mod telemetry;
 
 #[cfg(test)]
 #[path = "oauth/test_support.rs"]
@@ -36,8 +35,6 @@ use anyhow::Error;
 use anyhow::Result;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
-use codex_otel::auth_storage::Operation;
-use codex_otel::auth_storage::Store;
 use codex_secrets::LocalSecretsNamespace;
 use codex_secrets::SecretName;
 use codex_secrets::SecretScope;
@@ -234,14 +231,7 @@ impl StoredOAuthCredentialSnapshot {
             .map(|snapshot| snapshot.map(|snapshot| snapshot.credentials));
         }
 
-        let mut observation = telemetry::resolved(self.store, Operation::Load);
         let result = self.store.try_load(&DefaultKeyringStore, server_name, url);
-        observation.record_load_attempt(telemetry::store(self.store), &result);
-        if matches!(self.store.backend, resolved_store::Backend::Keyring(_))
-            && let Err(error) = &result
-        {
-            telemetry::record_secure_error(&mut observation, error.as_ref());
-        }
         let credentials = match result {
             Ok(credentials) => credentials,
             Err(error) if oauth_store_is_contended(&error) => return Ok(None),
@@ -479,7 +469,6 @@ pub(crate) fn save_oauth_tokens_with_lock_held(
 ) -> Result<()> {
     invalidate_enterprise_credential_version(server_name, &tokens.url, lock)?;
     let keyring_store = DefaultKeyringStore;
-    let mut observation = telemetry::policy(store_mode, keyring_backend_kind, Operation::Save);
     match store_mode {
         OAuthCredentialsStoreMode::Auto => save_oauth_tokens_with_keyring_with_fallback_to_file(
             &keyring_store,
@@ -489,7 +478,6 @@ pub(crate) fn save_oauth_tokens_with_lock_held(
         ),
         OAuthCredentialsStoreMode::File => {
             let result = save_oauth_tokens_to_file(tokens);
-            observation.record_save_attempt(Store::File, &result);
             result
         }
         OAuthCredentialsStoreMode::Keyring => {
@@ -500,10 +488,6 @@ pub(crate) fn save_oauth_tokens_with_lock_held(
                 server_name,
                 tokens,
             );
-            observation.record_save_attempt(telemetry::keyring(keyring_backend_kind), &result);
-            if let Err(error) = &result {
-                telemetry::record_secure_error(&mut observation, error.as_ref());
-            }
             result
         }
     }
@@ -587,13 +571,10 @@ fn save_oauth_tokens_with_keyring_and_cleanup_file<K: KeyringStore + Clone + 'st
 ) -> Result<()> {
     save_oauth_tokens_with_keyring(keyring_store, keyring_backend_kind, server_name, tokens)?;
     let key = compute_store_key(server_name, &tokens.url)?;
-    let mut observation = telemetry::policy(store_mode, keyring_backend_kind, Operation::Cleanup);
     let result = delete_oauth_tokens_from_file(&key);
-    observation.record_delete_attempt(Store::File, &result);
     if result.is_err() {
         warn!("failed to remove OAuth tokens from fallback storage");
     }
-    drop(observation);
     Ok(())
 }
 
@@ -603,11 +584,6 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore + Clone 
     server_name: &str,
     tokens: &StoredOAuthTokens,
 ) -> Result<()> {
-    let mut observation = telemetry::policy(
-        OAuthCredentialsStoreMode::Auto,
-        keyring_backend_kind,
-        Operation::Save,
-    );
     let result = save_oauth_tokens_with_keyring_and_cleanup_file(
         keyring_store,
         OAuthCredentialsStoreMode::Auto,
@@ -615,21 +591,15 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore + Clone 
         server_name,
         tokens,
     );
-    observation.record_save_attempt(telemetry::keyring(keyring_backend_kind), &result);
     match result {
         Ok(()) => Ok(()),
         // As on load, a store lock failure is a coordination failure rather than evidence that
         // the keyring backend is unavailable. Falling back could leave a newer File token hidden
         // behind a stale Secrets entry.
-        Err(error) if error.downcast_ref::<OAuthStoreLockFailure>().is_some() => {
-            telemetry::record_secure_error(&mut observation, error.as_ref());
-            Err(error)
-        }
+        Err(error) if error.downcast_ref::<OAuthStoreLockFailure>().is_some() => Err(error),
         Err(error) => {
             let message = error.to_string();
-            telemetry::record_secure_error(&mut observation, error.as_ref());
             let result = save_oauth_tokens_to_file(tokens);
-            observation.record_save_attempt(Store::File, &result);
             result.with_context(|| format!("failed to write OAuth tokens to keyring: {message}"))
         }
     }
@@ -671,7 +641,6 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore + Clone + 'static>(
     server_name: &str,
     url: &str,
 ) -> Result<bool> {
-    let mut observation = telemetry::policy(store_mode, keyring_backend_kind, Operation::Delete);
     let result = compute_store_key(server_name, url).and_then(|key| {
         let keyring_result =
             delete_oauth_tokens_from_keyring(keyring_store, keyring_backend_kind, server_name, url);
@@ -691,7 +660,6 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore + Clone + 'static>(
         let file_removed = delete_oauth_tokens_from_file(&key)?;
         Ok(keyring_removed || file_removed)
     });
-    observation.record_delete_attempt(Store::Multiple, &result);
     result
 }
 
@@ -824,7 +792,7 @@ impl OAuthPersistor {
                     expires_at,
                 };
                 if last_credentials.as_ref() != Some(&stored) {
-                    self.inner.credential_store.save_with_refresh_telemetry(
+                    self.inner.credential_store.save_after_refresh(
                         &DefaultKeyringStore,
                         &self.inner.server_name,
                         &stored,
@@ -1198,8 +1166,6 @@ mod tests {
     mod credential_store_tests;
     #[path = "persistor_tests.rs"]
     mod persistor_tests;
-    #[path = "telemetry_tests.rs"]
-    mod telemetry_tests;
 
     use super::test_support::TempCodexHome;
 

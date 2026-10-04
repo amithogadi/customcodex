@@ -59,7 +59,7 @@ pub(crate) fn identity(
     let has_stable_account = auth.is_some_and(|auth| {
         matches!(
             auth,
-            CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_) | CodexAuth::AgentIdentity(_)
+            CodexAuth::Chatgpt(_) | CodexAuth::ChatgptAuthTokens(_)
         ) && auth.get_account_id().is_some()
             && (auth.get_chatgpt_user_id().is_some() || auth.get_account_email().is_some())
     });

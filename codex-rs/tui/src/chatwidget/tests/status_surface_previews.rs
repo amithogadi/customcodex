@@ -1,7 +1,5 @@
 use super::*;
 use crate::bottom_pane::preview_line_for_title_items;
-use crate::chatwidget::ThreadUsageOutcome;
-use codex_app_server_protocol::ThreadUsage;
 use pretty_assertions::assert_eq;
 use ratatui::text::Line;
 
@@ -232,18 +230,6 @@ async fn status_line_setup_popup_hardcoded_only_snapshot() {
 }
 
 #[tokio::test]
-async fn status_line_setup_popup_workspace_headline_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.status_line_workspace_headline = Some("Workspace maintenance starts at 5pm".to_string());
-    chat.local_settings.tui.status_line = Some(vec!["workspace-headline".to_string()]);
-
-    assert_chatwidget_snapshot!(
-        "status_line_setup_popup_workspace_headline",
-        status_line_popup_snapshot(&mut chat)
-    );
-}
-
-#[tokio::test]
 async fn status_surface_preview_lines_mixed_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     chat.status_line_branch = Some("feature/mixed-preview".to_string());
@@ -281,107 +267,6 @@ async fn status_surface_preview_lines_rate_limits_snapshot() {
     );
 
     assert_chatwidget_snapshot!("status_surface_previews_rate_limits", snapshot);
-}
-
-#[tokio::test]
-async fn status_surface_preview_lines_thread_usage_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    chat.has_codex_backend_auth = true;
-    chat.plan_type = Some(PlanType::Business);
-    chat.local_settings.tui.status_line = Some(vec![
-        "thread-credits".to_string(),
-        "estimated-thread-cost".to_string(),
-    ]);
-    chat.local_settings.tui.terminal_title = Some(vec![
-        "thread-credits".to_string(),
-        "estimated-thread-cost".to_string(),
-    ]);
-    chat.refresh_status_surfaces();
-
-    let request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
-        event => panic!("expected shared thread usage preview request, got {event:?}"),
-    };
-    assert!(chat.finish_thread_usage_refresh(
-        thread_id,
-        request_id,
-        Ok(ThreadUsageOutcome::Available(ThreadUsage {
-            thread_id: thread_id.to_string(),
-            estimated_usage_credits_micros: 5_200_000,
-            estimated_usage_usd_micros: Some(210_000),
-            groups: Vec::new(),
-        })),
-    ));
-
-    let snapshot = combined_preview_snapshot(
-        &mut chat,
-        &[
-            StatusLineItem::ThreadCredits,
-            StatusLineItem::EstimatedThreadCost,
-        ],
-        &[
-            TerminalTitleItem::ThreadCredits,
-            TerminalTitleItem::EstimatedThreadCost,
-        ],
-    );
-
-    assert_chatwidget_snapshot!("status_surface_previews_thread_usage", snapshot);
-}
-
-#[tokio::test]
-async fn status_surface_thread_usage_previews_omit_unavailable_usd_estimates() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    let thread_id = ThreadId::new();
-    chat.thread_id = Some(thread_id);
-    chat.has_codex_backend_auth = true;
-    chat.plan_type = Some(PlanType::Business);
-    chat.local_settings.tui.status_line = Some(vec![
-        "thread-credits".to_string(),
-        "estimated-thread-cost".to_string(),
-    ]);
-    chat.local_settings.tui.terminal_title = Some(vec![
-        "thread-credits".to_string(),
-        "estimated-thread-cost".to_string(),
-    ]);
-    chat.refresh_status_surfaces();
-
-    let request_id = match rx.try_recv() {
-        Ok(AppEvent::RefreshThreadUsage { request_id, .. }) => request_id,
-        event => panic!("expected shared thread usage preview request, got {event:?}"),
-    };
-    assert!(chat.finish_thread_usage_refresh(
-        thread_id,
-        request_id,
-        Ok(ThreadUsageOutcome::Available(ThreadUsage {
-            thread_id: thread_id.to_string(),
-            estimated_usage_credits_micros: 5_200_000,
-            estimated_usage_usd_micros: None,
-            groups: Vec::new(),
-        })),
-    ));
-
-    assert_eq!(
-        status_preview_line(
-            &mut chat,
-            &[
-                StatusLineItem::ThreadCredits,
-                StatusLineItem::EstimatedThreadCost,
-            ],
-        ),
-        "5.2 credits"
-    );
-    assert_eq!(
-        title_preview_line(
-            &mut chat,
-            &[
-                TerminalTitleItem::ThreadCredits,
-                TerminalTitleItem::EstimatedThreadCost,
-            ],
-        ),
-        "5.2 credits"
-    );
 }
 
 #[tokio::test]
@@ -526,20 +411,6 @@ async fn terminal_title_setup_popup_rate_limits_snapshot() {
 
     assert_chatwidget_snapshot!(
         "terminal_title_setup_popup_rate_limits",
-        terminal_title_popup_snapshot(&mut chat)
-    );
-}
-
-#[tokio::test]
-async fn terminal_title_setup_popup_thread_usage_snapshot() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-    chat.local_settings.tui.terminal_title = Some(vec![
-        "thread-credits".to_string(),
-        "estimated-thread-cost".to_string(),
-    ]);
-
-    assert_chatwidget_snapshot!(
-        "terminal_title_setup_popup_thread_usage",
         terminal_title_popup_snapshot(&mut chat)
     );
 }

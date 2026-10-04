@@ -50,10 +50,8 @@ use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_core::config::Config;
-pub use codex_core::otel_init::build_provider as build_otel_provider;
 pub use codex_exec_server::EnvironmentManager;
 pub use codex_exec_server::ExecServerRuntimeOptions;
-use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::de::DeserializeOwned;
@@ -208,8 +206,6 @@ pub struct InProcessClientStartArgs {
     pub cloud_config_bundle: CloudConfigBundleLoader,
     /// Policy shared with transports created by the embedder before startup.
     pub embedded_network_policy: EmbeddedNetworkPolicy,
-    /// Feedback sink used by app-server/core telemetry and logs.
-    pub feedback: CodexFeedback,
     /// SQLite tracing layer used to flush recently emitted logs before feedback upload.
     pub log_db: Option<LogDbLayer>,
     /// Process-wide SQLite state handle shared with the embedded app-server.
@@ -273,7 +269,6 @@ impl InProcessClientStartArgs {
             cloud_config_bundle: self.cloud_config_bundle,
             embedded_network_policy: self.embedded_network_policy,
             thread_config_loader: Arc::new(NoopThreadConfigLoader),
-            feedback: self.feedback,
             log_db: self.log_db,
             state_db: self.state_db,
             environment_manager: self.environment_manager,
@@ -431,26 +426,6 @@ impl InProcessAppServerClient {
                         let Some(event) = event else {
                             break;
                         };
-                        if let InProcessServerEvent::ServerRequest(request) = &event
-                            && let ServerRequest::ChatgptAuthTokensRefresh { request_id, .. } =
-                                request.as_ref()
-                        {
-                            let send_result = request_sender.fail_server_request(
-                                request_id.clone(),
-                                JSONRPCErrorError {
-                                    code: -32000,
-                                    message: "chatgpt auth token refresh is not supported for in-process app-server clients".to_string(),
-                                    data: None,
-                                },
-                            );
-                            if let Err(err) = send_result {
-                                warn!(
-                                    "failed to reject unsupported chatgpt auth token refresh request: {err}"
-                                );
-                            }
-                            continue;
-                        }
-
                         if event_tx.send(event).is_err() {
                             event_stream_enabled = false;
                         }
@@ -883,7 +858,6 @@ mod tests {
             strict_config: false,
             cloud_config_bundle: CloudConfigBundleLoader::default(),
             embedded_network_policy: Default::default(),
-            feedback: CodexFeedback::new(),
             log_db: None,
             state_db: Some(state_db),
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
@@ -2099,7 +2073,6 @@ mod tests {
             strict_config: false,
             cloud_config_bundle: CloudConfigBundleLoader::default(),
             embedded_network_policy: Default::default(),
-            feedback: CodexFeedback::new(),
             log_db: None,
             state_db: None,
             environment_manager: environment_manager.clone(),

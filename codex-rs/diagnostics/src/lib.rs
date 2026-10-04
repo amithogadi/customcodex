@@ -1,3 +1,9 @@
+mod runtime;
+pub use runtime::{
+    RuntimeMetricTotals, RuntimeMetricsSummary, RuntimeOperation, RuntimeTimer,
+    record_runtime_summary, take_runtime_summary,
+};
+
 use std::sync::Mutex;
 use std::sync::Once;
 use std::sync::atomic::AtomicU64;

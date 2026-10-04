@@ -126,8 +126,6 @@ impl ToolInvocation {
 pub struct McpToolOutput {
     pub result: CallToolResult,
     pub tool_input: JsonValue,
-    // Keep the original metadata for hooks; this flag only controls analytics capture.
-    pub(crate) result_metadata_capture_allowed: bool,
     pub wall_time: Duration,
     pub original_image_detail_supported: bool,
     pub truncation_policy: TruncationPolicy,
@@ -166,9 +164,6 @@ impl ToolOutput for McpToolOutput {
     }
 
     fn tool_result_metadata(&self) -> Option<&JsonValue> {
-        if !self.result_metadata_capture_allowed {
-            return None;
-        }
         self.result.meta.as_ref()
     }
 
@@ -395,7 +390,7 @@ pub struct ExecCommandToolOutput {
 
 impl ToolOutput for ExecCommandToolOutput {
     fn log_output(&self) -> String {
-        // The telemetry budget must not inherit the model's output-token limit.
+        // Local logs must not inherit the model's output-token limit.
         let mut output = String::from_utf8_lossy(&self.raw_output).into_owned();
         if let Some(omitted_bytes) = self.output_omitted_bytes {
             let marker = format_output_omission_marker(omitted_bytes.get());

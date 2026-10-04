@@ -148,17 +148,7 @@ pub(super) async fn run_main_inner(
             CloudConfigBundleLoader::default(),
         )
         .await;
-        let validation_cloud_config_bundle = if workload_identity_selected {
-            cloud_config_bundle_for_app_server_target(
-                &validation_target,
-                &validation_bootstrap,
-                &codex_home,
-                &embedded_network_policy,
-            )
-            .await?
-        } else {
-            CloudConfigBundleLoader::default()
-        };
+        let validation_cloud_config_bundle = codex_config::CloudConfigBundleLoader::default();
         load_config_or_exit(
             cli_kv_overrides.clone(),
             ConfigOverrides {
@@ -342,14 +332,7 @@ pub(super) async fn run_main_inner(
     } else {
         Ok(())
     };
-    let cloud_config_bundle = startup_draft
-        .run_until(cloud_config_bundle_for_app_server_target(
-            &app_server_target,
-            &bootstrap_config,
-            &codex_home,
-            &embedded_network_policy,
-        ))
-        .await??;
+    let cloud_config_bundle = codex_config::CloudConfigBundleLoader::default();
     let bootstrap_config_toml = &bootstrap_config.config_toml;
 
     let cwd_override = if app_server_target.uses_remote_workspace() {
@@ -465,18 +448,7 @@ pub(super) async fn run_main_inner(
         config.cwd.as_path(),
     );
 
-    let mut cloud_config_bundle = if workload_identity_selected {
-        cloud_config_bundle
-    } else {
-        startup_draft
-            .run_until(cloud_config_bundle_loader_for_storage(
-                embedded_network_policy.bind_bootstrap_auth(
-                    app_server_target.auth_config_for_cloud_loader(config.auth_config()),
-                ),
-                /*enable_codex_api_key_env*/ false,
-            ))
-            .await??
-    };
+    let mut cloud_config_bundle = codex_config::CloudConfigBundleLoader::default();
     let managed_worktree = if cli.shared.worktree {
         let (destination, bundle, worktree) = startup_draft
             .run_until(worktree_startup::prepare(
@@ -550,7 +522,6 @@ pub(super) async fn run_main_inner(
                 // Daemon startup needs no terminal input. Keep the composer visible and
                 // responsive while it checks the running server or prepares an installation.
                 let result = codex_app_server_daemon::start_with_features(&daemon_features).await;
-                daemon_telemetry::record_start(&config, &result).await;
                 match result {
                     Ok(output) => Ok(Some(output)),
                     #[cfg(windows)]
@@ -624,117 +595,6 @@ pub(super) async fn run_main_inner(
 
     remove_legacy_tui_log_file(config.codex_home.as_path());
 
-    let otel_originator = originator().value;
-    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_app_server_client::build_otel_provider(
-            &config,
-            env!("CARGO_PKG_VERSION"),
-            /*service_name_override*/ None,
-            /*default_analytics_enabled*/ true,
-        )
-    })) {
-        Ok(Ok(otel)) => otel,
-        Ok(Err(e)) => {
-            startup_draft.flush_pending_events().await?;
-            startup_draft
-                .tui_mut()
-                .with_restored(crate::tui::TerminalHandoff::Restore, || async {
-                    #[allow(clippy::print_stderr)]
-                    {
-                        eprintln!("Could not create otel exporter: {e}");
-                    }
-                })
-                .await;
-            None
-        }
-        Err(_) => {
-            #[allow(clippy::print_stderr)]
-            {
-                eprintln!("Could not create otel exporter: panicked during initialization");
-            }
-            startup_draft.tui_mut().recover_after_caught_panic()?;
-            None
-        }
-    };
-    let metrics = otel
-        .as_ref()
-        .and_then(codex_otel::OtelProvider::metrics)
-        .cloned();
-    if let Some(metrics) = &metrics {
-        let _ = codex_otel::record_process_start_once(metrics, otel_originator.as_str());
-        let telemetry =
-            codex_rollout::sqlite_telemetry_recorder(metrics.clone(), otel_originator.as_str());
-        let _ = codex_state::install_process_db_telemetry(telemetry);
-    }
-    let selection_reason = match (&app_server_target, daemon_exclusion) {
-        (AppServerTarget::Remote { .. }, _) => "explicit_remote",
-        _ if cli.agents_overview => "agents",
-        _ if elevated_warning.is_some() => "elevated_windows",
-        (_, Some("--no-daemon")) => "explicit_no_daemon",
-        (_, Some(_)) => "incompatible_option",
-        _ if auto_start_daemon => "auto_start",
-        (AppServerTarget::LocalDaemon { .. }, _) => "existing_daemon",
-        (AppServerTarget::Embedded, None) => "auto_start_disabled",
-    };
-    let daemon_settings = if metrics.is_some() {
-        codex_app_server_daemon::telemetry::settings_tags(&config.codex_home)
-            .await
-            .to_vec()
-    } else {
-        Vec::new()
-    };
-    let mut launch_tags = daemon_settings.to_vec();
-    launch_tags.extend([
-        ("daemon_selection_reason", selection_reason),
-        (
-            "daemon_auto_start",
-            if config.features.enabled(Feature::DaemonAutoStart) {
-                "enabled"
-            } else {
-                "disabled"
-            },
-        ),
-    ]);
-    // Record the first connection attempt's actual mode, including embedded fallback; never reconnects.
-    let launch_telemetry = move |target: &AppServerTarget, connected: bool| {
-        let Some(metrics) = metrics else { return };
-        let app_server_mode = match (connected, target) {
-            (false, _) => "unconfirmed",
-            (true, AppServerTarget::Embedded) => "in_process",
-            (true, AppServerTarget::LocalDaemon { .. }) => "local_daemon",
-            (true, AppServerTarget::Remote { .. }) => "remote",
-        };
-        // Use a fixed category, not the versioned or user-provided terminal identifier.
-        let terminal_info = codex_terminal_detection::terminal_info();
-        let terminal_name = match terminal_info.name {
-            TerminalName::AppleTerminal => "apple_terminal",
-            TerminalName::Ghostty => "ghostty",
-            TerminalName::Iterm2 => "iterm2",
-            TerminalName::WarpTerminal => "warp",
-            TerminalName::VsCode => "vscode",
-            TerminalName::WezTerm => "wezterm",
-            TerminalName::Kitty => "kitty",
-            TerminalName::Alacritty => "alacritty",
-            TerminalName::Konsole => "konsole",
-            TerminalName::GnomeTerminal => "gnome_terminal",
-            TerminalName::Vte => "vte",
-            TerminalName::WindowsTerminal => "windows_terminal",
-            TerminalName::Dumb => "dumb",
-            TerminalName::Unknown => "unknown",
-        };
-        let multiplexer = match terminal_info.multiplexer {
-            Some(Multiplexer::Tmux { .. }) => "tmux",
-            Some(Multiplexer::Zellij { .. }) => "zellij",
-            None => "none",
-        };
-        launch_tags.extend([
-            ("app_server_mode", app_server_mode),
-            ("terminal_name", terminal_name),
-            ("multiplexer", multiplexer),
-        ]);
-        let _ = metrics.counter("codex.tui.start", /*inc*/ 1, &launch_tags);
-    };
-    let launch_telemetry = daemon_telemetry::Launch(Some(launch_telemetry));
     let state_db = startup_draft
         .run_until(init_state_db_for_app_server_target(
             &config,
@@ -766,12 +626,6 @@ pub(super) async fn run_main_inner(
             if let Some(worktree) = managed_worktree.as_ref() {
                 worktree.report_startup_failure();
             }
-            launch_telemetry.record(&app_server_target, /*connected*/ false);
-            if let Some(otel) = otel {
-                let _ = otel
-                    .shutdown_with_timeout(INTERACTIVE_OTEL_SHUTDOWN_TIMEOUT)
-                    .await;
-            }
             std::process::exit(1);
         }
     }
@@ -786,12 +640,6 @@ pub(super) async fn run_main_inner(
             eprintln!("{err}");
             if let Some(worktree) = managed_worktree.as_ref() {
                 worktree.report_startup_failure();
-            }
-            launch_telemetry.record(&app_server_target, /*connected*/ false);
-            if let Some(otel) = otel {
-                let _ = otel
-                    .shutdown_with_timeout(INTERACTIVE_OTEL_SHUTDOWN_TIMEOUT)
-                    .await;
             }
             std::process::exit(1);
         }
@@ -815,9 +663,7 @@ pub(super) async fn run_main_inner(
         let log_file = log_file_opts.open(log_dir.join(TUI_LOG_FILE_NAME))?;
         let (non_blocking, guard) = non_blocking(log_file);
         let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new(
-                "codex_core=info,codex_tui=info,codex_rmcp_client=info,codex_realtime_webrtc=warn",
-            )
+            EnvFilter::new("codex_core=info,codex_tui=info,codex_rmcp_client=info")
         });
         let file_layer = tracing_subscriber::fmt::layer()
             .with_writer(non_blocking)
@@ -832,10 +678,6 @@ pub(super) async fn run_main_inner(
     } else {
         (None, None)
     };
-
-    let feedback = codex_feedback::CodexFeedback::new();
-    let feedback_layer = feedback.logger_layer();
-    let feedback_metadata_layer = feedback.metadata_layer();
 
     if cli.oss && model_provider_override.is_some() {
         // We're in the oss section, so provider_id should be Some
@@ -861,24 +703,19 @@ pub(super) async fn run_main_inner(
             .await?;
     }
 
-    let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
-
-    let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
-
-    let log_db = state_db
-        .clone()
-        .map(|state_db| log_db::start(state_db, std::sync::Arc::new(feedback.clone())));
+    let log_db = state_db.clone().map(|state_db| {
+        log_db::start(
+            state_db,
+            std::sync::Arc::new(|diagnostic: &str| eprintln!("{diagnostic}")),
+        )
+    });
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(log_db::default_filter()));
 
     let _ = tracing_subscriber::registry()
         .with(tui_file_layer)
-        .with(feedback_layer)
-        .with(feedback_metadata_layer)
         .with(log_db_layer)
-        .with(otel_logger_layer)
-        .with(otel_tracing_layer)
         .try_init();
 
     if let Err(err) = screen_reader_result {
@@ -898,14 +735,12 @@ pub(super) async fn run_main_inner(
         overrides,
         cli_kv_overrides,
         cloud_config_bundle,
-        feedback,
         log_db,
         state_db,
         environment_manager,
         embedded_network_policy,
         managed_worktree.clone(),
         daemon_startup_warning,
-        launch_telemetry,
         startup_draft,
     ))
     .await
@@ -919,32 +754,6 @@ pub(super) async fn run_main_inner(
     }
 
     // The TUI owns this request's consent. The child is silent; installation remains unconfirmed.
-    if let Ok(exit) = &app_result
-        && let Some(UpdateAction::Daemon(source)) = exit.update_action
-        && let Some(metrics) = otel.as_ref().and_then(codex_otel::OtelProvider::metrics)
-    {
-        let mut tags = daemon_settings.to_vec();
-        tags.extend([
-            ("initiation_source", "tui_handoff"),
-            (
-                "update_target",
-                match source {
-                    DaemonUpdateSource::PublicStable => "public_stable",
-                    DaemonUpdateSource::ThisCli => "this_cli",
-                },
-            ),
-            ("outcome", "handoff_requested"),
-        ]);
-        let _ = metrics.counter("codex.daemon.update", /*inc*/ 1, &tags);
-    }
-
-    if let Some(otel) = otel
-        && let Err(err) = otel
-            .shutdown_with_timeout(INTERACTIVE_OTEL_SHUTDOWN_TIMEOUT)
-            .await
-    {
-        warn!(error = %err, "failed to finish interactive telemetry shutdown");
-    }
 
     app_result
 }

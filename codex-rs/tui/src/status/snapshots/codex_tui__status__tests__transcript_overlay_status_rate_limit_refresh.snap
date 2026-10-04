@@ -8,9 +8,6 @@ before:
 
   >_ OpenAI Codex (v0.0.0)
 
-  Visit https://chatgpt.com/settings/usage for up-to-date
-  information on rate limits and credits
-
   Model:        gpt-5.1-codex-max (reasoning none, summaries auto)
   Directory:    [[workspace]]
   Permissions:  Custom (workspace with network access, Ask for approval)
@@ -18,6 +15,9 @@ before:
 
   Token usage:  0 total  (0 input + 0 output)
   Limits:       refresh requested; run /status again shortly.
+
+
+
 
 
 
@@ -40,9 +40,6 @@ after:
 
   >_ OpenAI Codex (v0.0.0)
 
-  Visit https://chatgpt.com/settings/usage for up-to-date
-  information on rate limits and credits
-
   Model:         gpt-5.1-codex-max (reasoning none, summaries auto)
   Directory:     [[workspace]]
   Permissions:   Custom (workspace with network access, Ask for approval)
@@ -54,6 +51,9 @@ after:
   Weekly limit:  [██████████████░░░░░░] 70% left (resets later)
 
 next message
+
+
+
 
 
 

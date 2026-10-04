@@ -40,42 +40,6 @@ pub(super) async fn prepare(daemon: &Daemon, settings: &DaemonSettings) -> Resul
     .map(|_| ())
 }
 
-/// Select this CLI's complete package and pin it, restarting only a running daemon.
-/// Returns None when the user cancels without changing the installation.
-pub async fn update_from_cli(
-    confirm: impl FnOnce(&InstallRequest) -> Result<bool>,
-) -> Result<Option<crate::UpdateOutput>> {
-    crate::ensure_supported_platform()?;
-    #[cfg(windows)]
-    crate::backend::windows::ensure_not_elevated()?;
-    let daemon = Daemon::from_environment()?;
-    let settings = daemon.load_settings().await?;
-    let source = InstallContext::current().package_layout.as_ref();
-    if !Box::pin(prepare_from_package(
-        &daemon,
-        &settings,
-        InstallMode::Replace,
-        source.map(|layout| layout.package_dir.as_path()),
-        &std::env::current_exe()?,
-        confirm,
-    ))
-    .await?
-    {
-        return Ok(None);
-    }
-    let managed_codex_path = daemon.current_managed_codex_bin()?;
-    Ok(Some(crate::UpdateOutput {
-        status: crate::UpdateStatus::Updated,
-        installed_version: Some(managed_install::managed_codex_version(&managed_codex_path).await?),
-        running_version: crate::client::probe(&daemon.socket_path)
-            .await
-            .ok()
-            .map(|info| info.app_server_version),
-        managed_codex_path,
-        message: "The CLI package is selected and pinned. Run `codex app-server daemon update` to return to production updates.".to_string(),
-    }))
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum InstallMode {
     Missing,
@@ -289,9 +253,6 @@ async fn prepare_from_package(
     windows::validate_selection(&root)?;
     if mode == InstallMode::Replace {
         let stopped = async {
-            crate::backend::pid_update_loop_backend(daemon.backend_paths(settings))
-                .stop()
-                .await?;
             anyhow::ensure!(
                 managed_install::package_root(home) == previous_root
                     && previous_root.join("current").canonicalize().ok() == previous_release,
@@ -311,18 +272,6 @@ async fn prepare_from_package(
         }
         .await;
         if let Err(error) = stopped {
-            if let Err(restore_error) = async {
-                daemon
-                    .current_installation()?
-                    .ensure_managed_updater(settings)
-                    .await
-            }
-            .await
-            {
-                eprintln!(
-                    "warning: failed to restore the daemon updater after replacement failed: {restore_error:#}"
-                );
-            }
             return Err(error);
         }
     }
@@ -346,9 +295,6 @@ async fn prepare_from_package(
     if backend.is_some() {
         let selected = Daemon {
             pid_file: daemon.pid_file.with_file_name(crate::DAEMON_PID_FILE_NAME),
-            update_pid_file: daemon
-                .update_pid_file
-                .with_file_name(crate::DAEMON_UPDATE_PID_FILE_NAME),
             managed_codex_bin: root.join("current").join(entrypoint),
             ..daemon.clone()
         };

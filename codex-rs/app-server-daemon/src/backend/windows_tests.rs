@@ -259,7 +259,6 @@ fn detached_launch_preflight_allows_residual_job() {
         let backend = crate::backend::pid::PidBackend::new(
             script,
             temp.path().join("state").join("daemon.pid"),
-            /*remote_control_enabled*/ false,
         );
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

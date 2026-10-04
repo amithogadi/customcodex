@@ -1,15 +1,11 @@
 //! Resolves the configured MCP OAuth store and pins that concrete source for one client lifecycle.
 //! Retains the originating client for later background storage observations.
 
-use super::telemetry;
 use anyhow::Context;
 use anyhow::Result;
 use codex_config::types::AuthKeyringBackendKind;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_keyring_store::KeyringStore;
-use codex_otel::auth_storage::AuthStorageOriginator;
-use codex_otel::auth_storage::Operation;
-use codex_otel::auth_storage::Store;
 
 use super::OAuthKeyringLoadError;
 use super::OAuthStore;
@@ -38,7 +34,6 @@ pub(crate) struct ResolvedOAuthCredentialStore {
     pub(super) backend: Backend,
     pub(super) mode: OAuthCredentialsStoreMode,
     pub(super) kind: AuthKeyringBackendKind,
-    pub(super) originator: AuthStorageOriginator,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +56,6 @@ impl ResolvedOAuthCredentialStore {
             backend: Backend::File,
             mode: OAuthCredentialsStoreMode::File,
             kind: AuthKeyringBackendKind::Direct,
-            originator: AuthStorageOriginator::current(),
         }
     }
 
@@ -70,7 +64,6 @@ impl ResolvedOAuthCredentialStore {
             backend: Backend::Keyring(kind),
             mode: OAuthCredentialsStoreMode::Keyring,
             kind,
-            originator: AuthStorageOriginator::current(),
         }
     }
 
@@ -94,7 +87,6 @@ impl ResolvedOAuthCredentialStore {
         server_name: &str,
         url: &str,
     ) -> Result<Option<StoredOAuthTokens>> {
-        let mut observation = telemetry::resolved(self, Operation::Load);
         let result = match self.backend {
             Backend::File => load_oauth_tokens_from_file(server_name, url)
                 .context("failed to reread OAuth tokens from resolved file storage"),
@@ -109,12 +101,6 @@ impl ResolvedOAuthCredentialStore {
                 "failed to reread OAuth tokens from resolved keyring storage; refusing file fallback",
             ),
         };
-        observation.record_load_attempt(telemetry::store(self), &result);
-        if matches!(self.backend, Backend::Keyring(_))
-            && let Err(error) = &result
-        {
-            telemetry::record_secure_error(&mut observation, error.as_ref());
-        }
         result
     }
 
@@ -155,7 +141,6 @@ impl ResolvedOAuthCredentialStore {
         server_name: &str,
         tokens: &StoredOAuthTokens,
     ) -> Result<()> {
-        let mut observation = telemetry::resolved(self, Operation::Save);
         let result = match self.backend {
             Backend::File => save_oauth_tokens_to_file(tokens),
             Backend::Keyring(keyring_backend_kind) => save_oauth_tokens_with_keyring(
@@ -165,30 +150,17 @@ impl ResolvedOAuthCredentialStore {
                 tokens,
             ),
         };
-        observation.record_save_attempt(telemetry::store(self), &result);
-        if matches!(self.backend, Backend::Keyring(_))
-            && let Err(error) = &result
-        {
-            telemetry::record_secure_error(&mut observation, error.as_ref());
-        }
         result
     }
 
     /// Records the refresh-persistence milestone in addition to the underlying pinned save.
-    pub(crate) fn save_with_refresh_telemetry<K: KeyringStore + Clone + 'static>(
+    pub(crate) fn save_after_refresh<K: KeyringStore + Clone + 'static>(
         self,
         keyring_store: &K,
         server_name: &str,
         tokens: &StoredOAuthTokens,
     ) -> Result<()> {
-        let mut observation = telemetry::resolved(self, Operation::RefreshPersist);
         let result = self.save(keyring_store, server_name, tokens);
-        observation.record_save_attempt(telemetry::store(self), &result);
-        if matches!(self.backend, Backend::Keyring(_))
-            && let Err(error) = &result
-        {
-            telemetry::record_secure_error(&mut observation, error.as_ref());
-        }
         result
     }
 
@@ -199,7 +171,6 @@ impl ResolvedOAuthCredentialStore {
         server_name: &str,
         url: &str,
     ) -> Result<bool> {
-        let mut observation = telemetry::resolved(self, Operation::Delete);
         let result = match self.backend {
             Backend::File => compute_store_key(server_name, url)
                 .and_then(|key| delete_oauth_tokens_from_file(&key)),
@@ -210,12 +181,6 @@ impl ResolvedOAuthCredentialStore {
                 delete_oauth_tokens_from_secrets_keyring(keyring_store, server_name, url)
             }
         };
-        observation.record_delete_attempt(telemetry::store(self), &result);
-        if matches!(self.backend, Backend::Keyring(_))
-            && let Err(error) = &result
-        {
-            telemetry::record_secure_error(&mut observation, error.as_ref());
-        }
         result
     }
 }
@@ -233,7 +198,6 @@ pub(crate) fn resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone + '
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<Option<ResolvedOAuthTokens>> {
-    let mut observation = telemetry::policy(store_mode, keyring_backend_kind, Operation::Load);
     match store_mode {
         OAuthCredentialsStoreMode::Auto => {
             // Auto remains keyring-first at lifecycle startup. The returned source is then pinned
@@ -249,7 +213,6 @@ pub(crate) fn resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone + '
                 server_name,
                 url,
             );
-            observation.record_load_attempt(telemetry::keyring(keyring_backend_kind), &result);
             match result {
                 Ok(Some(tokens)) => Ok(Some(ResolvedOAuthTokens {
                     tokens,
@@ -258,7 +221,6 @@ pub(crate) fn resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone + '
                 })),
                 Ok(None) => {
                     let result = load_oauth_tokens_from_file(server_name, url);
-                    observation.record_load_attempt(Store::File, &result);
                     Ok(result?.map(|tokens| ResolvedOAuthTokens {
                         tokens,
                         store: ResolvedOAuthCredentialStore::file()
@@ -268,14 +230,9 @@ pub(crate) fn resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone + '
                 // Auto may fall back when the keyring backend is unavailable, but a Secrets
                 // aggregate-lock failure means authority may be changing. Consulting File in
                 // that state could replay credentials hidden behind a newer Secrets entry.
-                Err(OAuthKeyringLoadError::StoreLock(error)) => {
-                    telemetry::record_secure_error(&mut observation, &error);
-                    Err(error.into())
-                }
+                Err(OAuthKeyringLoadError::StoreLock(error)) => Err(error.into()),
                 Err(error) => {
-                    telemetry::record_secure_error(&mut observation, &error);
                     let result = load_oauth_tokens_from_file(server_name, url);
-                    observation.record_load_attempt(Store::File, &result);
                     Ok(result
                         .with_context(|| {
                             format!("failed to read OAuth tokens from keyring: {error}")
@@ -290,7 +247,6 @@ pub(crate) fn resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone + '
         }
         OAuthCredentialsStoreMode::File => {
             let result = load_oauth_tokens_from_file(server_name, url);
-            observation.record_load_attempt(Store::File, &result);
             Ok(result?.map(|tokens| ResolvedOAuthTokens {
                 tokens,
                 store: ResolvedOAuthCredentialStore::file()
@@ -304,10 +260,6 @@ pub(crate) fn resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone + '
                 server_name,
                 url,
             );
-            observation.record_load_attempt(telemetry::keyring(keyring_backend_kind), &result);
-            if let Err(error) = &result {
-                telemetry::record_secure_error(&mut observation, error);
-            }
             Ok(result
                 .map_err(anyhow::Error::from)
                 .context("failed to read OAuth tokens from keyring")?
@@ -327,15 +279,8 @@ pub(crate) fn try_resolve_oauth_tokens_from_store_policy<K: KeyringStore + Clone
     store_mode: OAuthCredentialsStoreMode,
     keyring_backend_kind: AuthKeyringBackendKind,
 ) -> Result<Option<ResolvedOAuthTokens>> {
-    let mut observation = telemetry::policy(store_mode, keyring_backend_kind, Operation::Load);
     let mut load = |store: ResolvedOAuthCredentialStore| {
         let result = store.try_load(keyring_store, server_name, url);
-        observation.record_load_attempt(telemetry::store(store), &result);
-        if matches!(store.backend, Backend::Keyring(_))
-            && let Err(error) = &result
-        {
-            telemetry::record_secure_error(&mut observation, error.as_ref());
-        }
         result.map(|tokens| tokens.map(|tokens| ResolvedOAuthTokens { tokens, store }))
     };
     let keyring = ResolvedOAuthCredentialStore::keyring(keyring_backend_kind)

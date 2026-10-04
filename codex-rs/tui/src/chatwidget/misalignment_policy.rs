@@ -48,7 +48,6 @@ impl ChatWidget {
             && !matches!(
                 op,
                 AppCommand::Interrupt
-                    | AppCommand::RealtimeConversationStop { .. }
                     | AppCommand::CleanBackgroundTerminals
                     | AppCommand::OverrideTurnContext { .. }
                     | AppCommand::ReloadUserConfig

@@ -8,7 +8,6 @@ use std::sync::PoisonError;
 use std::sync::Weak;
 use std::time::Duration;
 
-use codex_analytics::AnalyticsEventsClient;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -1655,18 +1654,12 @@ async fn installed_tools_with_start(
 ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
     let mut builder = ExtensionRegistryBuilder::<()>::new();
     let goal_service = Arc::new(GoalService::new());
-    install_with_backend(
-        &mut builder,
-        runtime,
-        AnalyticsEventsClient::disabled(),
-        /*metrics_client*/ None,
-        Weak::new(),
-        goal_service,
-        |_| GoalExtensionConfig {
+    install_with_backend(&mut builder, runtime, Weak::new(), goal_service, |_| {
+        GoalExtensionConfig {
             enabled: true,
             max_goal_token_budget: None,
-        },
-    );
+        }
+    });
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = ExtensionData::new(thread_id.to_string());
@@ -1678,7 +1671,6 @@ async fn installed_tools_with_start(
                 persistent_thread_state_available,
                 environments: &[],
                 mcp_resource_client: None,
-                extension_metrics: None,
                 session_store: &session_store,
                 thread_store: &thread_store,
             })
@@ -1715,8 +1707,6 @@ impl GoalExtensionHarness {
         install_with_backend(
             &mut builder,
             runtime,
-            AnalyticsEventsClient::disabled(),
-            /*metrics_client*/ None,
             Weak::new(),
             Arc::clone(&goal_service),
             |_| GoalExtensionConfig {
@@ -1736,7 +1726,6 @@ impl GoalExtensionHarness {
                     persistent_thread_state_available: true,
                     environments: &[],
                     mcp_resource_client: None,
-                    extension_metrics: None,
                     session_store: &session_store,
                     thread_store: &thread_store,
                 })
@@ -1779,7 +1768,6 @@ impl GoalExtensionHarness {
                     persistent_thread_state_available: true,
                     environments: &[],
                     mcp_resource_client: None,
-                    extension_metrics: None,
                     session_store: &session_store,
                     thread_store: &thread_store,
                 })

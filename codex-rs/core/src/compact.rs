@@ -1,11 +1,14 @@
 use crate::context::UserGoalUpdate;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Instant;
 
 use crate::Prompt;
 use crate::client::ModelClientSession;
 use crate::client_common::ResponseEvent;
+use crate::compaction_state::CompactionImplementation;
+use crate::compaction_state::CompactionPhase;
+use crate::compaction_state::CompactionReason;
+use crate::compaction_state::CompactionTrigger;
 use crate::context::CompactionSummary;
 use crate::context::ContextualUserFragment;
 use crate::context::world_state::WorldState;
@@ -23,14 +26,6 @@ use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::state::AutoCompactWindowIds;
 use crate::util::backoff;
-use codex_analytics::CodexCompactionEvent;
-use codex_analytics::CompactionImplementation;
-use codex_analytics::CompactionPhase;
-use codex_analytics::CompactionReason;
-use codex_analytics::CompactionStatus;
-use codex_analytics::CompactionStrategy;
-use codex_analytics::CompactionTrigger;
-use codex_analytics::now_unix_seconds;
 use codex_history::CodexHarnessMetadata;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::ResponseItemId;
@@ -173,28 +168,11 @@ async fn run_compact_task_inner(
 ) -> CodexResult<()> {
     let compaction_metadata =
         CompactionTurnMetadata::new(trigger, reason, CompactionImplementation::Responses, phase);
-    let attempt = CompactionAnalyticsAttempt::begin(
-        sess.as_ref(),
-        turn_context.as_ref(),
-        trigger,
-        reason,
-        CompactionImplementation::Responses,
-        phase,
-    )
-    .await;
     let pre_compact_outcome = run_pre_compact_hooks(&sess, &turn_context, trigger).await;
     match pre_compact_outcome {
         PreCompactHookOutcome::Continue => {}
         PreCompactHookOutcome::Stopped => {
             let error = CodexErr::TurnAborted;
-            attempt
-                .track(
-                    sess.as_ref(),
-                    CompactionStatus::Interrupted,
-                    Some(&error),
-                    CompactionAnalyticsDetails::default(),
-                )
-                .await;
             return Err(error);
         }
     }
@@ -206,30 +184,12 @@ async fn run_compact_task_inner(
         compaction_metadata,
     )
     .await;
-    let status = compaction_status_from_result(&result);
-    let codex_error = result.as_ref().err();
     if result.is_ok() {
         let post_compact_outcome = run_post_compact_hooks(&sess, &turn_context, trigger).await;
         if let PostCompactHookOutcome::Stopped = post_compact_outcome {
-            attempt
-                .track(
-                    sess.as_ref(),
-                    status,
-                    codex_error,
-                    CompactionAnalyticsDetails::default(),
-                )
-                .await;
             return Err(CodexErr::TurnAborted);
         }
     }
-    attempt
-        .track(
-            sess.as_ref(),
-            status,
-            codex_error,
-            CompactionAnalyticsDetails::default(),
-        )
-        .await;
     if let Err(err) = &result
         && !matches!(phase, CompactionPhase::PostTurn)
         && !matches!(
@@ -237,7 +197,6 @@ async fn run_compact_task_inner(
             CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
         )
     {
-        sess.track_turn_codex_error(turn_context.as_ref(), err);
         // Pre-turn failures are reported after preserving the incoming prompt.
         if !matches!(phase, CompactionPhase::PreTurn) {
             let event = EventMsg::Error(err.to_error_event(/*message_prefix*/ None));
@@ -406,115 +365,6 @@ async fn run_compact_task_inner_impl(
     });
     sess.send_event(&turn_context, warning).await;
     Ok(summary_suffix)
-}
-
-pub(crate) struct CompactionAnalyticsAttempt {
-    thread_id: String,
-    turn_id: String,
-    trigger: CompactionTrigger,
-    reason: CompactionReason,
-    implementation: CompactionImplementation,
-    phase: CompactionPhase,
-    active_context_tokens_before: i64,
-    started_at: u64,
-    start_instant: Instant,
-}
-
-#[derive(Clone, Copy, Default)]
-pub(crate) struct CompactionAnalyticsDetails {
-    pub(crate) active_context_tokens_before: Option<i64>,
-    pub(crate) retained_image_count: Option<usize>,
-    pub(crate) compaction_summary_tokens: Option<i64>,
-    pub(crate) cached_input_tokens: Option<i64>,
-    pub(crate) cache_write_input_tokens: Option<i64>,
-}
-
-impl CompactionAnalyticsAttempt {
-    pub(crate) async fn begin(
-        sess: &Session,
-        turn_context: &TurnContext,
-        trigger: CompactionTrigger,
-        reason: CompactionReason,
-        implementation: CompactionImplementation,
-        phase: CompactionPhase,
-    ) -> Self {
-        let active_context_tokens_before = sess.get_total_token_usage().await;
-        Self {
-            thread_id: sess.thread_id.to_string(),
-            turn_id: turn_context.sub_id.clone(),
-            trigger,
-            reason,
-            implementation,
-            phase,
-            active_context_tokens_before,
-            started_at: now_unix_seconds(),
-            start_instant: Instant::now(),
-        }
-    }
-
-    pub(crate) async fn track(
-        self,
-        sess: &Session,
-        status: CompactionStatus,
-        codex_error: Option<&CodexErr>,
-        details: CompactionAnalyticsDetails,
-    ) {
-        let CompactionAnalyticsDetails {
-            active_context_tokens_before,
-            retained_image_count,
-            compaction_summary_tokens,
-            cached_input_tokens,
-            cache_write_input_tokens,
-        } = details;
-        let active_context_tokens_before =
-            active_context_tokens_before.unwrap_or(self.active_context_tokens_before);
-        let active_context_tokens_after = sess.get_total_token_usage().await;
-        sess.services
-            .analytics_events_client
-            .track_compaction(CodexCompactionEvent {
-                thread_id: self.thread_id,
-                turn_id: self.turn_id,
-                trigger: self.trigger,
-                reason: self.reason,
-                implementation: self.implementation,
-                phase: self.phase,
-                strategy: CompactionStrategy::Memento,
-                status,
-                codex_error_kind: codex_error.map(Into::into),
-                codex_error_http_status_code: codex_error
-                    .and_then(CodexErr::http_status_code_value),
-                usage_limit_window_minutes: codex_error.and_then(|error| match error.details() {
-                    CodexErrorDetails::UsageLimitReached(error) => error.limit_window_minutes,
-                    _ => None,
-                }),
-                active_context_tokens_before,
-                active_context_tokens_after,
-                retained_image_count,
-                compaction_summary_tokens,
-                cached_input_tokens,
-                cache_write_input_tokens,
-                started_at: self.started_at,
-                completed_at: now_unix_seconds(),
-                duration_ms: Some(
-                    u64::try_from(self.start_instant.elapsed().as_millis()).unwrap_or(u64::MAX),
-                ),
-            });
-    }
-}
-
-pub(crate) fn compaction_status_from_result<T>(result: &CodexResult<T>) -> CompactionStatus {
-    match result {
-        Ok(_) => CompactionStatus::Completed,
-        Err(err)
-            if matches!(
-                err.details(),
-                CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
-            ) =>
-        {
-            CompactionStatus::Interrupted
-        }
-        Err(_) => CompactionStatus::Failed,
-    }
 }
 
 pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
@@ -763,7 +613,6 @@ async fn drain_to_completed(
         .stream(
             prompt,
             turn_context.model_info(),
-            &turn_context.session_telemetry,
             sess.reasoning_effort_for_request(
                 &turn_context.initial_settings,
                 RequestEffortUsage::Compaction,

@@ -17,12 +17,9 @@ use codex_api::Reasoning;
 use codex_api::ReasoningContext;
 use codex_api::ResponsesApiRequest;
 use codex_context_fragments::RenderedFragment;
-use codex_extension_api::ExtensionMetrics;
 use codex_history::ResponseItemEnvelope;
 use codex_http_client::HttpClientFactory;
-use codex_login::AgentIdentityAuthPolicy;
 use codex_model_provider::SharedModelProvider;
-use codex_model_provider::WorkspaceRoutingContext;
 use codex_protocol::ResponseItemId;
 use codex_protocol::error::CodexErr;
 use codex_protocol::models::ContentItem;
@@ -34,8 +31,6 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 pub(crate) const MODEL: &str = "gpt-5.6-luna";
-pub(crate) const CLASSIFICATION_TOKEN_USAGE_METRIC: &str =
-    "codex.guardian_v2.classification.token_usage";
 const MAX_OUTPUT_BYTES: usize = 8 * 1024;
 pub(super) const INITIAL_WEBSOCKET_CONNECTIONS: usize = if cfg!(test) { 2 } else { 8 };
 const MAX_CONCURRENT_REQUESTS: usize = 16;
@@ -44,12 +39,8 @@ const MAX_CONCURRENT_REQUESTS: usize = 16;
 pub struct LunaSamplerConfig {
     /// Provider and credentials selected for the owning thread.
     pub provider: SharedModelProvider,
-    /// Routing scope and retained configuration layers for the owning thread.
-    pub workspace_routing: WorkspaceRoutingContext,
     /// Effective proxy, custom-CA, and cookie configuration.
     pub http_client_factory: HttpClientFactory,
-    /// Agent-identity policy selected for the owning thread.
-    pub agent_identity_policy: AgentIdentityAuthPolicy,
     /// Host-resolved source used to scope agent-identity authentication.
     pub session_source: SessionSource,
     /// Owning runtime session identifier.
@@ -64,8 +55,6 @@ pub struct LunaSamplerConfig {
     pub luna_compaction_hash: Option<String>,
     /// Complete input allowance resolved for the classifier model.
     pub max_input_tokens: usize,
-    /// Host-provided metrics capability with the owning session's attribution.
-    pub metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
 /// One tool-less Luna classification request.
@@ -280,11 +269,6 @@ impl LunaSampler {
             .into_iter()
             .map(ResponseItemEnvelope::into_item)
             .collect();
-        super::metrics::record_request_tokens(
-            self.config.metrics.as_deref(),
-            /*existing*/ 0,
-            total_tokens,
-        );
         // Oversized classifications defer to sync with the existing failure score.
         if total_tokens > self.config.max_input_tokens.saturating_sub(/*rhs*/ 256) {
             return Err(LunaSamplerError::InputTooLarge);

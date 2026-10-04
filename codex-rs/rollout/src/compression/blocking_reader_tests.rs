@@ -9,7 +9,6 @@ use std::sync::atomic::Ordering;
 
 use pretty_assertions::assert_eq;
 
-use super::ReadMetrics;
 use super::scan_lines;
 
 struct PausedRead {
@@ -52,7 +51,6 @@ async fn cancellation_during_read_does_not_deliver_the_record() -> anyhow::Resul
     let seen = Arc::clone(&calls);
     let task = tokio::spawn(scan_lines(
         io::BufReader::new(reader).lines(),
-        ReadMetrics::default(),
         move |lines| {
             for line in lines {
                 line?;

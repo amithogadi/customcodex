@@ -16,9 +16,6 @@ use super::thread_history::RolloutProjectionStep;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
 
-const SQLITE_PROJECTION_METRIC: &str = "codex.thread_history.sqlite_projection";
-const SQLITE_PROJECTION_ANOMALY_METRIC: &str = "codex.thread_history.sqlite_projection.anomaly";
-
 pub(super) async fn materialize_to_sqlite(
     store: &LocalThreadStore,
     thread_id: ThreadId,
@@ -28,7 +25,6 @@ pub(super) async fn materialize_to_sqlite(
         return Ok(());
     }
     let result = materialize_to_sqlite_with_state_db(store, thread_id, rollout_path).await;
-    record_projection_outcome(&result);
     result
 }
 
@@ -174,7 +170,6 @@ fn read_projection_steps_sync(
                     error = %err,
                     "skipping malformed rollout line during projection"
                 );
-                record_projection_anomaly(ProjectionAnomaly::MalformedJson);
                 next_offset = line_end_offset;
                 line_start_offset = line_end_offset;
                 continue;
@@ -194,7 +189,6 @@ fn read_projection_steps_sync(
                     error = %err,
                     "skipping unknown rollout line during projection"
                 );
-                record_projection_anomaly(ProjectionAnomaly::UnknownLine);
                 // Unknown records only advance the byte checkpoint. A writer that could not
                 // decode this line may have reused its ordinal, so let the next decoded line
                 // resolve reuse versus a gap.
@@ -214,7 +208,6 @@ fn read_projection_steps_sync(
                     expected_ordinal = next_ordinal,
                     "skipping paginated rollout line without an ordinal"
                 );
-                record_projection_anomaly(ProjectionAnomaly::MissingOrdinal);
                 next_offset = line_end_offset;
                 line_start_offset = line_end_offset;
                 continue;
@@ -230,7 +223,6 @@ fn read_projection_steps_sync(
                 line_ordinal = ordinal,
                 "skipping duplicate or regressed rollout ordinal during projection"
             );
-            record_projection_anomaly(ProjectionAnomaly::DuplicateOrRegressedOrdinal);
             next_offset = line_end_offset;
             line_start_offset = line_end_offset;
             continue;
@@ -262,7 +254,6 @@ fn read_projection_steps_sync(
                         error = %err,
                         "skipping rollout line with invalid timestamp during projection"
                     );
-                    record_projection_anomaly(ProjectionAnomaly::InvalidTimestamp);
                     let end_ordinal_exclusive =
                         ordinal
                             .checked_add(1)
@@ -294,7 +285,6 @@ fn read_projection_steps_sync(
                 skipped_ordinal_end_exclusive = ordinal,
                 "skipping missing rollout ordinal range during projection"
             );
-            record_projection_anomaly(ProjectionAnomaly::ForwardOrdinalGap);
             projections.push(RolloutProjectionStep::SkippedOrdinalRange {
                 start_ordinal: next_ordinal,
                 end_ordinal_exclusive: ordinal,
@@ -324,52 +314,6 @@ fn read_projection_steps_sync(
         line_start_offset = line_end_offset;
     }
     Ok((projections, next_offset))
-}
-
-#[derive(Clone, Copy)]
-enum ProjectionAnomaly {
-    MalformedJson,
-    UnknownLine,
-    MissingOrdinal,
-    DuplicateOrRegressedOrdinal,
-    ForwardOrdinalGap,
-    InvalidTimestamp,
-}
-
-impl ProjectionAnomaly {
-    fn tag(self) -> &'static str {
-        match self {
-            Self::MalformedJson => "malformed_json",
-            Self::UnknownLine => "unknown_line",
-            Self::MissingOrdinal => "missing_ordinal",
-            Self::DuplicateOrRegressedOrdinal => "duplicate_or_regressed_ordinal",
-            Self::ForwardOrdinalGap => "forward_ordinal_gap",
-            Self::InvalidTimestamp => "invalid_timestamp",
-        }
-    }
-}
-
-fn record_projection_outcome(result: &ThreadStoreResult<()>) {
-    let Some(metrics) = codex_otel::global() else {
-        return;
-    };
-    let outcome = if result.is_ok() { "success" } else { "error" };
-    let _ = metrics.counter(
-        SQLITE_PROJECTION_METRIC,
-        /*inc*/ 1,
-        &[("outcome", outcome)],
-    );
-}
-
-fn record_projection_anomaly(anomaly: ProjectionAnomaly) {
-    let Some(metrics) = codex_otel::global() else {
-        return;
-    };
-    let _ = metrics.counter(
-        SQLITE_PROJECTION_ANOMALY_METRIC,
-        /*inc*/ 1,
-        &[("kind", anomaly.tag())],
-    );
 }
 
 fn thread_store_io_error(err: std::io::Error) -> ThreadStoreError {

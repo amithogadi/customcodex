@@ -137,7 +137,6 @@ pub(crate) fn start_runner_stdout_reader(
                 | Message::Terminate { .. } => {}
             }
         };
-        crate::elevated::runner_metrics::record_command(exit);
         let _ = exit_tx.send(exit.map_or(-1, |(code, _)| code));
     });
 }

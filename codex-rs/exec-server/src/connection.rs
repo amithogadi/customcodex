@@ -78,14 +78,6 @@ impl JsonRpcConnectionEvent {
             rpc.response_enqueue_offset_ns = tracing::field::Empty,
             result = tracing::field::Empty,
         );
-        if let Some(trace) = &request.trace
-            && !codex_otel::set_parent_from_w3c_trace_context(&request_span, trace)
-        {
-            warn!(
-                method = request.method.as_str(),
-                "ignoring invalid inbound exec-server trace carrier"
-            );
-        }
 
         Self::QueuedRequest {
             request,

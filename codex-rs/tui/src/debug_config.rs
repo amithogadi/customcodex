@@ -180,29 +180,11 @@ fn render_debug_config_lines(
         ));
     }
 
-    if let Some(check_for_update_on_startup) = requirements.check_for_update_on_startup.as_ref() {
-        requirement_lines.push(requirement_line(
-            "check_for_update_on_startup",
-            check_for_update_on_startup.value.to_string(),
-            Some(&check_for_update_on_startup.source),
-        ));
-    }
-
     if let Some(allow_login_shell) = requirements.allow_login_shell.as_ref() {
         requirement_lines.push(requirement_line(
             "allow_login_shell",
             allow_login_shell.value.to_string(),
             Some(&allow_login_shell.source),
-        ));
-    }
-
-    if let Some(feedback) = requirements.feedback.as_ref()
-        && let Some(enabled) = feedback.value.enabled
-    {
-        requirement_lines.push(requirement_line(
-            "feedback.enabled",
-            enabled.to_string(),
-            Some(&feedback.source),
         ));
     }
 
@@ -277,17 +259,6 @@ fn render_debug_config_lines(
             allow_appshots.to_string(),
             requirements
                 .allow_appshots
-                .as_ref()
-                .map(|sourced| &sourced.source),
-        ));
-    }
-
-    if let Some(allow_remote_control) = requirements_toml.allow_remote_control {
-        requirement_lines.push(requirement_line(
-            "allow_remote_control",
-            allow_remote_control.to_string(),
-            requirements
-                .allow_remote_control
                 .as_ref()
                 .map(|sourced| &sourced.source),
         ));
@@ -691,7 +662,6 @@ mod tests {
     use codex_config::WebSearchModeRequirement;
     use codex_config::WindowsRequirementsToml;
     use codex_config::sandbox_mode_requirement_for_permission_profile;
-    use codex_config::types::FeedbackConfigToml;
     use codex_protocol::config_types::ApprovalsReviewer;
     use codex_protocol::config_types::WebSearchMode;
     use codex_protocol::models::PermissionProfile;
@@ -843,18 +813,8 @@ interrupt_message = false
                 model_catalog_json.clone(),
                 RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
-            check_for_update_on_startup: Some(Sourced::new(
-                /*value*/ false,
-                RequirementSource::LegacyManagedConfigTomlFromMdm,
-            )),
             allow_login_shell: Some(Sourced::new(
                 /*value*/ false,
-                RequirementSource::LegacyManagedConfigTomlFromMdm,
-            )),
-            feedback: Some(Sourced::new(
-                FeedbackConfigToml {
-                    enabled: Some(false),
-                },
                 RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             approval_policy: ConstrainedWithSource::new(
@@ -895,10 +855,6 @@ interrupt_message = false
                 RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
             allow_appshots: Some(Sourced::new(
-                /*value*/ false,
-                RequirementSource::LegacyManagedConfigTomlFromMdm,
-            )),
-            allow_remote_control: Some(Sourced::new(
                 /*value*/ false,
                 RequirementSource::LegacyManagedConfigTomlFromMdm,
             )),
@@ -953,11 +909,7 @@ interrupt_message = false
             model_catalog_json: Some(model_catalog_json),
             model_provider: None,
             model_providers: None,
-            check_for_update_on_startup: Some(false),
             allow_login_shell: Some(false),
-            feedback: Some(FeedbackConfigToml {
-                enabled: Some(false),
-            }),
             allowed_approval_policies: Some(vec![AskForApproval::OnRequest.to_core()]),
             allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::AutoReview]),
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
@@ -967,7 +919,6 @@ interrupt_message = false
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             allow_managed_hooks_only: Some(true),
             allow_appshots: Some(false),
-            allow_remote_control: Some(false),
             allow_browser_and_computer_use: None,
             computer_use: None,
             windows: Some(WindowsRequirementsToml {
@@ -1046,9 +997,6 @@ interrupt_message = false
         )));
         assert!(rendered.contains(&format!(
             "allow_appshots: false (source: {requirements_source})"
-        )));
-        assert!(rendered.contains(&format!(
-            "allow_remote_control: false (source: {requirements_source})"
         )));
         assert!(rendered.contains(&format!(
             "guardian_policy_config: configured (source: {requirements_source})"
@@ -1343,7 +1291,6 @@ approval_policy = "never"
             allowed_web_search_modes: Some(Vec::new()),
             allow_managed_hooks_only: None,
             allow_appshots: None,
-            allow_remote_control: None,
             computer_use: None,
             windows: None,
             guardian_policy_config: None,

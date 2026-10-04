@@ -30,10 +30,6 @@ use std::collections::HashMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-use super::analytics::captured_analytics_events;
-use super::analytics::mount_analytics_capture;
-use super::analytics::wait_for_analytics_event;
-
 // Bazel CI can spend tens of seconds starting app-server subprocesses or
 // processing turn RPCs under load.
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -341,7 +337,6 @@ async fn turn_start_sends_nested_subagent_lineage_after_cold_thread_resume_v2() 
         .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
         .with_provider_config("supports_websockets = false")
         .write(codex_home.path())?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let root_thread_id = CoreThreadId::new();
     let root_thread_id_str = root_thread_id.to_string();
@@ -419,32 +414,7 @@ async fn turn_start_sends_nested_subagent_lineage_after_cold_thread_resume_v2() 
     assert_eq!(metadata["turn_id"].as_str(), Some(turn.id.as_str()));
     assert!(metadata.get("forked_from_thread_id").is_none());
 
-    let turn_event =
-        wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
-    let params = &turn_event["event_params"];
-    assert_eq!(
-        (
-            params["total_tool_call_count"].as_u64(),
-            params["web_search_count"].as_u64()
-        ),
-        (Some(1), Some(1))
-    );
     timeout(DEFAULT_READ_TIMEOUT, mcp.shutdown_gracefully()).await??;
-    let events = captured_analytics_events(&server).await;
-    let count = |event_type: &str| {
-        events
-            .iter()
-            .filter(|event| {
-                event["event_type"] == event_type
-                    && event["event_params"]["thread_id"] == thread.id
-                    && event["event_params"]["turn_id"] == turn.id
-            })
-            .count()
-    };
-    assert_eq!(
-        (count("codex_turn_event"), count("codex_web_search_event")),
-        (1, 1)
-    );
 
     Ok(())
 }
@@ -474,7 +444,6 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
         .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
         .with_provider_config("supports_websockets = false")
         .write(codex_home.path())?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -570,15 +539,6 @@ async fn turn_steer_updates_client_metadata_on_follow_up_responses_request_v2() 
     assert_eq!(second_metadata["turn_id"].as_str(), Some(turn_id.as_str()));
     assert_eq!(second_metadata["turn_trigger"].as_str(), Some("user"));
     assert_eq!(second_metadata["source"].as_str(), Some("steer-source"));
-
-    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
-    assert_eq!(
-        (
-            event["event_params"]["turn_trigger"].as_str(),
-            event["event_params"]["codex_turn_source"].as_str(),
-        ),
-        (Some("user"), Some("steer-source"))
-    );
 
     Ok(())
 }

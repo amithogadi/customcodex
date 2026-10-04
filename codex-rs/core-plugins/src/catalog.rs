@@ -41,11 +41,8 @@ impl std::fmt::Debug for PluginCatalogEntry {
 }
 
 /// Stable key used to merge discoveries of the same logical plugin.
-/// Identity is independent of whether the plugin is supplied by the cloud or an executor.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PluginIdentity {
-    /// Stable ID assigned by plugin-service and shared by its materialized installations.
-    Remote { remote_plugin_id: String },
     /// Local `name@marketplace` config key for a plugin without a remote ID.
     Local { plugin_id: String },
 }
@@ -53,19 +50,14 @@ pub enum PluginIdentity {
 impl PluginIdentity {
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Remote { remote_plugin_id } => remote_plugin_id,
             Self::Local { plugin_id } => plugin_id,
         }
     }
 }
 
-/// A source that can supply a plugin; cloud URIs are opaque, not local paths.
+/// A local plugin source owned by a configured executor.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PluginSourceLocation {
-    Cloud {
-        resource_uri: String,
-        bundle_uri: Option<String>,
-    },
     Executor {
         /// Executor environment that owns `root`.
         environment_id: String,

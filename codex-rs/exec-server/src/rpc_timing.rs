@@ -32,7 +32,7 @@ impl RpcCompletion {
         };
         tracing::event!(
             name: "codex.exec_server.response_received",
-            target: "codex_otel.trace_safe",
+            target: "codex_exec_server",
             tracing::Level::INFO,
             event.name = "codex.exec_server.response_received",
             rpc.method = method,

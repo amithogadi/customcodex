@@ -9,10 +9,6 @@ use codex_utils_cli::SharedCliOptions;
 #[derive(Parser, Clone, Debug)]
 #[command(version)]
 pub struct Cli {
-    /// Internal: launching CLI that handles daemon updates after the TUI exits.
-    #[clap(skip)]
-    pub daemon_cli_executable: Option<AbsolutePathBuf>,
-
     /// Optional user prompt to start the session.
     #[arg(value_name = "PROMPT", value_hint = clap::ValueHint::Other)]
     pub prompt: Option<String>,

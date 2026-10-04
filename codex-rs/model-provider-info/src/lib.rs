@@ -424,25 +424,20 @@ other non-default provider fields are not supported"
     }
 
     /// Builds an API provider with managed residency taking precedence over configured headers.
-    pub fn to_api_provider(&self, auth_mode: Option<AuthMode>) -> CodexResult<ApiProvider> {
-        let default_base_url = if matches!(
-            auth_mode,
-            Some(
-                AuthMode::Chatgpt
-                    | AuthMode::ChatgptAuthTokens
-                    | AuthMode::Headers
-                    | AuthMode::AgentIdentity
-                    | AuthMode::PersonalAccessToken
-            )
-        ) {
-            CHATGPT_CODEX_BASE_URL
-        } else {
-            "https://api.openai.com/v1"
+    pub fn to_api_provider(&self, _auth_mode: Option<AuthMode>) -> CodexResult<ApiProvider> {
+        let base_url = match &self.base_url {
+            Some(base_url) => base_url.clone(),
+            None if self.is_openai() => "https://api.openai.com/v1".to_string(),
+            // Live Bedrock requests resolve their regional endpoint first. Keep
+            // unresolved metadata/header construction on a Bedrock endpoint too.
+            None if self.is_amazon_bedrock() => AMAZON_BEDROCK_DEFAULT_BASE_URL.to_string(),
+            None => {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "Model provider `{}` requires an explicit base_url",
+                    self.name
+                )));
+            }
         };
-        let base_url = self
-            .base_url
-            .clone()
-            .unwrap_or_else(|| default_base_url.to_string());
 
         let mut headers = self.build_header_map()?;
         if let Some(requirement) = read_managed_residency_requirement() {
@@ -619,7 +614,7 @@ other non-default provider fields are not supported"
 
     pub fn supports_codex_backend_routes(&self) -> bool {
         self.is_openai()
-            && self.base_url.as_deref().is_none_or(|base_url| {
+            && self.base_url.as_deref().is_some_and(|base_url| {
                 base_url
                     .trim_end_matches('/')
                     .ends_with("/backend-api/codex")

@@ -67,7 +67,7 @@ async fn test_step(
             format!("{label} catalog"),
             Arc::new(JsonObject::default()),
         ),
-        openai_file_input_optional_fields: Default::default(),
+
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
@@ -96,7 +96,6 @@ async fn test_step(
         tool_timeout: None,
         server_instructions: None,
         server_supports_sandbox_state_meta_capability: supports_sandbox_state_meta,
-        codex_apps_tools_cache_context: None,
     });
     let clients = Arc::new(McpBindingClients::new(HashMap::from([(
         SERVER_NAME.to_string(),

@@ -414,7 +414,6 @@ impl ToolCallTimingGuard {
             ($dispatch_duration_ms:expr, $handler_duration_ms:expr, $total_duration_ms:expr) => {
                 info!(
                     event.name = "codex.tool_call",
-                    trace_id = %codex_otel::current_span_trace_id().unwrap_or_default(),
                     conversation.id = %self.conversation_id,
                     turn_id = %self.turn_id,
                     tool_name = %self.tool_name,

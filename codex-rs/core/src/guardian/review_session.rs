@@ -20,9 +20,6 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::time::Duration;
 
-use codex_analytics::GuardianReviewAnalyticsResult;
-use codex_analytics::GuardianReviewSessionAnalyticsParams;
-use codex_analytics::GuardianReviewSessionKind;
 use codex_extension_api::Instructions;
 use codex_guardian_reviewer::ConversationCheckpoint;
 use codex_guardian_reviewer::ConversationState;
@@ -35,6 +32,9 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::AutoCompactTokenLimitScope;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::guardian_review::GuardianReviewDetails;
+use codex_protocol::guardian_review::GuardianReviewSessionDetails;
+use codex_protocol::guardian_review::GuardianReviewSessionKind;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
@@ -86,7 +86,6 @@ use super::ApprovalRequestReasons;
 use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianReviewContext;
-use super::feedback::record_failed_review;
 use super::prompt::GUARDIAN_TRANSCRIPT_START;
 use super::prompt::GuardianPromptMode;
 #[cfg(test)]
@@ -341,19 +340,18 @@ async fn run_review_on_session(
             state.conversation.cursor().is_some(),
         )
     };
-    let mut analytics_result =
-        GuardianReviewAnalyticsResult::from_session(GuardianReviewSessionAnalyticsParams {
-            guardian_thread_id: review_session.session.thread_id().to_string(),
-            guardian_session_kind,
-            guardian_model: review_model.model.clone(),
-            guardian_reasoning_effort: guardian_reasoning_effort.map(|effort| effort.to_string()),
-            guardian_default_review_model_id: review_model.default_review_model_id.clone(),
-            guardian_catalog_contains_auto_review: review_model.catalog_contains_auto_review,
-            guardian_review_model_overridden: review_model.model_overridden,
-            guardian_review_model_override: review_model.model_override.clone(),
-            guardian_model_provider_id: params.spawn_config.model_provider_id.clone(),
-            had_prior_review_context: had_prior_context,
-        });
+    let mut analytics_result = GuardianReviewDetails::from_session(GuardianReviewSessionDetails {
+        guardian_thread_id: review_session.session.thread_id().to_string(),
+        guardian_session_kind,
+        guardian_model: review_model.model.clone(),
+        guardian_reasoning_effort: guardian_reasoning_effort.map(|effort| effort.to_string()),
+        guardian_default_review_model_id: review_model.default_review_model_id.clone(),
+        guardian_catalog_contains_auto_review: review_model.catalog_contains_auto_review,
+        guardian_review_model_overridden: review_model.model_overridden,
+        guardian_review_model_override: review_model.model_override.clone(),
+        guardian_model_provider_id: params.spawn_config.model_provider_id.clone(),
+        had_prior_review_context: had_prior_context,
+    });
     if prior_review_count > 0 {
         ensure_guardian_followup_reminder(review_session).await;
     }

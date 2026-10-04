@@ -128,24 +128,24 @@ async fn authorization(
 }
 
 #[tokio::test]
-async fn automatic_cimd_uses_stable_or_callback_specific_identity() -> Result<()> {
+async fn automatic_registration_uses_server_dcr_even_when_cimd_advertised() -> Result<()> {
     for (host, supports_issuer, expected_client_id, expected_redirect) in [
         (
             "127.0.0.1",
             false,
-            "https://chatgpt.com/oauth/codex/abc123ABC_-x/client.json",
+            "dcr-client",
             "http://127.0.0.1:43123/callback/abc123ABC_-x",
         ),
         (
             "localhost",
             false,
-            "https://chatgpt.com/oauth/codex/abc123ABC_-x/client.json",
+            "dcr-client",
             "http://localhost:43123/callback/abc123ABC_-x",
         ),
         (
             "127.0.0.1",
             true,
-            "https://chatgpt.com/oauth/codex/client.json",
+            "dcr-client",
             "http://127.0.0.1:43123/callback",
         ),
     ] {
@@ -182,7 +182,7 @@ async fn automatic_cimd_uses_stable_or_callback_specific_identity() -> Result<()
         assert!(body.contains_key("code_verifier"));
         assert!(!body.contains_key("client_secret"));
         assert!(!request.headers.contains_key("authorization"));
-        assert!(requests_to(&server, "/register").await.is_empty());
+        assert_eq!(requests_to(&server, "/register").await.len(), 1);
         assert_eq!(
             requests_to(&server, "/.well-known/oauth-authorization-server/mcp")
                 .await
@@ -510,62 +510,43 @@ async fn resource_headers_follow_same_origin_registration_redirect_and_sdk_auth_
 }
 
 #[tokio::test]
-async fn invalid_cimd_metadata_and_redirects_fail_without_dynamic_registration() {
-    let valid = "http://127.0.0.1:43123/callback/abc123ABC_-x";
-    for (metadata, redirect, expected_error) in [
-        (
-            json!({
-                "authorization_response_iss_parameter_supported": true,
-                "issuer": null,
-            }),
-            valid,
-            "issuer-bound callbacks require an authorization server issuer",
-        ),
-        (
-            json!({"token_endpoint_auth_methods_supported": ["private_key_jwt"]}),
-            valid,
-            "token endpoint auth method `none`",
-        ),
-        (
-            json!({}),
-            "http://127.0.0.1.evil.example:43123/callback/abc123ABC_-x",
-            "ephemeral loopback callback",
-        ),
-        (
-            json!({}),
-            "http://127.0.0.1/callback/abc123ABC_-x",
-            "ephemeral loopback callback",
-        ),
-        (
-            json!({}),
-            "http://127.0.0.1:43123/callback/wrong-id",
-            "ephemeral loopback callback",
-        ),
-        (
-            json!({}),
-            "http://127.0.0.1:43123/callback/abc123ABC_-x?unexpected=true",
-            "ephemeral loopback callback",
-        ),
-        (
-            json!({}),
-            "http://[::1]:43123/callback/abc123ABC_-x",
-            "ephemeral loopback callback",
-        ),
+async fn invalid_issuer_metadata_fails_before_registration() {
+    let server = oauth_server(json!({
+        "authorization_response_iss_parameter_supported": true,
+        "issuer": null,
+    }))
+    .await;
+    let error = authorization(
+        &server,
+        "http://127.0.0.1:43123/callback",
+        McpOAuthClientRegistration::Auto,
+    )
+    .await
+    .err()
+    .expect("issuer-bound callbacks require a metadata issuer");
+    assert!(
+        error
+            .to_string()
+            .contains("require an authorization server issuer"),
+        "unexpected issuer validation error: {error:#}"
+    );
+    assert!(requests_to(&server, "/register").await.is_empty());
+    assert!(requests_to(&server, "/token").await.is_empty());
+}
+
+#[tokio::test]
+async fn automatic_and_explicit_dcr_require_server_registration() {
+    for registration in [
+        McpOAuthClientRegistration::Auto,
+        McpOAuthClientRegistration::Dcr,
     ] {
-        let server = oauth_server(metadata).await;
-        let error = authorization(&server, redirect, McpOAuthClientRegistration::Cimd)
+        let server = oauth_server(json!({"registration_endpoint": null})).await;
+        let error = authorization(&server, "http://127.0.0.1:43123/callback", registration)
             .await
             .err()
-            .expect("invalid CIMD metadata or callback should fail");
-        assert!(error.to_string().contains(expected_error));
+            .expect("DCR requires an advertised registration endpoint");
+        assert!(error.to_string().contains("registration not supported"));
         assert!(requests_to(&server, "/register").await.is_empty());
         assert!(requests_to(&server, "/token").await.is_empty());
     }
-
-    let server = oauth_server(json!({"registration_endpoint": null})).await;
-    let error = authorization(&server, valid, McpOAuthClientRegistration::Dcr)
-        .await
-        .err()
-        .expect("explicit DCR should require an advertised registration endpoint");
-    assert!(error.to_string().contains("registration not supported"));
 }

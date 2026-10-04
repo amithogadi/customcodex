@@ -103,17 +103,6 @@
         }
       ]
     },
-    "AnalyticsConfigToml": {
-      "additionalProperties": false,
-      "description": "Analytics settings loaded from config.toml. Fields are optional so we can apply defaults.",
-      "properties": {
-        "enabled": {
-          "description": "When `false`, disables analytics across Codex product surfaces in this profile.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
     "AppConfig": {
       "additionalProperties": false,
       "description": "Config values for a single app/connector.",
@@ -489,42 +478,6 @@
       ],
       "type": "object"
     },
-    "BrowserUseConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "allow_history_access": {
-          "type": "boolean"
-        },
-        "default_origin_policy": {
-          "$ref": "#/definitions/BrowserUseOriginPolicyConfigToml"
-        },
-        "origins": {
-          "additionalProperties": {
-            "$ref": "#/definitions/BrowserUseOriginPolicyConfigToml"
-          },
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
-    "BrowserUseOriginPolicyConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "access": {
-          "$ref": "#/definitions/AllowDenyRequirementToml"
-        },
-        "downloads": {
-          "$ref": "#/definitions/AllowDenyRequirementToml"
-        },
-        "full_cdp_access": {
-          "$ref": "#/definitions/AllowDenyRequirementToml"
-        },
-        "uploads": {
-          "$ref": "#/definitions/AllowDenyRequirementToml"
-        }
-      },
-      "type": "object"
-    },
     "BundledSkillsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -692,9 +645,6 @@
       "additionalProperties": false,
       "description": "Collection of common configuration options that a user can define as a unit in `config.toml`.",
       "properties": {
-        "analytics": {
-          "$ref": "#/definitions/AnalyticsConfigToml"
-        },
         "approval_policy": {
           "$ref": "#/definitions/AskForApproval"
         },
@@ -716,9 +666,6 @@
           "description": "Optional feature toggles scoped to this profile.",
           "properties": {
             "agent_message_board": {
-              "type": "boolean"
-            },
-            "analytics_plan_history": {
               "type": "boolean"
             },
             "api_key_cyber_access_programs": {
@@ -765,18 +712,6 @@
               "type": "boolean"
             },
             "bedrock_setup_wizard": {
-              "type": "boolean"
-            },
-            "browser_annotation_api": {
-              "type": "boolean"
-            },
-            "browser_use": {
-              "type": "boolean"
-            },
-            "browser_use_external": {
-              "type": "boolean"
-            },
-            "browser_use_full_cdp_access": {
               "type": "boolean"
             },
             "chronicle": {
@@ -920,9 +855,6 @@
             "guardianv2": {
               "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
             },
-            "guardianv2_decisions_comparison": {
-              "type": "boolean"
-            },
             "hooks": {
               "type": "boolean"
             },
@@ -936,24 +868,6 @@
               "type": "boolean"
             },
             "imagegenext": {
-              "type": "boolean"
-            },
-            "in_app_browser": {
-              "type": "boolean"
-            },
-            "in_app_chat": {
-              "type": "boolean"
-            },
-            "in_app_dictation": {
-              "type": "boolean"
-            },
-            "in_app_local_automation": {
-              "type": "boolean"
-            },
-            "in_app_updates": {
-              "type": "boolean"
-            },
-            "in_app_voice": {
               "type": "boolean"
             },
             "incremental_tools": {
@@ -1046,9 +960,6 @@
             "psp": {
               "type": "boolean"
             },
-            "realtime_conversation": {
-              "type": "boolean"
-            },
             "reasoning_effort_override": {
               "type": "boolean"
             },
@@ -1056,9 +967,6 @@
               "type": "boolean"
             },
             "remote_compaction_v2": {
-              "type": "boolean"
-            },
-            "remote_control": {
               "type": "boolean"
             },
             "remote_models": {
@@ -1093,9 +1001,6 @@
             },
             "rollout_budget": {
               "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
-            },
-            "runtime_metrics": {
-              "type": "boolean"
             },
             "search_tool": {
               "type": "boolean"
@@ -1203,9 +1108,6 @@
               "type": "boolean"
             },
             "unified_image_budget": {
-              "type": "boolean"
-            },
-            "use_agent_identity": {
               "type": "boolean"
             },
             "use_legacy_landlock": {
@@ -1643,16 +1545,6 @@
         }
       ]
     },
-    "FeedbackConfigToml": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "description": "When `false`, disables the feedback flow across Codex product surfaces.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
     "FileSystemAccessMode": {
       "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `deny` beats `write`, and `write` beats `read`.",
       "oneOf": [
@@ -1695,27 +1587,6 @@
         }
       },
       "type": "object"
-    },
-    "ForcedChatgptWorkspaceIds": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      ],
-      "description": "Backward-compatible shape for ChatGPT workspace login restrictions in config.toml."
-    },
-    "ForcedLoginMethod": {
-      "enum": [
-        "chatgpt",
-        "api"
-      ],
-      "type": "string"
     },
     "GatewayOAuthConfig": {
       "additionalProperties": false,
@@ -2595,24 +2466,6 @@
       ],
       "type": "string"
     },
-    "MicrophoneChannels": {
-      "anyOf": [
-        {
-          "format": "uint16",
-          "minimum": 1.0,
-          "type": "integer"
-        },
-        {
-          "items": {
-            "format": "uint16",
-            "minimum": 1.0,
-            "type": "integer"
-          },
-          "type": "array"
-        }
-      ],
-      "description": "Selected microphone inputs. Scalars preserve existing single-channel configuration."
-    },
     "ModelAvailabilityNuxConfig": {
       "additionalProperties": {
         "format": "uint32",
@@ -3351,202 +3204,6 @@
       },
       "type": "object"
     },
-    "OtelConfigToml": {
-      "additionalProperties": false,
-      "description": "OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.",
-      "properties": {
-        "environment": {
-          "description": "Mark traces with environment (dev, staging, prod, test). Defaults to dev.",
-          "type": "string"
-        },
-        "exporter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OtelExporterKind"
-            }
-          ],
-          "description": "Optional log exporter"
-        },
-        "log_agent_responses": {
-          "description": "Opt in to logging final main-agent and spawned-subagent responses to an OTLP log exporter. Defaults to false. Response text can be sensitive and is capped at 64 KiB.",
-          "type": "boolean"
-        },
-        "log_guardian_assessments": {
-          "description": "Opt in to logging completed Guardian assessments to an OTLP log exporter. Defaults to false. Rationales can be sensitive and are capped at 64 KiB.",
-          "type": "boolean"
-        },
-        "log_user_prompt": {
-          "description": "Log user prompt in traces",
-          "type": "boolean"
-        },
-        "metrics_exporter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OtelExporterKind"
-            }
-          ],
-          "description": "Optional metrics exporter"
-        },
-        "span_attributes": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Attributes to add to every exported trace span.",
-          "type": "object"
-        },
-        "tool_result": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/ToolResultLogConfig"
-            }
-          ],
-          "default": {
-            "max_bytes": 2048
-          },
-          "description": "Byte limit for tool-result log output; independent of model-visible output."
-        },
-        "trace_exporter": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/OtelExporterKind"
-            }
-          ],
-          "description": "Optional trace exporter"
-        },
-        "tracestate": {
-          "additionalProperties": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object"
-          },
-          "description": "Semicolon-separated `key:value` fields to upsert into W3C tracestate members.",
-          "type": "object"
-        }
-      },
-      "type": "object"
-    },
-    "OtelExporterKind": {
-      "description": "Which OTEL exporter to use.",
-      "oneOf": [
-        {
-          "enum": [
-            "none",
-            "statsig"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "otlp-http": {
-              "additionalProperties": false,
-              "properties": {
-                "endpoint": {
-                  "type": "string"
-                },
-                "headers": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "default": {},
-                  "type": "object"
-                },
-                "protocol": {
-                  "$ref": "#/definitions/OtelHttpProtocol"
-                },
-                "tls": {
-                  "allOf": [
-                    {
-                      "$ref": "#/definitions/OtelTlsConfig"
-                    }
-                  ],
-                  "default": null
-                }
-              },
-              "required": [
-                "endpoint",
-                "protocol"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "otlp-http"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "otlp-grpc": {
-              "additionalProperties": false,
-              "properties": {
-                "endpoint": {
-                  "type": "string"
-                },
-                "headers": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "default": {},
-                  "type": "object"
-                },
-                "tls": {
-                  "allOf": [
-                    {
-                      "$ref": "#/definitions/OtelTlsConfig"
-                    }
-                  ],
-                  "default": null
-                }
-              },
-              "required": [
-                "endpoint"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "otlp-grpc"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "OtelHttpProtocol": {
-      "oneOf": [
-        {
-          "description": "Binary payload",
-          "enum": [
-            "binary"
-          ],
-          "type": "string"
-        },
-        {
-          "description": "JSON payload",
-          "enum": [
-            "json"
-          ],
-          "type": "string"
-        }
-      ]
-    },
-    "OtelTlsConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "ca-certificate": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "client-certificate": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "client-private-key": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        }
-      },
-      "type": "object"
-    },
     "PermissionProfileToml": {
       "additionalProperties": false,
       "properties": {
@@ -3584,7 +3241,8 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "default": true,
+          "default": false,
+          "description": "Plugins must be explicitly enabled, including bundles retained in the local cache.",
           "type": "boolean"
         },
         "mcp_servers": {
@@ -3839,90 +3497,6 @@
         }
       },
       "type": "object"
-    },
-    "RealtimeAudioToml": {
-      "additionalProperties": false,
-      "properties": {
-        "microphone": {
-          "type": "string"
-        },
-        "microphone_channel": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/MicrophoneChannels"
-            }
-          ],
-          "description": "One-based microphone channels to mix; unset mixes all input channels."
-        },
-        "speaker": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "RealtimeConversationVersion": {
-      "enum": [
-        "v1",
-        "v2",
-        "v3"
-      ],
-      "type": "string"
-    },
-    "RealtimeToml": {
-      "additionalProperties": false,
-      "properties": {
-        "transport": {
-          "$ref": "#/definitions/RealtimeTransport"
-        },
-        "type": {
-          "$ref": "#/definitions/RealtimeWsMode"
-        },
-        "version": {
-          "$ref": "#/definitions/RealtimeConversationVersion"
-        },
-        "voice": {
-          "$ref": "#/definitions/RealtimeVoice"
-        }
-      },
-      "type": "object"
-    },
-    "RealtimeTransport": {
-      "enum": [
-        "webrtc",
-        "websocket"
-      ],
-      "type": "string"
-    },
-    "RealtimeVoice": {
-      "enum": [
-        "alloy",
-        "arbor",
-        "ash",
-        "ballad",
-        "breeze",
-        "cedar",
-        "coral",
-        "cove",
-        "echo",
-        "ember",
-        "juniper",
-        "maple",
-        "marin",
-        "sage",
-        "shimmer",
-        "sol",
-        "spruce",
-        "vale",
-        "verse"
-      ],
-      "type": "string"
-    },
-    "RealtimeWsMode": {
-      "enum": [
-        "conversational",
-        "transcription"
-      ],
-      "type": "string"
     },
     "ReasoningEffort": {
       "description": "A non-empty reasoning effort value advertised by the model.",
@@ -4380,19 +3954,6 @@
       },
       "type": "object"
     },
-    "ToolResultLogConfig": {
-      "description": "Limit for the text included in `codex.tool_result` log records. This does not affect model-visible output. Raising it can expose more tool data to logs.",
-      "properties": {
-        "max_bytes": {
-          "default": 2048,
-          "description": "Maximum UTF-8 bytes before the truncation notice. Defaults to 2048.",
-          "format": "uint",
-          "minimum": 0.0,
-          "type": "integer"
-        }
-      },
-      "type": "object"
-    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -4575,9 +4136,7 @@
               "next_permission_mode": null,
               "previous_permission_mode": null,
               "prompt_stack_back": null,
-              "skip_question": null,
-              "toggle_voice": null,
-              "toggle_voice_mute": null
+              "skip_question": null
             },
             "composer": {
               "history_search_next": null,
@@ -5122,22 +4681,6 @@
             }
           ],
           "description": "Skip the focused question."
-        },
-        "toggle_voice": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Start or stop a voice conversation."
-        },
-        "toggle_voice_mute": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/KeybindingsSpec"
-            }
-          ],
-          "description": "Toggle the microphone in an active voice conversation."
         }
       },
       "type": "object"
@@ -5543,9 +5086,7 @@
             "next_permission_mode": null,
             "previous_permission_mode": null,
             "prompt_stack_back": null,
-            "skip_question": null,
-            "toggle_voice": null,
-            "toggle_voice_mute": null
+            "skip_question": null
           }
         },
         "composer": {
@@ -6708,14 +6249,6 @@
       "description": "Allow macOS sandbox writable roots at or beneath CODEX_HOME to traverse symlinks. Read only from the host's user config at startup; defaults to false. This grants no write access by itself, but trusts symlink targets even if they change between commands or lie outside CODEX_HOME. This setting has no effect on Linux or Windows.",
       "type": "boolean"
     },
-    "analytics": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/AnalyticsConfigToml"
-        }
-      ],
-      "description": "When `false`, disables analytics across Codex product surfaces in this machine. Defaults to `true`."
-    },
     "approval_policy": {
       "allOf": [
         {
@@ -6741,19 +6274,6 @@
       "default": null,
       "description": "Settings for app-specific controls."
     },
-    "apps_mcp_product_sku": {
-      "description": "Optional product SKU forwarded on host-owned Codex Apps MCP requests.",
-      "type": "string"
-    },
-    "audio": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/RealtimeAudioToml"
-        }
-      ],
-      "default": null,
-      "description": "Machine-local realtime audio device preferences used by realtime voice."
-    },
     "auto_review": {
       "allOf": [
         {
@@ -6769,16 +6289,9 @@
       "minimum": 0.0,
       "type": "integer"
     },
-    "browser_use": {
-      "$ref": "#/definitions/BrowserUseConfigToml"
-    },
     "chatgpt_base_url": {
       "description": "Base URL for requests to ChatGPT (as opposed to the OpenAI API).",
       "type": "string"
-    },
-    "check_for_update_on_startup": {
-      "description": "When `true`, checks for Codex updates on startup and surfaces update prompts. Set to `false` only if your Codex updates are centrally managed. Defaults to `true`.",
-      "type": "boolean"
     },
     "cli_auth_credentials_store": {
       "allOf": [
@@ -6812,12 +6325,6 @@
       "description": "Default permissions profile to apply. Names starting with `:` refer to built-in profiles; other names are resolved from the `[permissions]` table.",
       "type": "string"
     },
-    "desktop": {
-      "additionalProperties": true,
-      "default": null,
-      "description": "Opaque desktop settings stored alongside the rest of config.toml.",
-      "type": "object"
-    },
     "developer_instructions": {
       "default": null,
       "description": "Developer instructions inserted as a `developer` role message.",
@@ -6829,30 +6336,6 @@
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
-    },
-    "experimental_realtime_start_instructions": {
-      "description": "Experimental / do not use. Replaces the built-in realtime start instructions inserted into developer messages when realtime becomes active.",
-      "type": "string"
-    },
-    "experimental_realtime_webrtc_call_base_url": {
-      "description": "Experimental / do not use. Overrides only the WebRTC realtime call creation base URL. This is separate from `experimental_realtime_ws_base_url` because WebRTC call creation is HTTP, while sideband control is websocket.",
-      "type": "string"
-    },
-    "experimental_realtime_ws_backend_prompt": {
-      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport instructions (the `Op::RealtimeConversation` `/ws` session.update instructions) without changing normal prompts.",
-      "type": "string"
-    },
-    "experimental_realtime_ws_base_url": {
-      "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/v1/realtime` connection) without changing normal provider HTTP requests.",
-      "type": "string"
-    },
-    "experimental_realtime_ws_model": {
-      "description": "Experimental / do not use. Selects the realtime websocket model/snapshot used for the `Op::RealtimeConversation` connection.",
-      "type": "string"
-    },
-    "experimental_realtime_ws_startup_context": {
-      "description": "Experimental / do not use. Replaces the synthesized realtime startup context appended to websocket session instructions. An empty string disables startup context injection entirely.",
-      "type": "string"
     },
     "experimental_thread_store": {
       "allOf": [
@@ -6871,9 +6354,6 @@
       "description": "Centralized feature flags (new). Prefer this over individual toggles.",
       "properties": {
         "agent_message_board": {
-          "type": "boolean"
-        },
-        "analytics_plan_history": {
           "type": "boolean"
         },
         "api_key_cyber_access_programs": {
@@ -6920,18 +6400,6 @@
           "type": "boolean"
         },
         "bedrock_setup_wizard": {
-          "type": "boolean"
-        },
-        "browser_annotation_api": {
-          "type": "boolean"
-        },
-        "browser_use": {
-          "type": "boolean"
-        },
-        "browser_use_external": {
-          "type": "boolean"
-        },
-        "browser_use_full_cdp_access": {
           "type": "boolean"
         },
         "chronicle": {
@@ -7075,9 +6543,6 @@
         "guardianv2": {
           "$ref": "#/definitions/FeatureToml_for_GuardianV2ConfigToml"
         },
-        "guardianv2_decisions_comparison": {
-          "type": "boolean"
-        },
         "hooks": {
           "type": "boolean"
         },
@@ -7091,24 +6556,6 @@
           "type": "boolean"
         },
         "imagegenext": {
-          "type": "boolean"
-        },
-        "in_app_browser": {
-          "type": "boolean"
-        },
-        "in_app_chat": {
-          "type": "boolean"
-        },
-        "in_app_dictation": {
-          "type": "boolean"
-        },
-        "in_app_local_automation": {
-          "type": "boolean"
-        },
-        "in_app_updates": {
-          "type": "boolean"
-        },
-        "in_app_voice": {
           "type": "boolean"
         },
         "incremental_tools": {
@@ -7201,9 +6648,6 @@
         "psp": {
           "type": "boolean"
         },
-        "realtime_conversation": {
-          "type": "boolean"
-        },
         "reasoning_effort_override": {
           "type": "boolean"
         },
@@ -7211,9 +6655,6 @@
           "type": "boolean"
         },
         "remote_compaction_v2": {
-          "type": "boolean"
-        },
-        "remote_control": {
           "type": "boolean"
         },
         "remote_models": {
@@ -7248,9 +6689,6 @@
         },
         "rollout_budget": {
           "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
-        },
-        "runtime_metrics": {
-          "type": "boolean"
         },
         "search_tool": {
           "type": "boolean"
@@ -7360,9 +6798,6 @@
         "unified_image_budget": {
           "type": "boolean"
         },
-        "use_agent_identity": {
-          "type": "boolean"
-        },
         "use_legacy_landlock": {
           "type": "boolean"
         },
@@ -7402,14 +6837,6 @@
       },
       "type": "object"
     },
-    "feedback": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/FeedbackConfigToml"
-        }
-      ],
-      "description": "When `false`, disables feedback collection across Codex product surfaces. Defaults to `true`."
-    },
     "file_opener": {
       "allOf": [
         {
@@ -7417,24 +6844,6 @@
         }
       ],
       "description": "Optional URI-based file opener. If set, citations to files in the model output will be hyperlinked using the specified URI scheme."
-    },
-    "forced_chatgpt_workspace_id": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/ForcedChatgptWorkspaceIds"
-        }
-      ],
-      "default": null,
-      "description": "When set, restricts ChatGPT login to one or more workspace identifiers."
-    },
-    "forced_login_method": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/ForcedLoginMethod"
-        }
-      ],
-      "default": null,
-      "description": "When set, restricts the login mechanism users may use."
     },
     "ghost_snapshot": {
       "allOf": [
@@ -7667,14 +7076,6 @@
       "description": "Preferred OSS provider for local models, e.g. \"lmstudio\" or \"ollama\".",
       "type": "string"
     },
-    "otel": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/OtelConfigToml"
-        }
-      ],
-      "description": "OTEL configuration."
-    },
     "permissions": {
       "allOf": [
         {
@@ -7743,15 +7144,6 @@
         "$ref": "#/definitions/ProjectConfig"
       },
       "type": "object"
-    },
-    "realtime": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/RealtimeToml"
-        }
-      ],
-      "default": null,
-      "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
     },
     "responses_api_metadata": {
       "additionalProperties": {

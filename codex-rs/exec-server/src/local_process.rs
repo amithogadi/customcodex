@@ -7,8 +7,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use crate::process_telemetry::ProcessTelemetry;
-use crate::process_telemetry::ProcessTelemetryEvent;
+use crate::process_log::ProcessLogContext;
+use crate::process_log::ProcessLogEvent;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_network_proxy::NetworkPolicyAuditEvent;
 use codex_network_proxy::NetworkPolicyAuditObserver;
@@ -23,8 +23,6 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::is_likely_sandbox_denied;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::ProcessSignal as PtyProcessSignal;
-use opentelemetry::trace::SpanContext;
-use opentelemetry::trace::TraceContextExt;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
@@ -46,7 +44,7 @@ use crate::StartedExecProcess;
 use crate::network_policy_decisions::network_policy_decider;
 use crate::process::ExecProcessEventLog;
 use crate::process::sandbox_type_from_protocol;
-use crate::process_sandbox::prepare_exec_request_with_telemetry;
+use crate::process_sandbox::prepare_exec_request_with_log_context;
 use crate::protocol::ByteChunk;
 use crate::protocol::EXEC_CLOSED_METHOD;
 use crate::protocol::ExecClosedNotification;
@@ -80,8 +78,6 @@ use crate::rpc::invalid_request;
 use crate::rpc_server_requests::RpcServerRequestSender;
 #[cfg(unix)]
 use crate::shell_snapshot::CapturePurpose;
-use crate::telemetry::ExecServerTelemetry;
-use crate::telemetry::ProcessMetricGuard;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
 // Each process/read chunk needs four JSON values. Keep retained replay below the
@@ -110,7 +106,6 @@ struct RunningProcess {
     output_notify: Arc<Notify>,
     open_streams: usize,
     closed: bool,
-    metrics: Option<ProcessMetricGuard>,
     termination_requested: bool,
     sandbox: SandboxType,
     sandbox_denied: bool,
@@ -162,7 +157,6 @@ struct Inner {
     processes: Mutex<HashMap<ProcessId, ProcessEntry>>,
     #[cfg(unix)]
     shell_snapshots: crate::shell_snapshot::ShellSnapshotCache,
-    telemetry: ExecServerTelemetry,
 }
 
 #[derive(Clone)]
@@ -193,24 +187,18 @@ impl LocalProcess {
         let (outgoing_tx, mut outgoing_rx) =
             mpsc::channel::<RpcServerOutboundMessage>(NOTIFICATION_CHANNEL_CAPACITY);
         tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        Self::with_runtime_paths(
-            RpcNotificationSender::new(outgoing_tx),
-            ExecServerTelemetry::default(),
-            runtime_paths,
-        )
+        Self::with_runtime_paths(RpcNotificationSender::new(outgoing_tx), runtime_paths)
     }
 
     pub(crate) fn new(
         notifications: RpcNotificationSender,
-        telemetry: ExecServerTelemetry,
         runtime_paths: ExecServerRuntimeOptions,
     ) -> Self {
-        Self::with_runtime_paths(notifications, telemetry, Some(runtime_paths))
+        Self::with_runtime_paths(notifications, Some(runtime_paths))
     }
 
     fn with_runtime_paths(
         notifications: RpcNotificationSender,
-        telemetry: ExecServerTelemetry,
         runtime_paths: Option<ExecServerRuntimeOptions>,
     ) -> Self {
         let requests = notifications.request_sender();
@@ -221,7 +209,6 @@ impl LocalProcess {
                 processes: Mutex::new(HashMap::new()),
                 #[cfg(unix)]
                 shell_snapshots: crate::shell_snapshot::ShellSnapshotCache::default(),
-                telemetry,
             }),
             runtime_paths,
         }
@@ -241,9 +228,6 @@ impl LocalProcess {
         for mut process in remaining {
             if let Some(network_policy_shutdown) = process.network_policy_shutdown.take() {
                 network_policy_shutdown.cancel();
-            }
-            if let Some(metrics) = process.metrics.take() {
-                metrics.finish("terminated");
             }
             process.session.terminate();
         }
@@ -275,9 +259,8 @@ impl LocalProcess {
     async fn start_process(
         &self,
         params: ExecParams,
-        mut telemetry: ProcessTelemetry,
+        mut telemetry: ProcessLogContext,
     ) -> Result<(ExecResponse, watch::Sender<u64>, ExecProcessEventLog), JSONRPCErrorError> {
-        telemetry.launch_context = telemetry.launch_context.filter(SpanContext::is_valid);
         let metadata = params.metadata.as_ref();
         telemetry.thread_id = metadata
             .and_then(|metadata| metadata.thread_id.as_ref())
@@ -361,7 +344,7 @@ impl LocalProcess {
                 "shell snapshots are unsupported on this platform".to_string(),
             ));
         }
-        let prepared = prepare_exec_request_with_telemetry(
+        let prepared = prepare_exec_request_with_log_context(
             &params,
             child_env(&params),
             self.runtime_paths.as_ref(),
@@ -376,12 +359,7 @@ impl LocalProcess {
         let snapshot_file = self
             .inner
             .shell_snapshots
-            .prepare(
-                &params,
-                &mut prepared,
-                &self.inner.telemetry,
-                CapturePurpose::Execution,
-            )
+            .prepare(&params, &mut prepared, CapturePurpose::Execution)
             .await?;
         if prepared.command.is_empty() {
             return Err(invalid_params("argv must not be empty".to_string()));
@@ -432,7 +410,7 @@ impl LocalProcess {
         let spawned = match spawned_result {
             Ok(spawned) => spawned,
             Err(err) => {
-                telemetry.log(ProcessTelemetryEvent::SpawnFailed, prepared.sandbox);
+                telemetry.log(ProcessLogEvent::SpawnFailed, prepared.sandbox);
                 let mut process_map = self.inner.processes.lock().await;
                 if matches!(
                     process_map.get(&process_id),
@@ -443,7 +421,6 @@ impl LocalProcess {
                 return Err(internal_error(err.to_string()));
             }
         };
-        let metrics = self.inner.telemetry.process_started(&process_id);
 
         let output_notify = Arc::new(Notify::new());
         let (wake_tx, _wake_rx) = watch::channel(0);
@@ -459,7 +436,6 @@ impl LocalProcess {
             ) {
                 drop(process_map);
                 spawned.session.terminate();
-                metrics.finish("terminated");
                 return Err(invalid_request(format!(
                     "process {process_id} start was cancelled"
                 )));
@@ -482,7 +458,6 @@ impl LocalProcess {
                     output_notify: Arc::clone(&output_notify),
                     open_streams: 2,
                     closed: false,
-                    metrics: Some(metrics),
                     termination_requested: false,
                     sandbox: prepared.sandbox,
                     sandbox_denied: false,
@@ -491,7 +466,7 @@ impl LocalProcess {
                 })),
             );
         }
-        telemetry.log(ProcessTelemetryEvent::Start, prepared.sandbox);
+        telemetry.log(ProcessLogEvent::Start, prepared.sandbox);
         tokio::spawn(stream_output(
             process_id.clone(),
             if params.tty {
@@ -539,7 +514,7 @@ impl LocalProcess {
     pub(crate) async fn exec(
         &self,
         params: ExecParams,
-        telemetry: ProcessTelemetry,
+        telemetry: ProcessLogContext,
     ) -> Result<ExecResponse, JSONRPCErrorError> {
         self.start_process(params, telemetry)
             .await
@@ -776,7 +751,7 @@ pub(crate) fn shell_environment_policy(env_policy: &ExecEnvPolicy) -> ShellEnvir
 impl LocalProcess {
     async fn start(&self, params: ExecParams) -> Result<StartedExecProcess, ExecServerError> {
         let (response, wake_tx, events) = self
-            .start_process(params, ProcessTelemetry::default())
+            .start_process(params, ProcessLogContext::default())
             .await
             .map_err(map_handler_error)?;
         let sandbox_type = sandbox_type_from_protocol(response.sandbox_type);
@@ -808,24 +783,19 @@ impl ExecBackend for LocalProcess {
                     "shell snapshot prewarming does not support managed networking".to_string(),
                 ));
             }
-            let mut prepared = prepare_exec_request_with_telemetry(
+            let mut prepared = prepare_exec_request_with_log_context(
                 &params,
                 child_env(&params),
                 self.runtime_paths.as_ref(),
                 /*network_policy_decider*/ None,
                 /*network_policy_audit_observer*/ None,
-                &ProcessTelemetry::default(),
+                &ProcessLogContext::default(),
             )
             .await
             .map_err(map_handler_error)?;
             self.inner
                 .shell_snapshots
-                .prepare(
-                    &params,
-                    &mut prepared,
-                    &self.inner.telemetry,
-                    CapturePurpose::Prewarm,
-                )
+                .prepare(&params, &mut prepared, CapturePurpose::Prewarm)
                 .await
                 .map(|_| ())
                 .map_err(map_handler_error)
@@ -1024,16 +994,10 @@ fn watch_exit(
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
     inner: Arc<Inner>,
     output_notify: Arc<Notify>,
-    telemetry: ProcessTelemetry,
+    telemetry: ProcessLogContext,
 ) -> impl std::future::Future<Output = ()> + Send {
     // Set the copied OTEL parent before entering; never retain the RPC tracing span.
     let process_span = tracing::info_span!(parent: None, "codex.exec_server.process");
-    if let Some(launch_context) = &telemetry.launch_context {
-        codex_otel::set_parent_from_context(
-            &process_span,
-            opentelemetry::Context::new().with_remote_span_context(launch_context.clone()),
-        );
-    }
     async move {
         let exit_code = exit_rx.await.unwrap_or(-1);
         let sandboxed = {
@@ -1041,15 +1005,6 @@ fn watch_exit(
             match processes.get_mut(&process_id) {
                 Some(ProcessEntry::Running(process)) => {
                     let sandboxed = process.sandbox != SandboxType::None;
-                    if let Some(metrics) = process.metrics.take() {
-                        metrics.finish(if process.termination_requested {
-                            "terminated"
-                        } else if exit_code == 0 {
-                            "success"
-                        } else {
-                            "error"
-                        });
-                    }
                     sandboxed
                 }
                 Some(ProcessEntry::Starting(_)) | None => false,
@@ -1090,11 +1045,11 @@ fn watch_exit(
                     process.sandbox_denied =
                         is_likely_sandbox_denied(process.sandbox, &exec_output);
                     if process.sandbox_denied {
-                        telemetry.log(ProcessTelemetryEvent::SandboxDenied, process.sandbox);
+                        telemetry.log(ProcessLogEvent::SandboxDenied, process.sandbox);
                     }
                 }
                 telemetry.log(
-                    ProcessTelemetryEvent::Exit {
+                    ProcessLogEvent::Exit {
                         exit_code,
                         termination_requested: process.termination_requested,
                     },
@@ -1222,13 +1177,9 @@ mod tests {
     use codex_network_proxy::NetworkProxyState;
     use codex_network_proxy::RemoteNetworkProxyConfig;
     use codex_network_proxy::RemoteNetworkProxyLaunchConfig;
-    use codex_otel::MetricsConfig;
     use codex_protocol::config_types::ShellEnvironmentPolicyInherit;
     use codex_utils_path_uri::PathUri;
     use codex_utils_pty::ProcessDriver;
-    use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-    use opentelemetry_sdk::metrics::data::AggregatedMetrics;
-    use opentelemetry_sdk::metrics::data::MetricData;
     use pretty_assertions::assert_eq;
     #[cfg(not(target_os = "windows"))]
     use tokio::io::AsyncReadExt;
@@ -1286,7 +1237,6 @@ mod tests {
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
         let backend = LocalProcess::with_runtime_paths(
             RpcNotificationSender::new(outgoing_tx),
-            ExecServerTelemetry::default(),
             /*runtime_paths*/ None,
         );
         let proxy_config = RemoteNetworkProxyConfig::from_effective_config(&NetworkProxyConfig {
@@ -1306,7 +1256,7 @@ mod tests {
                 .for_execution("environment-1".to_string(), "execution-1".to_string()),
         );
         backend
-            .exec(params, ProcessTelemetry::default())
+            .exec(params, ProcessLogContext::default())
             .await
             .expect("start process with proxy");
         let output = backend
@@ -1376,62 +1326,6 @@ mod tests {
         backend.shutdown().await;
     }
 
-    fn telemetry_backend() -> (
-        LocalProcess,
-        codex_otel::MetricsClient,
-        InMemoryMetricExporter,
-    ) {
-        let exporter = InMemoryMetricExporter::default();
-        let metrics = codex_otel::MetricsClient::new(MetricsConfig::in_memory(
-            "test",
-            "codex-exec-server",
-            env!("CARGO_PKG_VERSION"),
-            exporter.clone(),
-        ))
-        .expect("metrics");
-        let telemetry = ExecServerTelemetry::new(metrics.clone());
-        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(NOTIFICATION_CHANNEL_CAPACITY);
-        tokio::spawn(async move { while outgoing_rx.recv().await.is_some() {} });
-        (
-            LocalProcess::with_runtime_paths(
-                RpcNotificationSender::new(outgoing_tx),
-                telemetry,
-                /*runtime_paths*/ None,
-            ),
-            metrics,
-            exporter,
-        )
-    }
-
-    fn assert_finished_process_result(
-        metrics: codex_otel::MetricsClient,
-        exporter: &InMemoryMetricExporter,
-        expected: &str,
-    ) {
-        metrics.shutdown().expect("shutdown metrics");
-        let resource_metrics = exporter
-            .get_finished_metrics()
-            .expect("finished metrics")
-            .into_iter()
-            .last()
-            .expect("metrics export");
-        let finished_processes = resource_metrics
-            .scope_metrics()
-            .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-            .find(|metric| metric.name() == "exec_server_processes_finished_total")
-            .expect("finished process metric");
-        let AggregatedMetrics::U64(MetricData::Sum(sum)) = finished_processes.data() else {
-            panic!("finished process metric should be a u64 sum");
-        };
-        let results = sum
-            .data_points()
-            .flat_map(opentelemetry_sdk::metrics::data::SumDataPoint::attributes)
-            .filter(|attribute| attribute.key.as_str() == "result")
-            .map(|attribute| attribute.value.as_str().into_owned())
-            .collect::<Vec<_>>();
-        assert_eq!(results, vec![expected.to_string()]);
-    }
-
     #[tokio::test]
     async fn start_process_rejects_non_native_cwd_before_launch() {
         #[cfg(unix)]
@@ -1449,7 +1343,7 @@ mod tests {
         params.cwd = cwd;
 
         let result = LocalProcess::default()
-            .start_process(params, ProcessTelemetry::default())
+            .start_process(params, ProcessLogContext::default())
             .await;
         let Err(error) = result else {
             panic!("non-native cwd should be rejected");
@@ -1477,7 +1371,7 @@ mod tests {
             params.process_id = ProcessId::from(process_id);
             params.network_proxy = Some(proxy.clone());
             let error = LocalProcess::default()
-                .start_process(params, ProcessTelemetry::default())
+                .start_process(params, ProcessLogContext::default())
                 .await
                 .err()
                 .expect("invalid callback process ID should be rejected");
@@ -1490,7 +1384,7 @@ mod tests {
         boundary.network_proxy = Some(proxy);
         boundary.argv.clear();
         let error = LocalProcess::default()
-            .start_process(boundary, ProcessTelemetry::default())
+            .start_process(boundary, ProcessLogContext::default())
             .await
             .err()
             .expect("valid boundary process ID should proceed to process preparation");
@@ -1511,7 +1405,7 @@ mod tests {
             ordinary.process_id = ProcessId::from(process_id);
             ordinary.argv.clear();
             let error = LocalProcess::default()
-                .start_process(ordinary, ProcessTelemetry::default())
+                .start_process(ordinary, ProcessLogContext::default())
                 .await
                 .err()
                 .expect("empty argv should be rejected after ID validation");
@@ -1563,20 +1457,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exit_before_shutdown_records_success() {
-        let (backend, metrics, exporter) = telemetry_backend();
-        let mut process = spawn_test_process(&backend, "exit-before-shutdown").await;
-
-        process.exit(/*exit_code*/ 0);
-        let _ = read_process_until_change(&backend, &process.process_id, /*after_seq*/ None).await;
-        backend.shutdown().await;
-
-        assert_finished_process_result(metrics, &exporter, "success");
-    }
-
-    #[tokio::test]
-    async fn termination_request_before_exit_records_terminated() {
-        let (backend, metrics, exporter) = telemetry_backend();
+    async fn termination_request_before_exit_succeeds() {
+        let backend = LocalProcess::default();
         let mut process = spawn_test_process(&backend, "terminate-before-exit").await;
 
         assert_eq!(
@@ -1591,8 +1473,6 @@ mod tests {
         process.exit(/*exit_code*/ 0);
         let _ = read_process_until_change(&backend, &process.process_id, /*after_seq*/ None).await;
         backend.shutdown().await;
-
-        assert_finished_process_result(metrics, &exporter, "terminated");
     }
 
     #[tokio::test]
@@ -1630,17 +1510,6 @@ mod tests {
         drop(process.stderr_tx);
         let _ = read_process_until_closed(&backend, &process.process_id).await;
         backend.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn shutdown_before_exit_records_terminated() {
-        let (backend, metrics, exporter) = telemetry_backend();
-        let mut process = spawn_test_process(&backend, "shutdown-before-exit").await;
-
-        backend.shutdown().await;
-        process.exit(/*exit_code*/ 0);
-
-        assert_finished_process_result(metrics, &exporter, "terminated");
     }
 
     #[tokio::test]
@@ -2007,7 +1876,6 @@ mod tests {
                 output_notify: Arc::clone(&output_notify),
                 open_streams: 2,
                 closed: false,
-                metrics: Some(backend.inner.telemetry.process_started(&process_id)),
                 termination_requested: false,
                 sandbox: SandboxType::None,
                 sandbox_denied: false,
@@ -2037,7 +1905,7 @@ mod tests {
             exit_rx,
             Arc::clone(&backend.inner),
             output_notify,
-            ProcessTelemetry::default(),
+            ProcessLogContext::default(),
         ));
 
         TestProcess {

@@ -33,7 +33,6 @@ use codex_connectors::ConnectorRuntimeManager;
 use codex_connectors::ConnectorSnapshot;
 use codex_connectors::connector_runtime_context_key;
 use codex_login::CodexAuth;
-use codex_model_provider::CHATGPT_CODEX_BASE_URL;
 use codex_protocol::mcp::ClientMcpExtensions;
 use codex_protocol::mcp::McpServerInfo;
 use codex_protocol::mcp::Resource;
@@ -62,10 +61,8 @@ use crate::server::EffectiveMcpServer;
 use crate::tools::ToolInfo;
 
 pub const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
-const DEFAULT_CODEX_APPS_MCP_PRODUCT_SKU: &str = "codex";
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
-const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum McpSnapshotDetail {
@@ -122,10 +119,6 @@ pub struct McpPermissionPromptAutoApproveContext {
 /// runtime entry points such as [`effective_mcp_servers`].
 #[derive(Debug, Clone)]
 pub struct McpConfig {
-    /// Base URL for ChatGPT-hosted app MCP servers, copied from the root config.
-    pub chatgpt_base_url: String,
-    /// Optional product SKU forwarded to the host-owned apps MCP server.
-    pub apps_mcp_product_sku: Option<String>,
     /// Requests server-side read-only filtering and invocation checks for MCP tools.
     pub requires_read_only_mcp_tools: bool,
     /// Codex home directory used for MCP OAuth state and app-tool cache files.
@@ -170,20 +163,13 @@ pub struct McpConfig {
     // TODO(anp): Reconcile this runtime-wide copy with TurnEnvironment::sandbox_context
     // for the environment that owns each MCP server.
     pub use_legacy_landlock: bool,
-    /// Whether the app MCP integration is enabled by config.
-    ///
-    /// ChatGPT auth is checked separately before a materialized host-owned Apps
-    /// server can be used.
-    pub apps_enabled: bool,
     /// Whether model-visible MCP tool namespaces should keep the legacy
     /// `mcp__` prefix.
     pub prefix_mcp_tool_names: bool,
     /// MCP servers whose model-visible tool namespaces omit the `mcp__` prefix.
     pub non_prefixed_mcp_tool_servers: Vec<String>,
-    /// Protocol mode for servers other than the host-owned Codex Apps registration.
+    /// Protocol mode for configured MCP servers.
     pub protocol_mode: McpProtocolMode,
-    /// Independent protocol mode for the trusted, HTTP Codex Apps registration.
-    pub host_owned_apps_protocol_mode: McpProtocolMode,
     /// Client-side elicitation capabilities advertised during MCP initialization.
     pub client_elicitation_capability: ElicitationCapability,
     /// Resolved MCP registrations keyed by logical server name.
@@ -209,12 +195,7 @@ impl McpConfig {
             .filter(|(_, server)| server.enabled())
             .filter_map(|(server_name, _)| {
                 let server = self.mcp_server_catalog.server(server_name)?;
-                let permission_profile = if server
-                    .source()
-                    .is_host_owned_apps(server_name, server.config())
-                {
-                    &self.permission_profile
-                } else if let Some(permission_profile) =
+                let permission_profile = if let Some(permission_profile) =
                     environment_profiles.get(&server.config().environment_id)
                 {
                     permission_profile
@@ -341,10 +322,6 @@ impl ToolPluginContext {
     }
 }
 
-pub fn host_owned_codex_apps_enabled(config: &McpConfig, auth: Option<&CodexAuth>) -> bool {
-    config.apps_enabled && auth.is_some_and(CodexAuth::uses_codex_backend)
-}
-
 pub fn configured_mcp_servers(config: &McpConfig) -> HashMap<String, McpServerConfig> {
     config.mcp_server_catalog.configured_servers()
 }
@@ -354,38 +331,6 @@ pub fn effective_mcp_servers(
     auth: Option<&CodexAuth>,
 ) -> HashMap<String, EffectiveMcpServer> {
     effective_mcp_servers_from_configured(configured_mcp_servers(config), config, auth)
-}
-
-fn is_trusted_chatgpt_mcp_server(
-    transport: &McpServerTransportConfig,
-    chatgpt_base_url: &str,
-) -> bool {
-    let McpServerTransportConfig::StreamableHttp { url, .. } = transport else {
-        return false;
-    };
-    let Ok(server_url) = url::Url::parse(url) else {
-        return false;
-    };
-    if !matches!(server_url.scheme(), "http" | "https") {
-        return false;
-    }
-
-    if url::Url::parse(CHATGPT_CODEX_BASE_URL)
-        .ok()
-        .is_some_and(|chatgpt_url| server_url.origin() == chatgpt_url.origin())
-    {
-        return true;
-    }
-
-    url::Url::parse(chatgpt_base_url)
-        .ok()
-        .is_some_and(|staging_url| {
-            staging_url.scheme() == "https"
-                && staging_url.domain().is_some_and(|host| {
-                    host == "chatgpt-staging.com" || host.ends_with(".chatgpt-staging.com")
-                })
-                && server_url.origin() == staging_url.origin()
-        })
 }
 
 /// Converts a materialized server map to its auth-gated runtime view.
@@ -399,11 +344,11 @@ fn is_trusted_chatgpt_mcp_server(
 pub fn effective_mcp_servers_from_configured(
     configured_servers: HashMap<String, McpServerConfig>,
     config: &McpConfig,
-    auth: Option<&CodexAuth>,
+    _auth: Option<&CodexAuth>,
 ) -> HashMap<String, EffectiveMcpServer> {
-    let mut servers = configured_servers
+    configured_servers
         .into_iter()
-        .map(|(name, mut server)| {
+        .map(|(name, server)| {
             #[expect(
                 clippy::expect_used,
                 reason = "materialized servers must have catalog registrations"
@@ -412,14 +357,6 @@ pub fn effective_mcp_servers_from_configured(
                 .mcp_server_catalog
                 .server(&name)
                 .expect("materialized MCP server must have a catalog registration");
-            match server.auth.clone() {
-                McpServerAuth::ChatGpt => {
-                    if !is_trusted_chatgpt_mcp_server(&server.transport, &config.chatgpt_base_url) {
-                        server.auth = McpServerAuth::OAuth;
-                    }
-                }
-                McpServerAuth::OAuth | McpServerAuth::EmaAuth => {}
-            }
             (
                 name,
                 EffectiveMcpServer::from_config_with_policy(
@@ -429,11 +366,7 @@ pub fn effective_mcp_servers_from_configured(
                 .with_agent_plugin(registration.source().is_agent_plugin()),
             )
         })
-        .collect::<HashMap<_, _>>();
-    if !host_owned_codex_apps_enabled(config, auth) {
-        servers.remove(CODEX_APPS_MCP_SERVER_NAME);
-    }
-    servers
+        .collect()
 }
 
 pub fn tool_plugin_context(config: &McpConfig) -> ToolPluginContext {
@@ -589,101 +522,6 @@ pub(crate) fn sanitize_responses_api_tool_name(name: &str) -> String {
         "_".to_string()
     } else {
         sanitized
-    }
-}
-
-fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
-    match env::var(CODEX_CONNECTORS_TOKEN_ENV_VAR) {
-        Ok(value) if !value.trim().is_empty() => Some(CODEX_CONNECTORS_TOKEN_ENV_VAR.to_string()),
-        Ok(_) => None,
-        Err(env::VarError::NotPresent) => None,
-        Err(env::VarError::NotUnicode(_)) => Some(CODEX_CONNECTORS_TOKEN_ENV_VAR.to_string()),
-    }
-}
-
-fn normalize_codex_apps_base_url(base_url: &str) -> String {
-    let mut base_url = base_url.trim_end_matches('/').to_string();
-    if (base_url.starts_with("https://chatgpt.com")
-        || base_url.starts_with("https://chat.openai.com"))
-        && !base_url.contains("/backend-api")
-    {
-        base_url = format!("{base_url}/backend-api");
-    }
-    base_url
-}
-
-fn codex_apps_mcp_url_for_base_url(base_url: &str) -> String {
-    let base_url = normalize_codex_apps_base_url(base_url);
-    let base_url = if base_url.contains("/backend-api") || base_url.contains("/api/codex") {
-        base_url
-    } else {
-        format!("{base_url}/api/codex")
-    };
-    format!("{base_url}/ps/mcp")
-}
-
-pub fn codex_apps_mcp_server_config(
-    chatgpt_base_url: &str,
-    apps_mcp_product_sku: Option<&str>,
-    originator: Option<&str>,
-) -> McpServerConfig {
-    mcp_server_config_for_url(
-        codex_apps_mcp_url_for_base_url(chatgpt_base_url),
-        apps_mcp_product_sku,
-        originator,
-        McpServerAuth::ChatGpt,
-    )
-}
-
-/// Builds the ChatGPT-hosted plugin runtime served by plugin-service.
-pub fn hosted_plugin_runtime_mcp_server_config(
-    chatgpt_base_url: &str,
-    apps_mcp_product_sku: Option<&str>,
-    originator: Option<&str>,
-) -> McpServerConfig {
-    codex_apps_mcp_server_config(chatgpt_base_url, apps_mcp_product_sku, originator)
-}
-
-fn mcp_server_config_for_url(
-    url: String,
-    apps_mcp_product_sku: Option<&str>,
-    originator: Option<&str>,
-    auth_mode: McpServerAuth,
-) -> McpServerConfig {
-    let product_sku = apps_mcp_product_sku.unwrap_or(DEFAULT_CODEX_APPS_MCP_PRODUCT_SKU);
-    let mut http_headers =
-        HashMap::from([("X-OpenAI-Product-Sku".to_string(), product_sku.to_string())]);
-    if let Some(originator) = originator {
-        http_headers.insert("originator".to_string(), originator.to_string());
-    }
-    let env_http_headers = None;
-
-    McpServerConfig {
-        transport: McpServerTransportConfig::StreamableHttp {
-            url,
-            bearer_token_env_var: codex_apps_mcp_bearer_token_env_var(),
-            http_headers: Some(http_headers),
-            env_http_headers,
-            http_headers_helper: None,
-        },
-        auth: auth_mode,
-        environment_id: codex_config::DEFAULT_MCP_SERVER_ENVIRONMENT_ID.to_string(),
-        enabled: true,
-        required: false,
-        startup_readiness: Default::default(),
-        supports_parallel_tool_calls: false,
-        tool_input_schema_max_bytes: None,
-        omit_tools_from: None,
-        disabled_reason: None,
-        startup_timeout_sec: Some(Duration::from_secs(30)),
-        tool_timeout_sec: None,
-        default_tools_approval_mode: None,
-        enabled_tools: None,
-        disabled_tools: None,
-        scopes: None,
-        oauth: None,
-        oauth_resource: None,
-        tools: HashMap::new(),
     }
 }
 

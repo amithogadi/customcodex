@@ -5,7 +5,7 @@ use crate::plugins::plugins_manager_for_config;
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_config::types::ApprovalsReviewer;
 use codex_connectors::merge::plugin_connector_to_app_info;
-use codex_connectors::metadata::connector_install_url;
+
 use codex_connectors::metadata::sanitize_name;
 use codex_features::Feature;
 use codex_login::AuthManager;
@@ -47,7 +47,7 @@ fn codex_app_tool(
         callable_namespace: tool_namespace,
         namespace_description: None,
         tool: test_tool_definition(tool_name),
-        openai_file_input_optional_fields: Default::default(),
+
         connector_id: Some(connector_id.to_string()),
         connector_name: connector_name.map(ToOwned::to_owned),
         plugin_display_names: plugin_names(plugin_display_names),
@@ -92,7 +92,7 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
             callable_namespace: "sample".to_string(),
             namespace_description: None,
             tool: test_tool_definition("echo"),
-            openai_file_input_optional_fields: Default::default(),
+
             connector_id: None,
             connector_name: None,
             plugin_display_names: plugin_names(&["ignored"]),
@@ -112,7 +112,7 @@ fn accessible_connectors_from_mcp_tools_carries_plugin_display_names() {
             icon_assets: None,
             icon_dark_assets: None,
             distribution_channel: None,
-            install_url: Some(connector_install_url("Google Calendar", "calendar")),
+            install_url: None,
             branding: None,
             app_metadata: None,
             labels: None,
@@ -153,7 +153,7 @@ fn synthetic_links_are_exposed_to_the_agent_but_not_accessible_in_app_list() {
         icon_assets: None,
         icon_dark_assets: None,
         distribution_channel: None,
-        install_url: Some(connector_install_url("Calendar", "calendar")),
+        install_url: None,
         branding: None,
         app_metadata: None,
         labels: None,
@@ -178,7 +178,7 @@ fn synthetic_links_are_exposed_to_the_agent_but_not_accessible_in_app_list() {
                 icon_assets: None,
                 icon_dark_assets: None,
                 distribution_channel: None,
-                install_url: Some(connector_install_url("Gmail", "gmail")),
+                install_url: None,
                 branding: None,
                 app_metadata: None,
                 labels: None,
@@ -232,7 +232,7 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
                 icon_assets: None,
                 icon_dark_assets: None,
                 distribution_channel: None,
-                install_url: Some(connector_install_url("Google Calendar", "calendar")),
+                install_url: None,
                 branding: None,
                 app_metadata: None,
                 labels: None,
@@ -249,7 +249,7 @@ async fn refresh_accessible_connectors_cache_from_mcp_tools_writes_latest_instal
                 icon_assets: None,
                 icon_dark_assets: None,
                 distribution_channel: None,
-                install_url: Some(connector_install_url("Hidden", "connector_openai_hidden")),
+                install_url: None,
                 branding: None,
                 app_metadata: None,
                 labels: None,
@@ -275,7 +275,7 @@ fn accessible_connectors_from_mcp_tools_preserves_description() {
             "Create a calendar event",
             Arc::new(JsonObject::default()),
         ),
-        openai_file_input_optional_fields: Default::default(),
+
         connector_id: Some("calendar".to_string()),
         connector_name: Some("Calendar".to_string()),
         plugin_display_names: Vec::new(),
@@ -295,7 +295,7 @@ fn accessible_connectors_from_mcp_tools_preserves_description() {
             branding: None,
             app_metadata: None,
             labels: None,
-            install_url: Some(connector_install_url("Calendar", "calendar")),
+            install_url: None,
             is_accessible: true,
             is_enabled: true,
             plugin_display_names: Vec::new(),

@@ -58,7 +58,6 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStartedNotification;
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_config::cloud_config_bundle_loader_for_storage;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLoadError;
 use codex_config::ConfigLoadOptions;
@@ -70,7 +69,6 @@ use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigTomlLoadResult;
-use codex_core::config::bootstrap_auth_config;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_toml_with_layer_stack;
 use codex_core::config::resolve_oss_provider;
@@ -80,7 +78,6 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::read_session_meta_line;
 use codex_features::Feature;
-use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
 use codex_history::RolloutItem;
 use codex_history::RolloutLine;
@@ -90,8 +87,6 @@ use codex_login::enforce_login_restrictions;
 use codex_login::is_workload_identity_selected;
 use codex_model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
-use codex_otel::set_parent_from_context;
-use codex_otel::traceparent_context_from_env;
 use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -171,8 +166,7 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::EventProcessor;
 
-const DEFAULT_ANALYTICS_ENABLED: bool = true;
-const EXEC_DEFAULT_LOG_FILTER: &str = "error,opentelemetry_sdk=off,opentelemetry_otlp=off";
+const EXEC_DEFAULT_LOG_FILTER: &str = "error";
 
 enum InitialOperation {
     ForkOnly,
@@ -394,21 +388,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     let managed_worktree = if worktree {
         let embedded_network_policy =
             codex_app_server_client::EmbeddedNetworkPolicy::load(&loader_overrides).await;
-        let gate_bootstrap = load_bootstrap_config_or_exit(
-            &codex_home,
-            /*cwd*/ None,
-            cli_kv_overrides.clone(),
-            loader_overrides.clone(),
-            strict_config,
-            CloudConfigBundleLoader::default(),
-        )
-        .await;
-        let gate_cloud_config = cloud_config_bundle_loader_for_storage(
-            embedded_network_policy
-                .bind_bootstrap_auth(bootstrap_auth_config(&codex_home, &gate_bootstrap)?),
-            /*enable_codex_api_key_env*/ false,
-        )
-        .await?;
+        let gate_cloud_config = CloudConfigBundleLoader::default();
         let gate_config = ConfigBuilder::default()
             .codex_home(codex_home.to_path_buf())
             .cli_overrides(cli_kv_overrides.clone())
@@ -474,8 +454,10 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             CloudConfigBundleLoader::default(),
         )
         .await;
-        let settings =
-            WorktreeSettings::for_cli(&codex_home, host_config.config_toml.desktop.as_ref())?;
+        let settings = WorktreeSettings::for_cli(
+            &codex_home,
+            host_config.config_toml.legacy_worktree_settings.as_ref(),
+        )?;
         let manager = WorktreeManager::new(settings);
         let checkout = manager.create(&CreateWorktree {
             source_cwd: config_cwd.as_path().to_path_buf(),
@@ -503,18 +485,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     )
     .await;
     let bootstrap_config_toml = &bootstrap_config.config_toml;
-    let bootstrap_auth_config = embedded_network_policy
-        .bind_bootstrap_auth(bootstrap_auth_config(&codex_home, &bootstrap_config)?);
-    // API keys cannot fetch workspace-managed configuration. Preserve the
-    // existing ChatGPT bootstrap identity even when model requests allow
-    // CODEX_API_KEY.
-    let cloud_config_bundle = cloud_config_bundle_loader_for_storage(
-        bootstrap_auth_config,
-        /*enable_codex_api_key_env*/ false,
-    )
-    .await?;
+    let cloud_config_bundle = codex_config::CloudConfigBundleLoader::default();
     if let Some(worktree) = managed_worktree.as_ref() {
-        // Destination auth can fetch source policy that the host bootstrap could not.
+        // Recheck source trust after resolving the destination configuration.
         let source_config = ConfigBuilder::default()
             .codex_home(codex_home.to_path_buf())
             .cli_overrides(cli_kv_overrides.clone())
@@ -660,41 +633,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         std::process::exit(1);
     }
 
-    let otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        codex_core::otel_init::build_provider(
-            &config,
-            env!("CARGO_PKG_VERSION"),
-            /*service_name_override*/ None,
-            DEFAULT_ANALYTICS_ENABLED,
-        )
-    })) {
-        Ok(Ok(otel)) => otel,
-        Ok(Err(e)) => {
-            eprintln!("Could not create otel exporter: {e}");
-            None
-        }
-        Err(_) => {
-            eprintln!("Could not create otel exporter: panicked during initialization");
-            None
-        }
-    };
-    codex_core::otel_init::record_process_start(otel.as_ref(), "codex_exec");
-    codex_core::otel_init::install_sqlite_telemetry(otel.as_ref(), "codex_exec");
-
-    let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
-
-    let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
-
-    let _ = tracing_subscriber::registry()
-        .with(fmt_layer)
-        .with(otel_tracing_layer)
-        .with(otel_logger_layer)
-        .try_init();
+    let _ = tracing_subscriber::registry().with(fmt_layer).try_init();
 
     let exec_span = exec_root_span();
-    if let Some(context) = traceparent_context_from_env() {
-        set_parent_from_context(&exec_span, context);
-    }
     let config_warnings: Vec<ConfigWarningNotification> = config
         .startup_warnings
         .iter()
@@ -736,7 +677,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         strict_config,
         cloud_config_bundle: run_cloud_config_bundle,
         embedded_network_policy,
-        feedback: CodexFeedback::new(),
         log_db: None,
         state_db: state_db.clone(),
         environment_manager: std::sync::Arc::new(environment_manager),
@@ -2128,15 +2068,6 @@ async fn handle_server_request(
                     "dynamic tool calls are not supported in exec mode for thread `{}`",
                     params.thread_id
                 ),
-            )
-            .await
-        }
-        ServerRequest::ChatgptAuthTokensRefresh { request_id, .. } => {
-            reject_server_request(
-                client,
-                request_id,
-                &method,
-                "chatgpt auth token refresh is not supported in exec mode".to_string(),
             )
             .await
         }

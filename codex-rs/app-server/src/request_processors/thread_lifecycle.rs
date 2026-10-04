@@ -14,7 +14,6 @@ pub(super) struct ListenerTaskContext {
     pub(super) codex_home: PathBuf,
     pub(super) thread_unload_delay: Duration,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
-    pub(super) turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
 }
 
 struct UnloadingState {
@@ -281,7 +280,6 @@ pub(super) async fn ensure_listener_task_running(
         pending_thread_unloads,
         thread_watch_manager,
         codex_home,
-        turn_cost_worker,
         ..
     } = listener_task_context;
     let outgoing_for_task = Arc::clone(&outgoing);
@@ -318,15 +316,6 @@ pub(super) async fn ensure_listener_task_running(
                             break;
                         }
                     };
-
-                    if let Some(worker) = &turn_cost_worker {
-                        worker.observe_event(
-                            conversation_id,
-                            config.as_ref(),
-                            &event,
-                            || conversation.session_telemetry(),
-                        );
-                    }
 
                     // Track the event before emitting any typed translations
                     // so thread-local state such as raw event opt-in stays

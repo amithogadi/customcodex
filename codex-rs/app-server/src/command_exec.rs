@@ -730,10 +730,7 @@ mod tests {
         let manager = CommandExecManager::default();
         let err = manager
             .start(StartCommandExecParams {
-                outgoing: Arc::new(OutgoingMessageSender::new(
-                    tx,
-                    codex_analytics::AnalyticsEventsClient::disabled(),
-                )),
+                outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: ConnectionRequestId {
                     connection_id: ConnectionId(1),
                     request_id: codex_app_server_protocol::RequestId::Integer(42),
@@ -769,10 +766,7 @@ mod tests {
 
         manager
             .start(StartCommandExecParams {
-                outgoing: Arc::new(OutgoingMessageSender::new(
-                    tx,
-                    codex_analytics::AnalyticsEventsClient::disabled(),
-                )),
+                outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: request_id.clone(),
                 process_id: Some("proc-99".to_string()),
                 exec_request: windows_sandbox_exec_request(),
@@ -819,10 +813,7 @@ mod tests {
 
         manager
             .start(StartCommandExecParams {
-                outgoing: Arc::new(OutgoingMessageSender::new(
-                    tx,
-                    codex_analytics::AnalyticsEventsClient::disabled(),
-                )),
+                outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: request_id.clone(),
                 process_id: Some("proc-100".to_string()),
                 exec_request: ExecRequest::new(
@@ -909,10 +900,7 @@ mod tests {
 
         manager
             .start(StartCommandExecParams {
-                outgoing: Arc::new(OutgoingMessageSender::new(
-                    tx,
-                    codex_analytics::AnalyticsEventsClient::disabled(),
-                )),
+                outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: request_id.clone(),
                 process_id: Some("proc-101".to_string()),
                 exec_request: ExecRequest::new(

@@ -36,7 +36,6 @@ pub(crate) fn install(session: &Session, config: &Config) {
         Arc::new(CodexHomeUserInstructionsProvider::new(
             config.codex_home.clone(),
         )),
-        /*analytics_events_client*/ None,
         crate::passthrough_image_store(),
         Arc::clone(&session.services.thread_store),
         /*agent_graph_store*/ None,
@@ -61,7 +60,7 @@ pub(crate) fn install(session: &Session, config: &Config) {
                     let (mut options, state) = context.thread_options(snapshot).await;
                     if matches!(
                         kind,
-                        codex_analytics::GuardianReviewSessionKind::EphemeralForked
+                        codex_protocol::guardian_review::GuardianReviewSessionKind::EphemeralForked
                     ) {
                         options.config.ephemeral = true;
                     }

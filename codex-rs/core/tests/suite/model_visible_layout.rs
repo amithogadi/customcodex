@@ -11,7 +11,6 @@ use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
-use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::TurnInputContext;
@@ -58,7 +57,6 @@ impl TurnInputContributor for RecordingTurnInputContributor {
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext<'a>,
-        _extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
         _session_store: &'a ExtensionData,
         _thread_store: &'a ExtensionData,
         _turn_store: &'a ExtensionData,
@@ -91,7 +89,6 @@ fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
         max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: config.bundled_skills_enabled(),
         cloud_skill_enabled: config.cloud_skill_enabled,
-        shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
     });
     Arc::new(extensions.build())
 }

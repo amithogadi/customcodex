@@ -507,78 +507,6 @@ async fn safety_buffering_ignores_hidden_stale_and_historical_updates() {
 }
 
 #[tokio::test]
-async fn tool_suggestion_install_url_is_validated_before_opening() {
-    for install_url in [
-        "file:///tmp/connector",
-        "http://example.test/install",
-        "custom://example.test/install",
-        "not a URL",
-        "https://user:password@example.test/install",
-        "https://example.test/install",
-    ] {
-        let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
-        let request_thread_id = ThreadId::new();
-        chat.thread_id = Some(ThreadId::new());
-        let initial_popup = render_bottom_popup(&chat, /*width*/ 80);
-
-        chat.handle_elicitation_request_now(
-            codex_app_server_protocol::RequestId::Integer(9),
-            codex_app_server_protocol::McpServerElicitationRequestParams {
-                thread_id: request_thread_id.to_string(),
-                turn_id: Some("turn-install".to_string()),
-                server_name: "connector-server".to_string(),
-                request: codex_app_server_protocol::McpServerElicitationRequest::Form {
-                    meta: Some(serde_json::json!({
-                        "codex_approval_kind": "tool_suggestion",
-                        "tool_type": "connector",
-                        "suggest_type": "install",
-                        "suggest_reason": "Install the connector to continue",
-                        "tool_id": "connector_test",
-                        "tool_name": "Test Connector",
-                        "install_url": install_url,
-                    })),
-                    message: "Install Test Connector".to_string(),
-                    requested_schema: serde_json::from_value(serde_json::json!({
-                        "type": "object",
-                        "properties": {},
-                    }))
-                    .expect("valid schema"),
-                },
-            },
-        );
-
-        if install_url == "https://example.test/install" {
-            chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-            assert_matches!(
-                rx.try_recv(),
-                Ok(AppEvent::OpenUrlInBrowser { url }) if url == install_url
-            );
-        } else {
-            assert_matches!(
-                rx.try_recv(),
-                Ok(AppEvent::SubmitThreadOp {
-                    thread_id,
-                    op: Op::ResolveElicitation {
-                        server_name,
-                        request_id: codex_app_server_protocol::RequestId::Integer(9),
-                        decision: codex_app_server_protocol::McpServerElicitationAction::Decline,
-                        content: None,
-                        meta: None,
-                    },
-                }) if thread_id == request_thread_id && server_name == "connector-server"
-            );
-            let popup = render_bottom_popup(&chat, /*width*/ 80);
-            assert_eq!(popup, initial_popup);
-            assert_chatwidget_snapshot!(
-                "declined_tool_suggestion",
-                normalize_snapshot_paths(popup)
-            );
-        }
-        assert!(rx.try_recv().is_err());
-    }
-}
-
-#[tokio::test]
 async fn invalid_url_elicitation_is_declined() {
     let (mut chat, _app_event_tx, mut rx, _op_rx) = make_chatwidget_manual_with_sender().await;
     let visible_thread_id = ThreadId::new();
@@ -620,19 +548,12 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
     set_chatgpt_auth(&mut chat);
     set_fast_mode_test_catalog(&mut chat);
-    chat.set_feature_enabled(Feature::Apps, /*enabled*/ true);
     let thread_id = ThreadId::new();
     let mut session = configured_thread_session(thread_id);
     session.cwd = test_path_buf("/tmp/original-workspace").abs();
     chat.handle_thread_session(session);
     chat.config.permissions.approval_policy =
         Constrained::allow_only(AskForApproval::Never.to_core());
-    let previous_generation = chat.connector_scope_generation();
-    let old_app = serde_json::from_str(r#"{"id":"old","name":"Old","isAccessible":true}"#)
-        .expect("valid app");
-    chat.connectors.mention_snapshot = Some(crate::app_event::ConnectorsSnapshot {
-        connectors: vec![old_app],
-    });
     let _ = drain_insert_history(&mut rx);
 
     chat.handle_server_notification(
@@ -640,9 +561,6 @@ async fn thread_settings_updated_updates_visible_state_without_transcript() {
         /*replay_kind*/ None,
     );
 
-    assert_ne!(chat.connector_scope_generation(), previous_generation);
-    assert!(chat.connectors_for_mentions().is_none());
-    assert!(chat.connectors.mention_refresh_in_flight);
     assert_eq!(chat.current_model(), "gpt-5.4");
     assert_eq!(
         chat.current_reasoning_effort(),
@@ -946,45 +864,6 @@ async fn live_app_server_turn_completed_clears_working_status_after_answer_item(
     assert_eq!(
         chat.transcript.last_completed_agent_message,
         Some(("turn-1".to_string(), "msg-1".to_string()))
-    );
-}
-
-#[tokio::test]
-async fn live_app_server_turn_started_sets_feedback_turn_id() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.handle_server_notification(
-        ServerNotification::TurnStarted(TurnStartedNotification {
-            thread_id: "thread-1".to_string(),
-            turn: AppServerTurn {
-                id: "turn-1".to_string(),
-                items_view: codex_app_server_protocol::TurnItemsView::Full,
-                items: Vec::new(),
-                status: AppServerTurnStatus::InProgress,
-                error: None,
-                started_at: Some(0),
-                completed_at: None,
-                duration_ms: None,
-            },
-        }),
-        /*replay_kind*/ None,
-    );
-
-    chat.open_feedback_note(
-        crate::app_event::FeedbackCategory::Bug,
-        /*include_logs*/ false,
-        crate::bottom_pane::FeedbackAudience::External,
-    );
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::SubmitFeedback {
-            category: crate::app_event::FeedbackCategory::Bug,
-            reason: None,
-            turn_id: Some(turn_id),
-            include_logs: false,
-        }) if turn_id == "turn-1"
     );
 }
 
@@ -2119,7 +1998,7 @@ async fn sqlite_log_write_warning_is_visible_in_warnings() {
     chat.handle_server_notification(
         ServerNotification::Warning(WarningNotification {
             thread_id: None,
-            message: "Codex couldn't save diagnostic logs to its local database. Use /feedback with logs included before closing Codex, or run `codex doctor` for diagnostics.".to_string(),
+            message: "Codex couldn't save diagnostic logs to its local database. Run `codex doctor` for diagnostics.".to_string(),
         }),
         /*replay_kind*/ None,
     );

@@ -20,8 +20,6 @@ use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ThreadIdleCause;
 use codex_features::Feature;
 use codex_history::RolloutItem;
-use codex_otel::SessionTelemetry;
-use codex_otel::current_span_w3c_trace_context;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
@@ -258,11 +256,6 @@ impl CodexThread {
         self.io.submit(op).await
     }
 
-    /// Returns the session telemetry handle for thread-scoped production instrumentation.
-    pub fn session_telemetry(&self) -> SessionTelemetry {
-        self.session.services.session_telemetry.clone()
-    }
-
     /// Schedule the same background model warmup used at startup for an idle thread.
     /// The next turn consumes the warmup through the existing startup handoff.
     /// Call after installing host services such as the thread's attestation routing.
@@ -279,11 +272,6 @@ impl CodexThread {
         self.session
             .schedule_startup_prewarm(PrewarmInput::History)
             .await;
-    }
-
-    /// Whether analytics is enabled for this thread after configuration and host overrides.
-    pub fn analytics_enabled(&self) -> bool {
-        self.session.services.analytics_events_client.is_enabled()
     }
 
     /// Returns extension-owned data attached to this thread runtime.
@@ -535,7 +523,7 @@ impl CodexThread {
                 id: new_submission_id(),
                 op: Op::SuspendTurnAndShutdown { reply },
                 turn_extension_init: None,
-                trace: current_span_w3c_trace_context(),
+                trace: None,
                 parent_turn_id: None,
                 root_turn_id: None,
                 residency_guard: None,
@@ -1079,13 +1067,6 @@ impl CodexThread {
         .await
     }
 
-    /// Refreshes this thread's Apps tools before returning their runtime state.
-    pub async fn refresh_codex_apps_tools(
-        &self,
-    ) -> anyhow::Result<codex_mcp::CodexAppsToolSnapshot> {
-        self.session.refresh_codex_apps_tools().await
-    }
-
     /// Returns the environments configured for future turns.
     pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
         self.session.configured_environment_selections().await
@@ -1163,26 +1144,6 @@ impl CodexThread {
             .await?;
 
         Ok(serde_json::to_value(result)?)
-    }
-
-    pub async fn start_mcp_event_stream(
-        &self,
-        name: &str,
-        arguments: serde_json::Value,
-        meta: Option<serde_json::Value>,
-    ) -> anyhow::Result<codex_mcp::McpEventStream> {
-        let meta = match meta.as_ref() {
-            Some(serde_json::Value::Object(meta)) => Some(meta),
-            Some(other) => {
-                anyhow::bail!("MCP event request _meta must be a JSON object, got {other}")
-            }
-            None => None,
-        };
-        let _ = self.session.services.auth_manager.auth().await;
-        self.session.refresh_mcp_if_dirty().await;
-        codex_mcp::McpResourceClient::new(Arc::clone(&self.session.services.mcp_runtime))
-            .open_event_stream(name, &arguments, meta)
-            .await
     }
 
     pub async fn call_mcp_tool(

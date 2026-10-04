@@ -2033,7 +2033,6 @@ async fn apply_patch_turn_diff_skips_git_root_when_feature_is_enabled(
     let codex = test
         .thread_manager
         .start_thread(StartThreadOptions {
-            metrics_service_name: Some(originator.to_string()),
             environments: Some(test.codex.environment_selections().await),
             ..StartThreadOptions::new(test.config.clone())
         })

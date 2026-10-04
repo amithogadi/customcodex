@@ -158,13 +158,10 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
-    let chatgpt_base_url = server.uri();
     let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| config.chatgpt_base_url = chatgpt_base_url)
+        .with_auth(CodexAuth::from_api_key("test-api-key"))
         // Local executors disable cloud skill discovery.
         .with_exec_server_url("none")
         .with_extensions(Arc::new(extensions.build()))
@@ -265,11 +262,6 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
             "next_cursor": null,
         })
     );
-    let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 1).await;
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["skill_name"], "demo:explicit-only");
-    assert_eq!(events[0]["event_params"]["invoke_type"], "explicit");
-
     let response = responses::mount_sse_sequence(
         &server,
         vec![
@@ -357,15 +349,6 @@ text({ names: result.skills.map(skill => skill.name), warnings: result.warnings,
             "failed skills.read should return a tool error for {call_id}"
         );
     }
-
-    let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 2).await;
-    assert_eq!(events.len(), 2, "repeated main reads must be deduplicated");
-    assert_eq!(events[1]["skill_name"], "demo:explicit-only");
-    assert_eq!(
-        events[1]["skill_id"],
-        format!("{:x}", sha1::Sha1::digest(MAIN_RESOURCE.as_bytes()))
-    );
-    assert_eq!(events[1]["event_params"]["invoke_type"], "implicit");
 
     for (name, has_more) in [
         ("alpha-visible", true),
@@ -499,13 +482,10 @@ async fn production_turn_aliases_discovered_singleton_cloud_root() -> Result<()>
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
-    let chatgpt_base_url = server.uri();
     let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| config.chatgpt_base_url = chatgpt_base_url)
+        .with_auth(CodexAuth::from_api_key("test-api-key"))
         .with_exec_server_url("none")
         .with_extensions(Arc::new(extensions.build()))
         .with_model_info_override("gpt-5.5", |model_info| {
@@ -622,13 +602,10 @@ async fn cloud_skill_can_read_referenced_resource_without_an_executor() -> Resul
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
-    let chatgpt_base_url = responses_server.uri();
     let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(move |config| config.chatgpt_base_url = chatgpt_base_url)
+        .with_auth(CodexAuth::from_api_key("test-api-key"))
         .with_exec_server_url("none")
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {

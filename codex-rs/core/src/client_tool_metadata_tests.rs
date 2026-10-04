@@ -69,7 +69,7 @@ fn http_message_budget_preserves_resources_until_the_message_still_exceeds_limit
         request.instructions =
             "x".repeat(target_bytes - serialized_json_bytes(&request).unwrap() + 1);
         assert_eq!(serialized_json_bytes(&request).unwrap(), target_bytes);
-        assert!(metadata_metrics::metadata_bytes(&request.input) < 32 * 1024);
+        assert!(metadata_budget::metadata_bytes(&request.input) < 32 * 1024);
         let original_input = request.input.clone();
         let bounded = bounded_input(&request, &request.input);
         if overage == 0 {
@@ -93,8 +93,8 @@ fn http_message_budget_preserves_resources_until_the_message_still_exceeds_limit
                 /*with_source*/ false,
             )
             .input;
-            let first_reduction = metadata_metrics::metadata_bytes(&original_input)
-                - metadata_metrics::metadata_bytes(&resource_only);
+            let first_reduction = metadata_budget::metadata_bytes(&original_input)
+                - metadata_budget::metadata_bytes(&resource_only);
             assert_eq!(
                 metadata,
                 &json!(format!(

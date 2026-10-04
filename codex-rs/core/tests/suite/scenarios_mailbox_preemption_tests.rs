@@ -127,13 +127,15 @@ async fn mailbox_preemption_preserves_response_when_deferred(
             .await?;
     }
     // The barrier confirms that both messages were queued before finishing the item.
+    let (reply, queued) = tokio::sync::oneshot::channel();
     test.codex
-        .submit(Op::RealtimeConversationListVoices)
+        .submit(Op::InterruptIfNoPendingInput {
+            // A nonexistent turn is a no-op that still acknowledges queue ordering.
+            turn_id: "mailbox-barrier-no-such-turn".to_string(),
+            reply,
+        })
         .await?;
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
-    })
-    .await;
+    assert!(!queued.await?);
     release.send(()).expect("release response");
     wait_for_event(&test.codex, |event| {
         matches!(event, EventMsg::TurnComplete(_))

@@ -50,10 +50,7 @@ fn experimental_features_keep_following_choice_at_wrap_boundary() {
 /// Experimental settings show each feature's label, description, and default state.
 #[test]
 fn experimental_features_display_metadata() {
-    for feature in [
-        Feature::AnalyticsPlanHistory,
-        Feature::LoginShellPackagePath,
-    ] {
+    for feature in [Feature::LoginShellPackagePath] {
         let stage = feature.stage();
         let (app_tx, _app_rx) = tokio::sync::mpsc::unbounded_channel();
         let view = ExperimentalFeaturesView::new(
@@ -278,33 +275,4 @@ fn snapshot_view(name: &str, view: &ExperimentalFeaturesView) {
     let mut buffer = Buffer::empty(area);
     view.render(area, &mut buffer);
     insta::assert_snapshot!(name, buffer_text(&buffer));
-}
-
-#[test]
-fn voice_discovery_requires_the_client_runtime() {
-    for supported in [false, true] {
-        let (app_tx, _app_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (catalog_tx, catalog_rx) = oneshot::channel();
-        let mut view = ExperimentalFeaturesView::new(
-            Vec::new(),
-            ThreadId::new(),
-            Some(catalog_rx),
-            AppEventSender::new(app_tx),
-            crate::keymap::RuntimeKeymap::defaults().list,
-        );
-        view.voice_supported = supported;
-        catalog_tx
-            .send(Ok(vec![server_feature("realtime_conversation")]))
-            .unwrap();
-        assert!(view.pre_draw_tick(Instant::now()));
-        assert_eq!(view.features.len(), usize::from(supported));
-        snapshot_view(
-            if supported {
-                "voice_runtime_available"
-            } else {
-                "voice_runtime_unavailable"
-            },
-            &view,
-        );
-    }
 }

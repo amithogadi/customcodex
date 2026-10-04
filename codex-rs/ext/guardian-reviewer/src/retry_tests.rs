@@ -1,7 +1,7 @@
 #[cfg(test)]
 use super::*;
 use crate::GuardianAssessment;
-use codex_analytics::GuardianReviewFailureReason;
+use codex_protocol::guardian_review::GuardianReviewFailureReason;
 use codex_protocol::protocol::GuardianAssessmentOutcome;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::GuardianUserAuthorization;
@@ -173,7 +173,7 @@ async fn stale_authorization_uses_the_shared_attempt_budget() {
             async {
                 (
                     GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization),
-                    GuardianReviewAnalyticsResult::without_session(),
+                    GuardianReviewDetails::without_session(),
                     None::<()>,
                 )
             }
@@ -204,7 +204,7 @@ async fn stale_authorization_does_not_extend_the_deadline() {
                 tokio::time::sleep_until(deadline).await;
                 (
                     GuardianReviewOutcome::Error(GuardianReviewError::StaleAuthorization),
-                    GuardianReviewAnalyticsResult::without_session(),
+                    GuardianReviewDetails::without_session(),
                     None::<()>,
                 )
             }

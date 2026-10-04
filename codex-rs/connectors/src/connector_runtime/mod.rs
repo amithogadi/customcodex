@@ -358,11 +358,6 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
             && let Some(snapshot) = self.current_snapshot()
         {
             drop(last_accepted_generation);
-            emit_duration(
-                MCP_TOOLS_CACHE_PUBLISH_DURATION_METRIC,
-                publish_start.elapsed(),
-                &[("source", ticket.source.as_str()), ("result", "stale")],
-            );
             return snapshot;
         }
 
@@ -374,11 +369,6 @@ impl<T: ConnectorRuntimePayload> ConnectorRuntimeContext<T> {
         // out of order.
         persist(self, server_info, snapshot.as_ref());
         drop(last_accepted_generation);
-        emit_duration(
-            MCP_TOOLS_CACHE_PUBLISH_DURATION_METRIC,
-            publish_start.elapsed(),
-            &[("source", ticket.source.as_str()), ("result", "published")],
-        );
         snapshot
     }
 
@@ -457,12 +447,6 @@ enum ConnectorRuntimeDiskCache {
 struct ConnectorRuntimeIdentity {
     codex_home: PathBuf,
     key: ConnectorRuntimeContextKey,
-}
-
-fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
-    if let Some(metrics) = codex_otel::global() {
-        let _ = metrics.record_duration(metric, duration, tags);
-    }
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

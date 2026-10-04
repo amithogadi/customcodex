@@ -47,9 +47,7 @@ impl StatusLineAccent {
             | StatusLineItem::ContextWindowSize
             | StatusLineItem::UsedTokens
             | StatusLineItem::TotalInputTokens
-            | StatusLineItem::TotalOutputTokens
-            | StatusLineItem::ThreadCredits
-            | StatusLineItem::EstimatedThreadCost => Self::Usage,
+            | StatusLineItem::TotalOutputTokens => Self::Usage,
             StatusLineItem::FiveHourLimit | StatusLineItem::WeeklyLimit => Self::Limit,
             StatusLineItem::CodexVersion | StatusLineItem::Hostname | StatusLineItem::SessionId => {
                 Self::Metadata
@@ -59,9 +57,7 @@ impl StatusLineAccent {
             }
             StatusLineItem::Permissions => Self::Mode,
             StatusLineItem::ApprovalMode => Self::Mode,
-            StatusLineItem::ThreadName
-            | StatusLineItem::ThreadTitle
-            | StatusLineItem::WorkspaceHeadline => Self::Thread,
+            StatusLineItem::ThreadName | StatusLineItem::ThreadTitle => Self::Thread,
             StatusLineItem::TaskProgress => Self::Progress,
         }
     }
@@ -263,24 +259,6 @@ mod tests {
         assert_eq!(line.spans[1].style, secondary_text_style());
         assert_eq!(line.spans[2].style.fg, Some(Color::Green));
         assert!(!line.spans[2].style.add_modifier.contains(Modifier::DIM));
-    }
-
-    #[test]
-    fn thread_usage_items_share_an_accent_and_secondary_separator() {
-        let line = status_line_from_segments_with_resolver(
-            [
-                (StatusLineItem::ThreadCredits, "5.2 credits".to_string()),
-                (StatusLineItem::EstimatedThreadCost, "~$0.21".to_string()),
-            ],
-            /*use_theme_colors*/ true,
-            /*thread_id*/ None,
-            |_| None,
-        )
-        .expect("thread usage status line");
-
-        assert_eq!(line_text(&line), "5.2 credits · ~$0.21");
-        assert_eq!(line.spans[0].style, line.spans[2].style);
-        assert_eq!(line.spans[1].style, secondary_text_style());
     }
 
     #[test]

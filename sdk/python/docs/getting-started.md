@@ -21,28 +21,7 @@ automatically. Stable SDK releases track the corresponding stable Codex CLI rele
 
 ## 2. Authenticate When Needed
 
-Existing Codex authentication is reused automatically. For ChatGPT browser
-login:
-
-```python
-from openai_codex import Codex
-
-with Codex() as codex:
-    login = codex.login_chatgpt()
-    print(login.auth_url)
-    print(login.wait().success)
-```
-
-For device-code login:
-
-```python
-with Codex() as codex:
-    login = codex.login_chatgpt_device_code()
-    print(login.verification_url, login.user_code)
-    print(login.wait().success)
-```
-
-For API-key login:
+Credentials for the provider selected in config.toml are reused automatically. To set an API key:
 
 ```python
 with Codex() as codex:

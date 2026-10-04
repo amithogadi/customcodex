@@ -242,7 +242,6 @@ async fn remote_session_commands_with_workload_identity_use_server_auth() -> Res
     let _server = TestAppServer::builder()
         .with_program(&codex)
         .with_codex_home(codex_home.path())
-        .with_plugin_startup_tasks()
         .without_managed_config()
         .with_args(&["app-server", "--listen", "unix://"])
         .with_env_overrides(&[

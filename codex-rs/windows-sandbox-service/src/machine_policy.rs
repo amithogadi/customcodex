@@ -4,11 +4,9 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-use codex_cloud_config::cloud_config_bundle_loader_for_storage_without_cache;
 use codex_config::ConfigLoadOptions;
 use codex_config::ConfigRequirementsToml;
 use codex_config::WindowsSandboxImplementationToml;
-use codex_core::config::bootstrap_auth_config;
 use codex_core::config::load_config_toml_with_layer_stack;
 use codex_windows_sandbox::WindowsSandboxProvisioningSettings;
 use codex_windows_sandbox::WindowsSandboxProxyListeners;
@@ -37,7 +35,7 @@ pub(crate) fn validate_provisioning_request(
         // The caller is already authenticated. registered::run checks the existing
         // owner, accounts and unchanged settings under the setup lock; it cannot
         // provision or repair a sandbox. Backend use still obeys managed config.
-        // Package maintenance must not require another cloud-policy fetch.
+        // Package maintenance does not need to reload provisioning requirements.
         return Ok(());
     }
     let impersonation_failure = Arc::new(Notify::new());
@@ -65,31 +63,11 @@ pub(crate) fn validate_provisioning_request(
                 Err(anyhow::anyhow!("configuration runtime worker failed to impersonate the provisioning client"))
             },
             result = async {
-                let mut bootstrap_config = load_config_toml_with_layer_stack(
-                    codex_home,
-                    /*cwd*/ None,
-                    Vec::new(),
-                    ConfigLoadOptions::default(),
-                )
-                .await
-                .context("load bootstrap configuration")?;
-                // Use the default cloud-policy endpoint unless managed requirements override it.
-                bootstrap_config.config_toml.chatgpt_base_url = None;
-                let cloud_config_bundle = cloud_config_bundle_loader_for_storage_without_cache(
-                    bootstrap_auth_config(codex_home, &bootstrap_config)
-                        .context("resolve cloud configuration authentication")?,
-                    /*enable_codex_api_key_env*/ false,
-                )
-                .await
-                .context("initialize cloud configuration authentication")?;
                 let config = load_config_toml_with_layer_stack(
                     codex_home,
                     /*cwd*/ None,
                     Vec::new(),
-                    ConfigLoadOptions {
-                        cloud_config_bundle,
-                        ..Default::default()
-                    },
+                    ConfigLoadOptions::default(),
                 )
                 .await
                 .context("load managed configuration")?;

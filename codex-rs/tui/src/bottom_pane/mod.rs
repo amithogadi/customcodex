@@ -29,7 +29,6 @@ use std::path::PathBuf;
 
 use crate::app::app_server_requests::ResolvedAppServerRequest;
 use crate::app_event::AppEvent;
-use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::HistoryLookupResponse;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::pending_input_preview::PendingInputPreview;
@@ -71,7 +70,6 @@ use std::time::Instant;
 
 mod action_required_title;
 mod actionable_banner;
-mod app_link_view;
 mod apply_patch_header;
 mod approval_overlay;
 mod async_questions;
@@ -91,17 +89,12 @@ mod status_line_style;
 mod status_surface_preview;
 mod title_setup;
 pub(crate) mod user_verification;
-mod voice_strip;
 mod warnings;
 mod warnings_view;
 pub(crate) use action_required_title::ACTION_REQUIRED_PREVIEW_PREFIX;
 pub(crate) use action_required_title::build_action_required_title_text;
 pub(crate) use actionable_banner::ActionableBanner;
 pub(crate) use actionable_banner::BannerDismissal;
-pub(crate) use app_link_view::AppLinkElicitationTarget;
-pub(crate) use app_link_view::AppLinkSuggestionType;
-pub(crate) use app_link_view::AppLinkView;
-pub(crate) use app_link_view::AppLinkViewParams;
 pub(crate) use approval_overlay::ApplyPatchApprovalRequest;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
@@ -114,10 +107,9 @@ pub(crate) use async_questions::QuestionState;
 pub(crate) use async_questions::QuestionSubmission;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
+pub(crate) use mcp_server_elicitation::url_elicitation_message;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 pub(crate) use status_line_style::status_line_from_segments;
-pub(crate) use voice_strip::VoiceStripPhase;
-pub(crate) use voice_strip::VoiceStripState;
 mod bottom_pane_view;
 mod composer_gap;
 mod effort_ignition;
@@ -179,15 +171,7 @@ pub(crate) use list_selection_view::popup_content_width;
 pub(crate) use list_selection_view::side_by_side_layout_widths;
 pub(crate) use memories_settings_view::MemoriesSettingsView;
 use slash_commands::ServiceTierCommand;
-mod feedback_note_view;
-mod feedback_view;
 mod hooks_browser_view;
-pub(crate) use feedback_view::FeedbackAudience;
-pub(crate) use feedback_view::feedback_classification;
-pub(crate) use feedback_view::feedback_disabled_params;
-pub(crate) use feedback_view::feedback_selection_params;
-pub(crate) use feedback_view::feedback_success_cell;
-pub(crate) use feedback_view::feedback_upload_consent_params;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
 pub(crate) use status_line_setup::StatusLineItem;
@@ -217,7 +201,6 @@ mod textarea;
 pub(crate) use textarea::TextArea;
 pub(crate) use textarea::TextAreaState;
 mod unified_exec_footer;
-pub(crate) use feedback_note_view::FeedbackNoteView;
 pub(crate) use hooks_browser_view::HooksBrowserView;
 pub(crate) use selection_tabs::SelectionTab;
 
@@ -440,11 +423,6 @@ impl BottomPane {
         self.composer.set_active_reasoning_effort_baseline(effort);
     }
 
-    pub fn set_connectors_snapshot(&mut self, snapshot: Option<ConnectorsSnapshot>) {
-        self.composer.set_connector_mentions(snapshot);
-        self.request_redraw();
-    }
-
     pub fn set_plugin_mentions(&mut self, plugins: Option<Vec<PluginCapabilitySummary>>) {
         self.composer.set_plugin_mentions(plugins);
         self.request_redraw();
@@ -460,10 +438,7 @@ impl BottomPane {
         self.composer.agents_navigation_key_available()
             && !crate::keymap::keymap_action_ids()
                 .filter(|action| {
-                    matches!(
-                        action.context,
-                        KeymapContext::Global | KeymapContext::Chat | KeymapContext::Voice
-                    )
+                    matches!(action.context, KeymapContext::Global | KeymapContext::Chat)
                 })
                 .any(|action| {
                     crate::keymap::bindings_for_action(
@@ -476,7 +451,7 @@ impl BottomPane {
             && !self.keymap.chords.bindings.iter().any(|binding| {
                 matches!(
                     binding.action.context,
-                    KeymapContext::Global | KeymapContext::Chat | KeymapContext::Voice
+                    KeymapContext::Global | KeymapContext::Chat
                 ) && binding.chord.prefix.is_press(left)
             })
     }
@@ -501,11 +476,6 @@ impl BottomPane {
 
     pub fn set_plugins_command_enabled(&mut self, enabled: bool) {
         self.composer.set_plugins_command_enabled(enabled);
-        self.request_redraw();
-    }
-
-    pub fn set_token_activity_command_enabled(&mut self, enabled: bool) {
-        self.composer.set_token_activity_command_enabled(enabled);
         self.request_redraw();
     }
 
@@ -576,10 +546,6 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    pub fn set_connectors_enabled(&mut self, enabled: bool) {
-        self.composer.set_connectors_enabled(enabled);
-    }
-
     #[cfg(target_os = "windows")]
     pub fn set_windows_degraded_sandbox_active(&mut self, enabled: bool) {
         self.composer.set_windows_degraded_sandbox_active(enabled);
@@ -626,11 +592,6 @@ impl BottomPane {
 
     pub fn set_goal_command_enabled(&mut self, enabled: bool) {
         self.composer.set_goal_command_enabled(enabled);
-        self.request_redraw();
-    }
-
-    pub fn set_voice_command_enabled(&mut self, enabled: bool) {
-        self.composer.set_voice_command_enabled(enabled);
         self.request_redraw();
     }
 
@@ -1200,12 +1161,6 @@ impl BottomPane {
             view.pending_hint = items.clone();
         }
         self.composer.set_footer_hint_override(items);
-        self.request_redraw();
-    }
-
-    pub(crate) fn set_voice_strip(&mut self, state: Option<VoiceStripState>) {
-        self.composer
-            .set_voice_strip(state, self.frame_requester.clone());
         self.request_redraw();
     }
 
@@ -1928,75 +1883,6 @@ impl BottomPane {
             request
         };
 
-        if let Some(tool_suggestion) = request.tool_suggestion()
-            && let Some(install_url) = tool_suggestion.install_url.clone()
-        {
-            let Some(install_url) = app_link_view::validate_external_url(
-                &install_url,
-                /*require_chatgpt_host*/ false,
-            ) else {
-                self.app_event_tx.resolve_elicitation(
-                    request.thread_id(),
-                    request.server_name().to_string(),
-                    request.request_id().clone(),
-                    codex_app_server_protocol::McpServerElicitationAction::Decline,
-                    /*content*/ None,
-                    /*meta*/ None,
-                );
-                return;
-            };
-            let suggestion_type = match tool_suggestion.suggest_type {
-                mcp_server_elicitation::ToolSuggestionType::Install => {
-                    AppLinkSuggestionType::Install
-                }
-                mcp_server_elicitation::ToolSuggestionType::Enable => AppLinkSuggestionType::Enable,
-            };
-            let is_installed = matches!(
-                tool_suggestion.suggest_type,
-                mcp_server_elicitation::ToolSuggestionType::Enable
-            );
-            let view = AppLinkView::new_with_keymap(
-                AppLinkViewParams {
-                    app_id: tool_suggestion.tool_id.clone(),
-                    title: tool_suggestion.tool_name.clone(),
-                    description: None,
-                    instructions: match suggestion_type {
-                        AppLinkSuggestionType::Install => {
-                            "Install this app in your browser, then return here.".to_string()
-                        }
-                        AppLinkSuggestionType::Enable => {
-                            "Enable this app to use it for the current request.".to_string()
-                        }
-                        AppLinkSuggestionType::Auth => unreachable!(
-                            "auth uses URL mode elicitation, not tool suggestion forms"
-                        ),
-                        AppLinkSuggestionType::ExternalAction => unreachable!(
-                            "external actions use URL mode elicitation, not tool suggestion forms"
-                        ),
-                    },
-                    url: install_url.into(),
-                    is_installed,
-                    is_enabled: false,
-                    suggest_reason: Some(tool_suggestion.suggest_reason.clone()),
-                    suggestion_type: Some(suggestion_type),
-                    elicitation_target: Some(AppLinkElicitationTarget {
-                        thread_id: request.thread_id(),
-                        server_name: request.server_name().to_string(),
-                        request_id: request.request_id().clone(),
-                    }),
-                },
-                self.app_event_tx.clone(),
-                self.keymap.list.clone(),
-            );
-            self.pause_status_timer_for_modal();
-            self.set_composer_input_enabled(
-                /*enabled*/ false,
-                Some("Respond to the tool suggestion to continue.".to_string()),
-            );
-            self.push_view(Box::new(view));
-            return;
-        }
-
         let modal = McpServerElicitationOverlay::new_with_keymap(
             request,
             self.app_event_tx.clone(),
@@ -2654,59 +2540,6 @@ mod tests {
 
         pane.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(pane.inline_banner_lifecycle(), (true, true));
-    }
-
-    #[test]
-    fn backend_banner_snapshots_and_numbered_actions() {
-        for (kind, action, label) in [
-            ("personal_limit", "view_usage", "View usage"),
-            ("workspace_member_credits", "notify_owner", "Notify owner"),
-        ] {
-            let banner = crate::backend_banners::BackendBanner::parse(&serde_json::json!({
-                "banner_type": kind,
-                "presentation": "dismissible",
-                "title": "Usage limit\u{7} reached",
-                "description": "Your included usage is depleted.\nChoose an action to continue.",
-                "ctas": [
-                    {"action": "unsupported", "label": "Hidden action"},
-                    {"action": "view_usage", "label": "Open usage settings"},
-                    {"action": action, "label": label},
-                    {"action": "view_usage", "label": "Extra action"}
-                ]
-            }))
-            .expect("valid optional banner");
-            let (tx, mut rx) = unbounded_channel();
-            let mut pane = test_pane(AppEventSender::new(tx));
-            pane.set_inline_banner(Some(
-                banner.actionable_banner(crate::clock_format::ClockFormat::TwentyFourHour),
-            ));
-            let width = 44;
-            let area = Rect::new(
-                /*x*/ 0,
-                /*y*/ 0,
-                width,
-                pane.desired_height(width),
-            );
-            assert_snapshot!(
-                format!("backend_banner_{kind}"),
-                render_snapshot(&pane, area)
-            );
-            pane.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
-            let selected = match rx.try_recv().expect("numbered CTA dispatch") {
-                AppEvent::OpenUrlInBrowser { url } => url,
-                AppEvent::SendAddCreditsNudgeEmail { credit_type } => format!("{credit_type:?}"),
-                other => panic!("unexpected banner action: {other:?}"),
-            };
-            assert_eq!(
-                selected,
-                if action == "view_usage" {
-                    "https://chatgpt.com/settings/usage"
-                } else {
-                    "Credits"
-                }
-            );
-            assert!(pane.inline_banner.is_some());
-        }
     }
 
     #[derive(Default)]

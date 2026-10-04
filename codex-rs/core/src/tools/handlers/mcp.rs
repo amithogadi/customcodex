@@ -22,7 +22,6 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolExecutor;
-use crate::tools::registry::ToolTelemetryTags;
 use codex_extension_api::McpToolContext;
 use codex_mcp::ToolInfo;
 use codex_protocol::mcp::is_node_repl_backed_connector;
@@ -199,14 +198,6 @@ impl McpHandler {
     ) -> Result<Box<dyn crate::tools::context::ToolOutput>, FunctionCallError> {
         let prepared_mcp_call = invocation.session.prepare_mcp_call(&self.tool_info).await;
         // Use the executed call's binding; a later catalog refresh must not change eligibility.
-        let result_metadata_capture_allowed = invocation
-            .session
-            .services
-            .analytics_events_client
-            .is_enabled()
-            && prepared_mcp_call
-                .as_ref()
-                .is_some_and(codex_mcp::PreparedMcpCall::is_host_owned_apps);
         let mcp_tool = prepared_mcp_call.as_ref().map(|call| {
             McpToolContext::from_prepared_call(
                 call,
@@ -266,7 +257,6 @@ impl McpHandler {
         Ok(boxed_tool_output(McpToolOutput {
             result: result.result,
             tool_input: result.tool_input,
-            result_metadata_capture_allowed,
             wall_time: started.elapsed(),
             original_image_detail_supported: can_request_original_image_detail(
                 &step_context.settings.model_info,
@@ -432,14 +422,6 @@ impl CoreToolRuntime for McpHandler {
                 &invocation.call_id,
                 items,
             );
-    }
-
-    fn telemetry_tags(&self, _invocation: &ToolInvocation) -> ToolTelemetryTags {
-        let mut tags = vec![("mcp_server", self.tool_info.server_name.clone())];
-        if let Some(origin) = &self.tool_info.server_origin {
-            tags.push(("mcp_server_origin", origin.clone()));
-        }
-        tags
     }
 
     fn pre_tool_use_payload(&self, invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
@@ -727,7 +709,6 @@ mod tests {
                     "file_id": "file_123"
                 }
             }),
-            result_metadata_capture_allowed: false,
             wall_time: Duration::from_millis(42),
             original_image_detail_supported: true,
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(1024),
@@ -776,42 +757,6 @@ mod tests {
                     "structuredContent": { "bytes": 5 }
                 }),
             })
-        );
-
-        // Nested MCP result metadata still reaches the owning Code Mode cell.
-        let cell_id = codex_code_mode::CellId::new("mcp-cell".to_string());
-        recorder.start_cell(&cell_id, "exec-mcp-post");
-        let mut invocation = invocation;
-        invocation.source = ToolCallSource::CodeMode {
-            cell_id: cell_id.as_str().to_string(),
-            runtime_tool_call_id: "mcp-runtime-call".to_string(),
-        };
-        let mut output = output;
-        output.result.meta = Some(json!({ "provider/custom": { "items": [1, null] } }));
-        output.result_metadata_capture_allowed = true;
-        recorder.record_tool_call(
-            &crate::tools::router::ToolCall {
-                tool_name: invocation.tool_name.clone(),
-                call_id: invocation.call_id.clone(),
-                payload: invocation.payload.clone(),
-                encrypted_function_args: None,
-            },
-            &invocation.source,
-            &invocation.step_context,
-        );
-        handler.on_tool_result_accepted(&invocation, &output);
-        let mut items = [serde_json::from_value(json!({
-            "type": "custom_tool_call_output", "call_id": "exec-mcp-post", "output": "notes",
-        }))
-        .expect("Code Mode output")];
-        recorder.attach_to_prompt(&mut items, &mut Default::default());
-        assert_eq!(
-            serde_json::to_value(items[0].executed_tool_call_metadata()).unwrap()["executed_tool_calls"],
-            json!([{
-                "name": codex_tools::code_mode_name_for_tool_name(&invocation.tool_name),
-                "arguments": { "path": "/tmp/notes.txt" },
-                "tool_result_metadata": { "provider/custom": { "items": [1, null] } },
-            }]),
         );
     }
 
@@ -895,7 +840,7 @@ mod tests {
                     "type": "object",
                 }))),
             ),
-            openai_file_input_optional_fields: Default::default(),
+
             connector_id: None,
             connector_name: None,
             plugin_display_names: Vec::new(),

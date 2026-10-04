@@ -4,7 +4,6 @@
 //! evidence is omitted before budgeting, using the same instruction filtering as sync.
 
 use codex_guardian_context::TranscriptCursor;
-use codex_guardian_context::TruncationObservation;
 use codex_guardian_context::estimate_input_tokens;
 use codex_guardian_reviewer::ConversationCheckpoint;
 use codex_guardian_reviewer::ConversationState;
@@ -51,8 +50,6 @@ impl LunaSamplingRequest {
                 })
             });
         }
-        let truncations = std::mem::take(&mut context.truncations);
-        let section_costs = context.section_costs().collect();
         let history = conversation.snapshot().map(ConversationCheckpoint::history);
         let existing_context_tokens = history.map_or(0, |history| {
             history
@@ -79,8 +76,6 @@ impl LunaSamplingRequest {
             sampling: self,
             input,
             cursor: next_cursor,
-            truncations,
-            section_costs,
             existing_context_tokens,
             input_tokens,
         })
@@ -92,8 +87,6 @@ pub(super) struct PreparedRequest<'a> {
     pub(super) sampling: &'a LunaSamplingRequest,
     pub(super) input: Vec<ResponseItemEnvelope>,
     pub(super) cursor: TranscriptCursor,
-    pub(super) truncations: Vec<TruncationObservation>,
-    pub(super) section_costs: Vec<(&'static str, codex_guardian_context::SectionCost)>,
     pub(super) existing_context_tokens: usize,
     pub(super) input_tokens: usize,
 }

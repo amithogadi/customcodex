@@ -135,7 +135,10 @@ pub(super) async fn exercise(
     )
     .await?;
     assert_eq!(approvals, 0);
-    assert_eq!(pending["type"], "pending");
+    assert_eq!(
+        pending["type"], "pending",
+        "model-visible tool result: {pending}"
+    );
     // Wait for the asynchronous host operation, then read its status through the model.
     let mut overrides = None;
     server.thread_tool_transport().configure_mcp(&mut overrides);

@@ -22,10 +22,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use super::PUBLIC_TOOL_NAME;
+use super::diagnostics::DispatchInterruption;
+use super::diagnostics::NestedToolDispatchTrace;
+use super::diagnostics::trace_id;
 use super::submit_nested_tool;
-use super::telemetry::DispatchInterruption;
-use super::telemetry::NestedToolDispatchTrace;
-use super::telemetry::trace_id;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use crate::tools::ExecutedToolCalls;

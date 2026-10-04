@@ -36,7 +36,6 @@ use crate::mcp_requirements::validate_mcp_server_requirement;
 use crate::mcp_types::AppToolApproval;
 use crate::permissions_toml::PermissionProfileToml;
 use crate::types::AuthCredentialsStoreMode;
-use crate::types::FeedbackConfigToml;
 use crate::types::WindowsSandboxModeToml;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,9 +167,7 @@ pub struct ConfigRequirements {
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
     pub model_provider: Option<Sourced<String>>,
     pub model_providers: Option<Sourced<HashMap<String, ModelProviderInfo>>>,
-    pub check_for_update_on_startup: Option<Sourced<bool>>,
     pub allow_login_shell: Option<Sourced<bool>>,
-    pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub approvals_reviewer: ConstrainedWithSource<ApprovalsReviewer>,
     pub auto_review_required_models: Option<Sourced<BTreeSet<String>>>,
@@ -179,7 +176,6 @@ pub struct ConfigRequirements {
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
-    pub allow_remote_control: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
     pub managed_hooks: Option<ConstrainedWithSource<ManagedHooksRequirementsToml>>,
@@ -213,9 +209,7 @@ impl Default for ConfigRequirements {
             model_catalog_json: None,
             model_provider: None,
             model_providers: None,
-            check_for_update_on_startup: None,
             allow_login_shell: None,
-            feedback: None,
             approval_policy: ConstrainedWithSource::new(
                 Constrained::allow_any_from_default(),
                 /*source*/ None,
@@ -239,7 +233,6 @@ impl Default for ConfigRequirements {
             ),
             allow_managed_hooks_only: None,
             allow_appshots: None,
-            allow_remote_control: None,
             computer_use: None,
             feature_requirements: None,
             managed_hooks: None,
@@ -1038,9 +1031,7 @@ pub struct ConfigRequirementsToml {
     pub model_provider: Option<String>,
     /// Complete provider definitions; each entry replaces the configured provider.
     pub model_providers: Option<HashMap<String, ModelProviderInfo>>,
-    pub check_for_update_on_startup: Option<bool>,
     pub allow_login_shell: Option<bool>,
-    pub feedback: Option<FeedbackConfigToml>,
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
@@ -1051,7 +1042,6 @@ pub struct ConfigRequirementsToml {
     pub allow_managed_hooks_only: Option<bool>,
     pub allow_browser_and_computer_use: Option<bool>,
     pub allow_appshots: Option<bool>,
-    pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirementsToml>,
     pub windows: Option<WindowsRequirementsToml>,
     #[serde(rename = "features", alias = "feature_requirements")]
@@ -1145,9 +1135,7 @@ pub struct ConfigRequirementsWithSources {
     pub model_catalog_json: Option<Sourced<AbsolutePathBuf>>,
     pub model_provider: Option<Sourced<String>>,
     pub model_providers: Option<Sourced<HashMap<String, ModelProviderInfo>>>,
-    pub check_for_update_on_startup: Option<Sourced<bool>>,
     pub allow_login_shell: Option<Sourced<bool>>,
-    pub feedback: Option<Sourced<FeedbackConfigToml>>,
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_approvals_reviewers: Option<Sourced<Vec<ApprovalsReviewer>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
@@ -1157,7 +1145,6 @@ pub struct ConfigRequirementsWithSources {
     pub allow_managed_hooks_only: Option<Sourced<bool>>,
     pub allow_browser_and_computer_use: Option<Sourced<bool>>,
     pub allow_appshots: Option<Sourced<bool>>,
-    pub allow_remote_control: Option<Sourced<bool>>,
     pub computer_use: Option<Sourced<ComputerUseRequirementsToml>>,
     pub windows: Option<Sourced<WindowsRequirementsToml>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
@@ -1206,9 +1193,7 @@ impl ConfigRequirementsWithSources {
             model_catalog_json: _,
             model_provider: _,
             model_providers: _,
-            check_for_update_on_startup: _,
             allow_login_shell: _,
-            feedback: _,
             allowed_approval_policies: _,
             allowed_approvals_reviewers: _,
             allowed_sandbox_modes: _,
@@ -1219,7 +1204,6 @@ impl ConfigRequirementsWithSources {
             allow_managed_hooks_only: _,
             allow_browser_and_computer_use: _,
             allow_appshots: _,
-            allow_remote_control: _,
             computer_use: _,
             windows: _,
             feature_requirements: _,
@@ -1269,9 +1253,8 @@ impl ConfigRequirementsWithSources {
                 model_catalog_json,
                 model_provider,
                 model_providers,
-                check_for_update_on_startup,
+
                 allow_login_shell,
-                feedback,
                 allowed_approval_policies,
                 allowed_approvals_reviewers,
                 allowed_sandbox_modes,
@@ -1281,10 +1264,8 @@ impl ConfigRequirementsWithSources {
                 allow_managed_hooks_only,
                 allow_browser_and_computer_use,
                 allow_appshots,
-                allow_remote_control,
+
                 computer_use,
-                browser_use,
-                in_app_browser,
                 windows,
                 feature_requirements,
                 hooks,
@@ -1355,9 +1336,7 @@ impl ConfigRequirementsWithSources {
             model_catalog_json,
             model_provider,
             model_providers,
-            check_for_update_on_startup,
             allow_login_shell,
-            feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
@@ -1367,7 +1346,6 @@ impl ConfigRequirementsWithSources {
             allow_managed_hooks_only,
             allow_browser_and_computer_use,
             allow_appshots,
-            allow_remote_control,
             computer_use,
             windows,
             feature_requirements,
@@ -1397,9 +1375,7 @@ impl ConfigRequirementsWithSources {
             model_catalog_json: model_catalog_json.map(|sourced| sourced.value),
             model_provider: model_provider.map(|sourced| sourced.value),
             model_providers: model_providers.map(|sourced| sourced.value),
-            check_for_update_on_startup: check_for_update_on_startup.map(|sourced| sourced.value),
             allow_login_shell: allow_login_shell.map(|sourced| sourced.value),
-            feedback: feedback.map(|sourced| sourced.value),
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_approvals_reviewers: allowed_approvals_reviewers.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
@@ -1411,7 +1387,6 @@ impl ConfigRequirementsWithSources {
             allow_browser_and_computer_use: allow_browser_and_computer_use
                 .map(|sourced| sourced.value),
             allow_appshots: allow_appshots.map(|sourced| sourced.value),
-            allow_remote_control: allow_remote_control.map(|sourced| sourced.value),
             computer_use: computer_use.map(|sourced| sourced.value),
             windows: windows.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
@@ -1502,12 +1477,7 @@ impl ConfigRequirementsToml {
             && self.model_catalog_json.is_none()
             && self.model_provider.is_none()
             && self.model_providers.as_ref().is_none_or(HashMap::is_empty)
-            && self.check_for_update_on_startup.is_none()
             && self.allow_login_shell.is_none()
-            && self
-                .feedback
-                .as_ref()
-                .is_none_or(|feedback| feedback == &FeedbackConfigToml::default())
             && self.allowed_approval_policies.is_none()
             && self.allowed_approvals_reviewers.is_none()
             && self.allowed_sandbox_modes.is_none()
@@ -1518,7 +1488,6 @@ impl ConfigRequirementsToml {
             && self.allow_managed_hooks_only.is_none()
             && self.allow_browser_and_computer_use.is_none()
             && self.allow_appshots.is_none()
-            && self.allow_remote_control.is_none()
             && self
                 .computer_use
                 .as_ref()
@@ -1599,7 +1568,6 @@ impl ConfigRequirementsToml {
         if let Some(providers) = &self.model_providers {
             config.model_providers.extend(providers.clone());
         }
-        apply_exact!(check_for_update_on_startup);
         apply_exact!(allow_login_shell);
 
         if self
@@ -1608,10 +1576,6 @@ impl ConfigRequirementsToml {
             .is_some_and(|reviewers| !reviewers.contains(&ApprovalsReviewer::User))
         {
             config.features.get_or_insert_default().guardianv2 = Some(FeatureToml::Enabled(false));
-        }
-
-        if let Some(enabled) = self.feedback.as_ref().and_then(|feedback| feedback.enabled) {
-            config.feedback.get_or_insert_default().enabled = Some(enabled);
         }
     }
 
@@ -1624,7 +1588,7 @@ impl ConfigRequirementsToml {
         }) {
             return Some("model_providers");
         }
-        let managed_fields: [(bool, &[&str], &'static str); 9] = [
+        let managed_fields: [(bool, &[&str], &'static str); 7] = [
             (
                 self.model_provider.is_some(),
                 &["model_provider"],
@@ -1638,22 +1602,9 @@ impl ConfigRequirementsToml {
                 "model_catalog_json",
             ),
             (
-                self.check_for_update_on_startup.is_some(),
-                &["check_for_update_on_startup"],
-                "check_for_update_on_startup",
-            ),
-            (
                 self.allow_login_shell.is_some(),
                 &["allow_login_shell"],
                 "allow_login_shell",
-            ),
-            (
-                self.feedback
-                    .as_ref()
-                    .and_then(|feedback| feedback.enabled)
-                    .is_some(),
-                &["feedback", "enabled"],
-                "feedback.enabled",
             ),
             (
                 self.cli_auth_credentials_store.is_some(),
@@ -1719,9 +1670,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             model_catalog_json,
             model_provider,
             model_providers,
-            check_for_update_on_startup,
             allow_login_shell,
-            feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
@@ -1731,7 +1680,6 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allow_managed_hooks_only,
             allow_browser_and_computer_use: _,
             allow_appshots,
-            allow_remote_control,
             computer_use,
             windows,
             feature_requirements,
@@ -2105,9 +2053,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             model_catalog_json,
             model_provider,
             model_providers,
-            check_for_update_on_startup,
             allow_login_shell,
-            feedback,
             approval_policy,
             approvals_reviewer,
             auto_review_required_models,
@@ -2116,7 +2062,6 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             web_search_mode,
             allow_managed_hooks_only,
             allow_appshots,
-            allow_remote_control,
             computer_use,
             feature_requirements,
             managed_hooks,
@@ -2199,11 +2144,7 @@ mod tests {
             sqlite_home: Some(managed_path.clone()),
             log_dir: Some(managed_path.clone()),
             model_catalog_json: Some(managed_path),
-            check_for_update_on_startup: Some(false),
             allow_login_shell: Some(false),
-            feedback: Some(FeedbackConfigToml {
-                enabled: Some(false),
-            }),
             ..Default::default()
         };
         let cases: &[(&[&str], Option<&str>)] = &[
@@ -2215,15 +2156,8 @@ mod tests {
             (&["sqlite_home"], Some("sqlite_home")),
             (&["log_dir"], Some("log_dir")),
             (&["model_catalog_json"], Some("model_catalog_json")),
-            (
-                &["check_for_update_on_startup"],
-                Some("check_for_update_on_startup"),
-            ),
             (&["allow_login_shell"], Some("allow_login_shell")),
-            (&["feedback", "enabled"], Some("feedback.enabled")),
             (&[], Some("sqlite_home")),
-            (&["feedback"], Some("feedback.enabled")),
-            (&["feedback", "other"], None),
             (&["windows", "sandbox"], None),
         ];
 
@@ -2267,9 +2201,7 @@ mod tests {
             model_catalog_json,
             model_provider,
             model_providers,
-            check_for_update_on_startup,
             allow_login_shell,
-            feedback,
             allowed_approval_policies,
             allowed_approvals_reviewers,
             allowed_sandbox_modes,
@@ -2280,7 +2212,6 @@ mod tests {
             allow_managed_hooks_only,
             allow_browser_and_computer_use,
             allow_appshots,
-            allow_remote_control,
             computer_use,
             windows,
             feature_requirements,
@@ -2317,11 +2248,8 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             model_providers: model_providers
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            check_for_update_on_startup: check_for_update_on_startup
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allow_login_shell: allow_login_shell
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            feedback: feedback.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_approval_policies: allowed_approval_policies
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_approvals_reviewers: allowed_approvals_reviewers
@@ -2339,8 +2267,6 @@ mod tests {
             allow_browser_and_computer_use: allow_browser_and_computer_use
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allow_appshots: allow_appshots
-                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
-            allow_remote_control: allow_remote_control
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             computer_use: computer_use.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             windows: windows.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -2484,19 +2410,6 @@ mod tests {
     }
 
     #[test]
-    fn allow_remote_control_false_is_still_configured() -> Result<()> {
-        let requirements: ConfigRequirementsToml = from_str(
-            r#"
-                allow_remote_control = false
-            "#,
-        )?;
-
-        assert_eq!(requirements.allow_remote_control, Some(false));
-        assert!(!requirements.is_empty());
-        Ok(())
-    }
-
-    #[test]
     fn deserialize_browser_and_computer_use_requirements() -> Result<()> {
         let requirements: ConfigRequirementsToml = from_str(
             r#"
@@ -2578,7 +2491,8 @@ mod tests {
     }
 
     #[test]
-    fn browser_and_computer_use_leaf_requirements_are_not_empty() -> Result<()> {
+    fn legacy_browser_requirements_are_inert_and_computer_requirements_are_retained() -> Result<()>
+    {
         for (name, requirements_toml) in [
             (
                 "browser history",
@@ -2670,7 +2584,14 @@ mod tests {
             ),
         ] {
             let requirements: ConfigRequirementsToml = from_str(requirements_toml)?;
-            assert!(!requirements.is_empty(), "{name} requirement was dropped");
+            if requirements_toml.starts_with("[browser_use") {
+                assert!(
+                    requirements.is_empty(),
+                    "removed {name} requirement remains active"
+                );
+            } else {
+                assert!(!requirements.is_empty(), "{name} requirement was dropped");
+            }
         }
 
         Ok(())
@@ -2773,9 +2694,6 @@ mod tests {
         let model_catalog_json =
             AbsolutePathBuf::try_from(std::env::temp_dir().join("managed-models.json"))
                 .expect("managed model catalog path should be absolute");
-        let feedback = FeedbackConfigToml {
-            enabled: Some(false),
-        };
         let windows = WindowsRequirementsToml {
             allowed_sandbox_implementations: Some(vec![WindowsSandboxImplementationToml::Elevated]),
             allow_mxc: None,
@@ -2798,9 +2716,7 @@ mod tests {
             model_catalog_json: Some(model_catalog_json.clone()),
             model_provider: Some("gateway".to_string()),
             model_providers: Some(HashMap::new()),
-            check_for_update_on_startup: Some(false),
             allow_login_shell: Some(false),
-            feedback: Some(feedback.clone()),
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_approvals_reviewers: Some(allowed_approvals_reviewers.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
@@ -2811,7 +2727,6 @@ mod tests {
             allow_managed_hooks_only: Some(true),
             allow_browser_and_computer_use: Some(false),
             allow_appshots: Some(false),
-            allow_remote_control: Some(false),
             computer_use: Some(computer_use.clone()),
             windows: Some(windows.clone()),
             feature_requirements: Some(feature_requirements.clone()),
@@ -2858,12 +2773,7 @@ mod tests {
                 model_catalog_json: Some(Sourced::new(model_catalog_json, source.clone())),
                 model_provider: Some(Sourced::new("gateway".to_string(), source.clone())),
                 model_providers: Some(Sourced::new(HashMap::new(), source.clone())),
-                check_for_update_on_startup: Some(Sourced::new(
-                    /*value*/ false,
-                    source.clone(),
-                )),
                 allow_login_shell: Some(Sourced::new(/*value*/ false, source.clone())),
-                feedback: Some(Sourced::new(feedback, source.clone())),
                 allowed_approval_policies: Some(Sourced::new(
                     allowed_approval_policies,
                     source.clone()
@@ -2891,13 +2801,7 @@ mod tests {
                     enforce_source.clone(),
                 )),
                 allow_appshots: Some(Sourced::new(/*value*/ false, enforce_source.clone(),)),
-                allow_remote_control: Some(Sourced::new(
-                    /*value*/ false,
-                    enforce_source.clone(),
-                )),
                 computer_use: Some(Sourced::new(computer_use, enforce_source.clone())),
-                browser_use: Some(Sourced::new(browser_use, enforce_source.clone())),
-                in_app_browser: None,
                 windows: Some(Sourced::new(windows, enforce_source.clone())),
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
@@ -2954,10 +2858,8 @@ mod tests {
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
                 allow_appshots: None,
-                allow_remote_control: None,
+
                 computer_use: None,
-                browser_use: None,
-                in_app_browser: None,
                 windows: None,
                 feature_requirements: None,
                 hooks: None,
@@ -3016,10 +2918,8 @@ mod tests {
                 allowed_web_search_modes: None,
                 allow_managed_hooks_only: None,
                 allow_appshots: None,
-                allow_remote_control: None,
+
                 computer_use: None,
-                browser_use: None,
-                in_app_browser: None,
                 windows: None,
                 feature_requirements: None,
                 hooks: None,

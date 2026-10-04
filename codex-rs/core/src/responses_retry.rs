@@ -118,10 +118,7 @@ pub(crate) async fn handle_response_stream_error(
     }
 
     if retry_state.retries >= max_retries
-        && client_session.try_switch_fallback_transport(
-            &turn_context.session_telemetry,
-            turn_context.model_info(),
-        )
+        && client_session.try_switch_fallback_transport(turn_context.model_info())
     {
         // Changing transport must not bypass the server's retry deadline.
         if let Some(retry_after) = retry_after {
@@ -157,7 +154,7 @@ pub(crate) async fn handle_response_stream_error(
             )
             .await;
         }
-        // Use one clock sample so local backoff telemetry retains the selected delay.
+        // Use one clock sample so local backoff diagnostics retain the selected delay.
         let now = Instant::now();
         let retry_at = retry_after.map(RetryAfter::deadline).unwrap_or(now + delay);
         let delay = retry_at.saturating_duration_since(now);

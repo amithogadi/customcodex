@@ -454,14 +454,9 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
     let mut config = crate::mcp::tests::test_mcp_config(std::env::temp_dir());
     config.approval_policy = codex_config::Constrained::allow_any(AskForApproval::Never);
     config.permission_profile = PermissionProfile::Disabled;
-    config.apps_enabled = true;
-    let auth = codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
-    let hosted_server = crate::codex_apps_mcp_server_config(
-        "https://example.com",
-        /*apps_mcp_product_sku*/ None,
-        /*originator*/ None,
-    );
+    let hosted_server: codex_config::McpServerConfig =
+        serde_json::from_value(json!({"url":"https://example.com/mcp"})).unwrap();
     let mut attached_server = hosted_server.clone();
     attached_server.environment_id = "attached".to_string();
     let mut catalog = crate::ResolvedMcpCatalog::builder();
@@ -469,13 +464,12 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
         "attached".to_string(),
         attached_server,
     ));
-    catalog.register(crate::McpServerRegistration::from_hosted_apps(
-        "host",
-        /*contribution_order*/ 0,
+    catalog.register(crate::McpServerRegistration::from_config(
+        crate::CODEX_APPS_MCP_SERVER_NAME.to_string(),
         hosted_server,
     ));
     config.mcp_server_catalog = catalog.build();
-    let servers = crate::effective_mcp_servers(&config, Some(&auth));
+    let servers = crate::effective_mcp_servers(&config, None);
     config.set_server_permission_profiles(
         &servers,
         [("attached".to_string(), PermissionProfile::read_only())],
@@ -529,7 +523,7 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
     config.mcp_server_catalog = config
         .mcp_server_catalog
         .with_materialized_servers(configured_servers);
-    let servers = crate::effective_mcp_servers(&config, Some(&auth));
+    let servers = crate::effective_mcp_servers(&config, None);
     config.set_server_permission_profiles(
         &servers,
         [("attached".to_string(), PermissionProfile::Disabled)],
@@ -553,251 +547,6 @@ async fn reused_elicitation_senders_follow_each_servers_latest_permission_author
     ));
     assert_eq!(
         send_elicitation(&hosted, /*marker*/ None).await.action,
-        ElicitationAction::Decline
+        ElicitationAction::Accept
     );
-}
-
-fn verification_fixture(
-    approval_policy: AskForApproval,
-    reviewer: Option<Arc<RecordingReviewer>>,
-) -> (ElicitationRequestManager, Receiver<Event>, SendElicitation) {
-    let mut config = test_elicitation_config(
-        crate::CODEX_APPS_MCP_SERVER_NAME,
-        approval_policy,
-        PermissionProfile::Disabled,
-    );
-    let mut catalog = crate::catalog::ResolvedMcpCatalog::builder();
-    catalog.register(crate::catalog::McpServerRegistration::from_hosted_apps(
-        "verification-test",
-        /*contribution_order*/ 0,
-        crate::mcp::codex_apps_mcp_server_config(
-            "https://example.com",
-            /*apps_mcp_product_sku*/ None,
-            /*originator*/ None,
-        ),
-    ));
-    Arc::make_mut(&mut config).mcp_server_catalog = catalog.build();
-    let manager = ElicitationRequestManager::new(
-        config,
-        reviewer.map(|reviewer| reviewer as Arc<dyn ElicitationReviewer>),
-        /*lifecycle*/ None,
-        ElicitationRequestRouter::default(),
-    );
-    let (tx, events) = async_channel::bounded(1);
-    let sender = manager.make_sender(
-        crate::CODEX_APPS_MCP_SERVER_NAME.into(),
-        Some(tx),
-        &ClientMcpExtensions::new([(
-            OPENAI_ELICITATION_EXTENSION_ID.to_string(),
-            json!({"userVerification": {}}),
-        )]),
-    );
-    (manager, events, sender)
-}
-
-#[tokio::test]
-async fn user_verification_requires_the_app_even_when_policy_would_approve_or_decline() {
-    for approval_policy in [AskForApproval::Never, AskForApproval::OnRequest] {
-        let reviewer = RecordingReviewer::new(Ok(Some(approved_response())));
-        let (manager, events, sender) =
-            verification_fixture(approval_policy, Some(reviewer.clone()));
-        let pending = tokio::spawn(sender(
-            RequestId::Number(7),
-            Elicitation::UserVerification {
-                meta: Some(json!({"example/display": {"label": "Operation"}})),
-                title: "Approve purchase".into(),
-                description: "Pay $200".into(),
-                challenge: "AQID".into(),
-            },
-        ));
-        let event = events.recv().await.unwrap();
-        let EventMsg::ElicitationRequest(request) = event.msg else {
-            panic!("expected typed elicitation");
-        };
-        assert_eq!(
-            request.request,
-            ElicitationRequest::UserVerification {
-                meta: Some(json!({"example/display": {"label": "Operation"}})),
-                title: "Approve purchase".into(),
-                description: "Pay $200".into(),
-                challenge: "AQID".into(),
-            }
-        );
-        assert_eq!(reviewer.calls.load(Relaxed), 0);
-        let ProtocolRequestId::String(id) = request.id else {
-            panic!("expected routed request id");
-        };
-        let proof = ElicitationResponse {
-            action: ElicitationAction::Accept,
-            content: Some(json!({"credentialId": "AQID", "signature": "BAUG"})),
-            meta: None,
-        };
-        manager
-            .router
-            .resolve(
-                request.server_name.clone(),
-                RequestId::String(id.clone().into()),
-                proof.clone(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(pending.await.unwrap().unwrap(), proof);
-        assert!(
-            manager
-                .router
-                .resolve(request.server_name, RequestId::String(id.into()), proof)
-                .await
-                .is_err()
-        );
-    }
-}
-
-#[tokio::test]
-async fn user_verification_cancels_when_no_app_can_receive_the_request() {
-    let (manager, _, _) = verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
-    let sender = manager.make_sender(
-        crate::CODEX_APPS_MCP_SERVER_NAME.into(),
-        /*tx_event*/ None,
-        &ClientMcpExtensions::new([(
-            OPENAI_ELICITATION_EXTENSION_ID.to_string(),
-            json!({"userVerification": {}}),
-        )]),
-    );
-    assert_eq!(
-        sender(
-            RequestId::Number(7),
-            Elicitation::UserVerification {
-                meta: None,
-                title: "Approve".into(),
-                description: String::new(),
-                challenge: "AQID".into(),
-            }
-        )
-        .await
-        .unwrap(),
-        ElicitationResponse {
-            action: ElicitationAction::Cancel,
-            content: None,
-            meta: None
-        },
-    );
-}
-
-#[tokio::test]
-async fn user_verification_cancels_for_an_event_receiver_without_host_activation() {
-    let (manager, _, _) = verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
-    let (tx, events) = async_channel::bounded(1);
-    let sender = manager.make_sender(
-        crate::CODEX_APPS_MCP_SERVER_NAME.into(),
-        Some(tx),
-        &ClientMcpExtensions::default(),
-    );
-    let response = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        sender(
-            RequestId::Number(7),
-            Elicitation::UserVerification {
-                meta: None,
-                title: "Approve".into(),
-                description: String::new(),
-                challenge: "AQID".into(),
-            },
-        ),
-    )
-    .await
-    .expect("an inactive host must not wait for a response")
-    .unwrap();
-    assert_eq!(
-        response,
-        ElicitationResponse {
-            action: ElicitationAction::Cancel,
-            content: None,
-            meta: None,
-        },
-    );
-    assert!(events.try_recv().is_err());
-    assert!(manager.router.requests.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn user_verification_drops_pending_response_when_the_request_is_cancelled() {
-    let (manager, events, sender) =
-        verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
-    let active_elicitations = Arc::new(AtomicUsize::new(0));
-    let registrations = active_elicitations.clone();
-    manager
-        .authority
-        .lock()
-        .unwrap()
-        .as_mut()
-        .unwrap()
-        .lifecycle = Some(ElicitationLifecycle::new(move || {
-        registrations.fetch_add(/*val*/ 1, Relaxed);
-        LifecycleRegistration(registrations.clone())
-    }));
-    let pending = tokio::spawn(sender(
-        RequestId::Number(7),
-        Elicitation::UserVerification {
-            meta: None,
-            title: "Approve".into(),
-            description: String::new(),
-            challenge: "AQID".into(),
-        },
-    ));
-    events.recv().await.unwrap();
-    assert_eq!(active_elicitations.load(Relaxed), 1);
-    pending.abort();
-    assert!(pending.await.unwrap_err().is_cancelled());
-    assert!(manager.router.requests.lock().unwrap().is_empty());
-    assert_eq!(active_elicitations.load(Relaxed), 0);
-}
-
-#[tokio::test]
-async fn user_verification_rejects_attached_servers_even_if_they_use_the_plugin_service_name() {
-    for name in ["attached", crate::CODEX_APPS_MCP_SERVER_NAME] {
-        let (manager, _, _) =
-            verification_fixture(AskForApproval::OnRequest, /*reviewer*/ None);
-        {
-            let mut authority = manager.authority.lock().unwrap();
-            let config = Arc::make_mut(&mut authority.as_mut().unwrap().config);
-            let mut catalog = crate::catalog::ResolvedMcpCatalog::builder();
-            catalog.register(crate::catalog::McpServerRegistration::from_config(
-                name.into(),
-                crate::mcp::codex_apps_mcp_server_config(
-                    "https://example.com",
-                    /*apps_mcp_product_sku*/ None,
-                    /*originator*/ None,
-                ),
-            ));
-            config.mcp_server_catalog = catalog.build();
-        }
-        let (tx, events) = async_channel::bounded(1);
-        let sender = manager.make_sender(
-            name.into(),
-            Some(tx),
-            &ClientMcpExtensions::new([(
-                OPENAI_ELICITATION_EXTENSION_ID.to_string(),
-                json!({"userVerification": {}}),
-            )]),
-        );
-        assert_eq!(
-            sender(
-                RequestId::Number(7),
-                Elicitation::UserVerification {
-                    meta: None,
-                    title: "Approve".into(),
-                    description: String::new(),
-                    challenge: "AQID".into()
-                }
-            )
-            .await
-            .unwrap(),
-            ElicitationResponse {
-                action: ElicitationAction::Cancel,
-                content: None,
-                meta: None
-            },
-        );
-        assert!(events.try_recv().is_err());
-    }
 }

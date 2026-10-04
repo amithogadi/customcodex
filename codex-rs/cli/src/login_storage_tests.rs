@@ -30,32 +30,17 @@ fn login_default_filter_records_sanitized_storage_fallback() -> anyhow::Result<(
     })?;
 
     let logs = std::fs::read_to_string(log_path)?;
-    assert_eq!(logs.lines().count(), 2);
+    assert_eq!(logs.lines().count(), 1);
     let failure = logs.lines().next().unwrap();
     assert!(
         failure.contains("failed to save auth to keyring, falling back to file storage"),
         "{logs}"
     );
     assert!(failure.contains("failed to create secrets dir"), "{logs}");
-    assert!(
-        logs.contains("credential storage file fallback completed"),
-        "{logs}"
-    );
-    assert!(logs.contains("fallback_reason=\"secure_error\""), "{logs}");
-    assert!(logs.contains("outcome=\"success\""), "{logs}");
     assert!(!logs.contains("private-api-key"));
-    let completion = logs.lines().last().unwrap();
-    assert!(!completion.contains(home.path().to_str().unwrap()));
-    let cause = std::fs::create_dir_all(home.path().join("secrets"))
-        .unwrap_err()
-        .to_string();
-    insta::assert_snapshot!(
-        logs.replace(
-            home.path().join("secrets").to_str().unwrap(),
-            "[SECRETS_PATH]"
-        )
-        .replace(&cause, "[OS_ERROR]")
-    );
+    let stored: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(home.path().join("auth.json"))?)?;
+    assert_eq!(stored["OPENAI_API_KEY"], "private-api-key");
     Ok(())
 }
 

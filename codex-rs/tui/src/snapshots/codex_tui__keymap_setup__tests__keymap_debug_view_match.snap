@@ -11,4 +11,4 @@ Config key: f8
 Raw event: code=F(8), modifiers=none, kind=Press
 
 Assigned actions:
-  - chat.toggle_voice (Toggle Voice) - Start or stop a voice conversation. [Default]
+  none

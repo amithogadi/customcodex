@@ -1472,7 +1472,6 @@ personality = true
     Ok(())
 }
 
-
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn mdm_requirements_take_precedence_over_cloud_config_bundle() -> anyhow::Result<()> {

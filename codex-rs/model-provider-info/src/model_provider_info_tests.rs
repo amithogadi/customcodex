@@ -213,27 +213,27 @@ supports_websockets = true
 }
 
 #[test]
-fn test_personal_access_token_uses_chatgpt_codex_base_url() {
+fn test_legacy_auth_does_not_select_chatgpt_base_url() {
     let api_provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         .to_api_provider(Some(AuthMode::PersonalAccessToken))
         .expect("OpenAI provider should build API provider");
 
-    assert_eq!(api_provider.base_url, CHATGPT_CODEX_BASE_URL);
+    assert_eq!(api_provider.base_url, "https://api.openai.com/v1");
 }
 
 #[test]
-fn test_header_auth_uses_chatgpt_codex_base_url() {
+fn test_header_auth_uses_api_base_url() {
     let api_provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None)
         .to_api_provider(Some(AuthMode::Headers))
         .expect("OpenAI provider should build API provider");
 
-    assert_eq!(api_provider.base_url, CHATGPT_CODEX_BASE_URL);
+    assert_eq!(api_provider.base_url, "https://api.openai.com/v1");
 }
 
 #[test]
 fn codex_backend_routes_require_codex_base_url() {
     for (base_url, expected) in [
-        (None, true),
+        (None, false),
         (Some(CHATGPT_CODEX_BASE_URL), true),
         (Some("https://chatgpt-staging.com/backend-api/codex/"), true),
         (Some("https://proxy.example.com/v1"), false),
@@ -441,6 +441,8 @@ fn test_amazon_bedrock_providers_add_mantle_client_agent_header() {
         let api_provider = provider
             .to_api_provider(/*auth_mode*/ None)
             .expect("Amazon Bedrock provider should build API provider");
+
+        assert_eq!(api_provider.base_url, AMAZON_BEDROCK_DEFAULT_BASE_URL);
 
         assert_eq!(
             api_provider
@@ -881,4 +883,40 @@ model_catalog_url = "https://gateway.example/codex/catalog?token=catalog-secret"
             .base_url,
         "https://gateway.example/v1"
     );
+}
+
+#[test]
+fn custom_provider_requires_an_explicit_endpoint() {
+    let provider = ModelProviderInfo {
+        name: "Custom".to_string(),
+        ..Default::default()
+    };
+    assert!(
+        provider
+            .to_api_provider(Some(AuthMode::Chatgpt))
+            .unwrap_err()
+            .to_string()
+            .contains("requires an explicit base_url")
+    );
+}
+
+#[test]
+fn custom_endpoint_is_preserved_for_legacy_auth_modes() {
+    let provider = ModelProviderInfo {
+        name: "Custom".to_string(),
+        base_url: Some("https://provider.example/v1".to_string()),
+        ..Default::default()
+    };
+    for auth_mode in [
+        None,
+        Some(AuthMode::ApiKey),
+        Some(AuthMode::Chatgpt),
+        Some(AuthMode::Headers),
+        Some(AuthMode::PersonalAccessToken),
+    ] {
+        assert_eq!(
+            provider.to_api_provider(auth_mode).unwrap().base_url,
+            "https://provider.example/v1"
+        );
+    }
 }

@@ -1,4 +1,3 @@
-mod cloud_config;
 #[cfg(target_os = "macos")]
 mod pid_tracker;
 #[cfg(target_os = "macos")]
@@ -645,13 +644,7 @@ async fn load_debug_sandbox_config(
     options: DebugSandboxConfigOptions,
     strict_config: bool,
 ) -> anyhow::Result<Config> {
-    let cloud_config_bundle = cloud_config::bootstrap_cloud_config_bundle(
-        &cli_overrides,
-        &options,
-        find_codex_home,
-        strict_config,
-    )
-    .await?;
+    let cloud_config_bundle = codex_config::CloudConfigBundleLoader::default();
 
     load_debug_sandbox_config_with_codex_home(
         cli_overrides,

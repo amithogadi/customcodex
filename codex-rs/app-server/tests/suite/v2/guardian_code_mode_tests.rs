@@ -141,18 +141,13 @@ async fn model_guardian_policy_scores_code_mode_cells(
             )
         }
     };
-    let analytics_server = responses::start_mock_server().await;
-    mount_analytics_capture(&analytics_server, codex_home.path()).await?;
     MockResponsesConfig::new(&responses_url)
         .with_model(MODEL)
         .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
-        .with_root_config(&format!(
-            "approvals_reviewer = \"auto_review\"\nchatgpt_base_url = \"{}\"",
-            analytics_server.uri(),
-        ))
+        .with_root_config("approvals_reviewer = \"auto_review\"")
         .with_extra_config(&format!(
-            "[mcp_servers.node_repl]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"auto\"\n\n[analytics]\nenabled = true{legacy_config}"
+            "[mcp_servers.node_repl]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"auto\"{legacy_config}"
         ))
         .enable_feature(Feature::GuardianApproval)
         .enable_feature(Feature::CodeModeOnly)
@@ -172,6 +167,7 @@ async fn model_guardian_policy_scores_code_mode_cells(
     };
     write_models_cache_with_models(codex_home.path(), vec![model]).await?;
     let mut app_server = TestAppServer::builder()
+        .with_json_logging("codex_guardian_v2=debug")
         .with_codex_home(codex_home.path())
         .build_initialized_with_timeout(TIMEOUT)
         .await?;
@@ -203,27 +199,9 @@ async fn model_guardian_policy_scores_code_mode_cells(
     }
     for completed_scores in 1..=scores_per_cell {
         state.allow_luna.notify_one();
-        timeout(TIMEOUT, async {
-            loop {
-                let events = captured_analytics_events(&analytics_server).await;
-                if events
-                    .iter()
-                    .filter(|event| {
-                        event["event_type"] == "codex_guardian_v2_classification"
-                            && matches!(
-                                event["event_params"]["outcome"].as_str(),
-                                Some("success" | "superseded")
-                            )
-                    })
-                    .count()
-                    >= completed_scores
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(/*millis*/ 25)).await;
-            }
-        })
-        .await?;
+        app_server
+            .wait_for_json_log_messages("Guardian V2 classification finished", completed_scores)
+            .await?;
     }
     continue_parent.notify_one();
     let completed: TurnCompletedNotification =

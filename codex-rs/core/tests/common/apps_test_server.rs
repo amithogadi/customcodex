@@ -6,7 +6,6 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::McpServerContribution;
 use codex_extension_api::McpServerContributionContext;
 use codex_extension_api::McpServerContributor;
-use codex_features::Feature;
 use codex_login::CodexAuth;
 use codex_models_manager::bundled_models_response;
 use serde_json::Value;
@@ -43,15 +42,15 @@ const CALENDAR_CREATE_EVENT_TOOL_NAME: &str = "calendar_create_event";
 const CALENDAR_APP_ONLY_TOOL_NAME: &str = "calendar_app_only_action";
 pub const CALENDAR_EXTRACT_TEXT_TOOL_NAME: &str = "calendar_extract_text";
 const CALENDAR_LIST_EVENTS_TOOL_NAME: &str = "calendar_list_events";
-pub const DIRECT_CALENDAR_CREATE_EVENT_TOOL: &str = "mcp__codex_apps__calendar__create_event";
-pub const DIRECT_CALENDAR_APP_ONLY_TOOL: &str = "mcp__codex_apps__calendar__app_only_action";
-pub const DIRECT_CALENDAR_LIST_EVENTS_TOOL: &str = "mcp__codex_apps__calendar__list_events";
-pub const DIRECT_CALENDAR_EXTRACT_TEXT_TOOL: &str = "mcp__codex_apps__calendar__extract_text";
-pub const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
-pub const SEARCH_CALENDAR_APP_ONLY_TOOL: &str = "_app_only_action";
-pub const SEARCH_CALENDAR_CREATE_TOOL: &str = "_create_event";
-pub const SEARCH_CALENDAR_EXTRACT_TEXT_TOOL: &str = "_extract_text";
-pub const SEARCH_CALENDAR_LIST_TOOL: &str = "_list_events";
+pub const DIRECT_CALENDAR_CREATE_EVENT_TOOL: &str = "mcp__codex_apps__calendar_create_event";
+pub const DIRECT_CALENDAR_APP_ONLY_TOOL: &str = "mcp__codex_apps__calendar_app_only_action";
+pub const DIRECT_CALENDAR_LIST_EVENTS_TOOL: &str = "mcp__codex_apps__calendar_list_events";
+pub const DIRECT_CALENDAR_EXTRACT_TEXT_TOOL: &str = "mcp__codex_apps__calendar_extract_text";
+pub const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps";
+pub const SEARCH_CALENDAR_APP_ONLY_TOOL: &str = "calendar_app_only_action";
+pub const SEARCH_CALENDAR_CREATE_TOOL: &str = "calendar_create_event";
+pub const SEARCH_CALENDAR_EXTRACT_TEXT_TOOL: &str = "calendar_extract_text";
+pub const SEARCH_CALENDAR_LIST_TOOL: &str = "calendar_list_events";
 pub const CALENDAR_CREATE_EVENT_RESOURCE_URI: &str =
     "connector://calendar/tools/calendar_create_event";
 pub const CALENDAR_CREATE_EVENT_MCP_APP_RESOURCE_URI: &str =
@@ -74,7 +73,8 @@ impl McpServerContributor<Config> for HostedMessagingServer {
         _context: McpServerContributionContext<'a, Config>,
     ) -> ExtensionFuture<'a, Vec<McpServerContribution>> {
         Box::pin(async move {
-            vec![McpServerContribution::HostedApps {
+            vec![McpServerContribution::Set {
+                name: "codex_apps".to_string(),
                 config: Box::new(
                     serde_json::from_value(json!({
                         "url": self.0,
@@ -83,7 +83,6 @@ impl McpServerContributor<Config> for HostedMessagingServer {
                     }))
                     .expect("host-owned messaging MCP config"),
                 ),
-                protocol_mode: None,
             }]
         })
     }
@@ -304,11 +303,17 @@ pub fn configure_search_capable_model(config: &mut Config) {
 }
 
 fn configure_apps(config: &mut Config, apps_base_url: &str) {
-    config
-        .features
-        .enable(Feature::Apps)
-        .expect("test config should allow feature update");
-    config.chatgpt_base_url = apps_base_url.to_string();
+    let mut servers = config.mcp_servers.get().clone();
+    servers.insert(
+        "codex_apps".to_string(),
+        serde_json::from_value(json!({
+            "url": format!("{apps_base_url}/api/codex/ps/mcp"),
+            "default_tools_approval_mode": "approve",
+            "supports_parallel_tool_calls": true
+        }))
+        .expect("explicit test MCP config"),
+    );
+    config.mcp_servers.set(servers).expect("test MCP config");
 }
 
 pub fn configure_search_capable_apps(config: &mut Config, apps_base_url: &str) {
@@ -319,14 +324,14 @@ pub fn configure_search_capable_apps(config: &mut Config, apps_base_url: &str) {
 pub fn apps_enabled_builder(apps_base_url: impl Into<String>) -> TestCodexBuilder {
     let apps_base_url = apps_base_url.into();
     test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(CodexAuth::from_api_key("test-provider-key"))
         .with_config(move |config| configure_apps(config, apps_base_url.as_str()))
 }
 
 pub fn search_capable_apps_builder(apps_base_url: impl Into<String>) -> TestCodexBuilder {
     let apps_base_url = apps_base_url.into();
     test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(CodexAuth::from_api_key("test-provider-key"))
         .with_config(move |config| configure_search_capable_apps(config, apps_base_url.as_str()))
 }
 
@@ -580,6 +585,7 @@ impl Respond for CodexAppsJsonRpcResponder {
                                 "listChanged": true
                             }
                         },
+                        "instructions": "Plan events and manage your calendar.",
                         "serverInfo": {
                             "name": SERVER_NAME,
                             "version": SERVER_VERSION

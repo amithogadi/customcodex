@@ -349,7 +349,7 @@ async fn status_snapshot_includes_reasoning_details() {
 }
 
 #[tokio::test]
-async fn status_snapshot_shows_chatgpt_plan_without_email() {
+async fn status_bootstrap_ignores_saved_chatgpt_credentials() {
     let temp_home = TempDir::new().expect("temp home");
     let profile_path = temp_home.path().join("work.config.toml");
     let loader_overrides = LoaderOverrides {
@@ -382,6 +382,7 @@ async fn status_snapshot_shows_chatgpt_plan_without_email() {
     write_models_cache(temp_home.path())
         .await
         .expect("write models cache");
+    let stored_auth = std::fs::read(temp_home.path().join("auth.json")).expect("saved auth");
     let mut app_server = crate::start_app_server_for_picker(
         &config,
         &crate::AppServerTarget::Embedded,
@@ -397,41 +398,18 @@ async fn status_snapshot_shows_chatgpt_plan_without_email() {
         .await
         .expect("bootstrap app server session");
     app_server.shutdown().await.expect("shut down app server");
-    let account_display = bootstrap
-        .status_account_display
-        .expect("bootstrap should return ChatGPT account display");
+    assert!(bootstrap.status_account_display.is_none());
+    assert!(
+        server
+            .received_requests()
+            .await
+            .expect("recorded requests")
+            .is_empty()
+    );
     assert_eq!(
-        account_display,
-        StatusAccountDisplay::ChatGpt {
-            email: None,
-            plan: Some("Enterprise (Automation)".to_string()),
-        }
+        std::fs::read(temp_home.path().join("auth.json")).expect("saved auth"),
+        stored_auth,
     );
-    let usage = TokenUsage::default();
-    let captured_at = chrono::Local
-        .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
-        .single()
-        .expect("timestamp");
-    let model_slug = get_model_offline_for_tests(config.model.as_deref());
-
-    let composite = new_status_output(
-        &config,
-        Some(&account_display),
-        /*token_info*/ None,
-        &usage,
-        &None,
-        /*thread_name*/ None,
-        /*forked_from*/ None,
-        /*rate_limits*/ None,
-        None,
-        captured_at,
-        &model_slug,
-        /*collaboration_mode*/ None,
-        /*reasoning_effort_override*/ None,
-    );
-    let sanitized =
-        sanitize_directory(render_lines(&composite.display_lines(/*width*/ 80))).join("\n");
-    assert_snapshot!(sanitized);
 }
 
 #[tokio::test]
@@ -835,7 +813,7 @@ async fn status_uses_server_provider_id_and_auth_requirement() {
             .flat_map(|line| line.hyperlinks.into_iter())
             .map(|link| link.destination)
             .collect();
-        assert_eq!(destinations, vec!["https://chatgpt.com/settings/usage"]);
+        assert!(destinations.is_empty());
     }
 
     let narrow_destinations: Vec<String> = composite

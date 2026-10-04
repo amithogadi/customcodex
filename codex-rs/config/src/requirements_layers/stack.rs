@@ -220,9 +220,7 @@ fn populate_merged_regular_fields_with_sources(
         model_catalog_json,
         model_provider,
         model_providers,
-        check_for_update_on_startup,
         allow_login_shell,
-        feedback,
         allowed_approval_policies,
         allowed_approvals_reviewers,
         allowed_sandbox_modes,
@@ -233,7 +231,6 @@ fn populate_merged_regular_fields_with_sources(
         allow_managed_hooks_only,
         allow_browser_and_computer_use,
         allow_appshots,
-        allow_remote_control,
         computer_use,
         windows,
         feature_requirements,
@@ -263,12 +260,7 @@ fn populate_merged_regular_fields_with_sources(
     set_sourced!(model_catalog_json, &["model_catalog_json"]);
     set_sourced!(model_provider, &["model_provider"]);
     set_sourced!(model_providers, &["model_providers"]);
-    set_sourced!(
-        check_for_update_on_startup,
-        &["check_for_update_on_startup"]
-    );
     set_sourced!(allow_login_shell, &["allow_login_shell"]);
-    set_sourced!(feedback, &["feedback"]);
     set_sourced!(allowed_approval_policies, &["allowed_approval_policies"]);
     set_sourced!(
         allowed_approvals_reviewers,
@@ -287,7 +279,6 @@ fn populate_merged_regular_fields_with_sources(
         &["allow_browser_and_computer_use"]
     );
     set_sourced!(allow_appshots, &["allow_appshots"]);
-    set_sourced!(allow_remote_control, &["allow_remote_control"]);
     set_sourced!(auto_review, &["auto_review"]);
     set_sourced!(computer_use, &["computer_use"]);
     set_sourced!(windows, &["windows"]);

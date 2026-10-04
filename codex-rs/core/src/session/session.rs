@@ -22,12 +22,8 @@ use crate::shell_snapshot::ShellSnapshot;
 use crate::shell_snapshot::SnapshotCredentialBrokerState;
 use crate::state::ActiveTurn;
 use crate::turn_metadata::ExecutionMetadata;
-use codex_analytics::ThreadProductUpdate;
 use codex_attachment_store::AttachmentStore;
 use codex_extension_api::ExtensionDataInit;
-use codex_http_client::ClientRouteClass;
-use codex_http_client::RouteAwareClientPool;
-use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider::SharedModelProvider;
 use codex_prompts::render_model_instructions;
 use codex_protocol::SessionId;
@@ -87,7 +83,6 @@ pub(crate) struct Session {
     pub(super) mcp_prewarm_tx: async_channel::Sender<()>,
     pub(super) mcp_prewarm_shutdown: CancellationToken,
     pub(super) mcp_prewarm_task: std::sync::Mutex<Option<JoinHandle<()>>>,
-    pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) realtime_history: Option<Mutex<crate::realtime_history::RealtimeHistoryState>>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) async_hook_results: async_channel::Receiver<HookCompletedEvent>,
@@ -144,8 +139,6 @@ pub(crate) struct SessionConfiguration {
 
     // TODO(pakrym): Remove config from here
     pub(super) original_config_do_not_use: Arc<Config>,
-    /// Optional service name tag for session metrics.
-    pub(super) metrics_service_name: Option<String>,
     pub(super) app_server_client_name: Option<String>,
     pub(super) app_server_client_version: Option<String>,
     /// Guardian reviewer identity is trusted only when established during an in-memory spawn.
@@ -740,7 +733,6 @@ impl Session {
             window_number: Some(window_number),
             context_window_id: Some(context_window_id),
             mcp_attribution: Some(self.services.executed_tool_calls.mcp_attribution_snapshot()),
-            analytics_enabled: Some(self.services.analytics_events_client.is_enabled()),
             history_ingest_requested: turn_context
                 .config
                 .token_budget
@@ -784,7 +776,6 @@ impl Session {
         reserved_thread_id: Option<ThreadId>,
         environment_manager: Arc<EnvironmentManager>,
         inherited_environments: Option<TurnEnvironmentSnapshot>,
-        analytics_events_client: Option<AnalyticsEventsClient>,
         image_store: Arc<dyn AttachmentStore>,
         thread_store: Arc<dyn ThreadStore>,
         parent_rollout_thread_trace: ThreadTraceContext,
@@ -1154,7 +1145,6 @@ impl Session {
         ));
 
         let mut mcp_auth_changes = auth_manager.auth_change_receiver();
-        let plugins_manager_for_prewarm = Arc::clone(&plugins_manager);
         let config_for_mcp = Arc::clone(&config);
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let mcp_thread_init_for_startup = &mcp_thread_init;
@@ -1169,20 +1159,6 @@ impl Session {
             .unwrap_or_else(|| session_configuration.cwd().to_path_buf());
         let auth_and_mcp_fut = async move {
             let auth = mcp_auth.await;
-            if config_for_mcp.features.plugin_recommendations_enabled() {
-                let plugins_config = config_for_mcp.plugins_config_input();
-                let auth_for_prewarm = auth.clone();
-                // Fetch the catalog while MCP and plugin/skill initialization continue.
-                // Context construction still handles filtering and prompt insertion.
-                tokio::spawn(async move {
-                    plugins_manager_for_prewarm
-                        .recommended_plugins_mode_for_config(
-                            &plugins_config,
-                            auth_for_prewarm.as_ref(),
-                        )
-                        .await;
-                });
-            }
             let mcp_projection = mcp_manager_for_mcp
                 .runtime_config_for_step(
                     &config_for_mcp,
@@ -1291,40 +1267,15 @@ impl Session {
             ) {
                 post_session_configured_events.push(event);
             }
-            let telemetry_auth = auth.as_ref();
-            let auth_mode = telemetry_auth
+            let session_auth = auth.as_ref();
+            let auth_mode = session_auth
                 .map(CodexAuth::auth_mode)
-                .map(TelemetryAuthMode::from);
-            let account_id = telemetry_auth.and_then(CodexAuth::get_account_id);
-            let account_email = telemetry_auth.and_then(CodexAuth::get_account_email);
+                .map(|mode| mode.to_string());
+            let account_id = session_auth.and_then(CodexAuth::get_account_id);
+            let account_email = session_auth.and_then(CodexAuth::get_account_email);
             let originator = session_configuration.originator.clone();
             let terminal_type = user_agent();
             let session_model = session_configuration.step_settings.collaboration_mode.model().to_string();
-            let auth_env_telemetry = collect_auth_env_telemetry(
-                session_configuration.provider.info(),
-                auth_manager.codex_api_key_env_enabled(),
-            );
-            let mut session_telemetry = SessionTelemetry::new(
-                thread_id,
-                session_model.as_str(),
-                session_model.as_str(),
-                account_id.clone(),
-                account_email.clone(),
-                auth_mode,
-                originator.clone(),
-                config.otel.log_user_prompt,
-                terminal_type.clone(),
-                session_configuration.session_source.clone(),
-            )
-            .with_auth_env(auth_env_telemetry.to_otel_metadata())
-            .with_user_id(telemetry_auth.and_then(CodexAuth::get_chatgpt_user_id))
-            .with_tool_result_log_config(config.otel.tool_result);
-            if let Some(metrics) = thread_extension_data.get::<codex_otel::MetricsClient>() {
-                session_telemetry = session_telemetry.with_metrics(metrics.as_ref().clone());
-            }
-            if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
-                session_telemetry = session_telemetry.with_metrics_service_name(service_name);
-            }
             let network_proxy_audit_metadata = NetworkProxyAuditMetadata {
                 conversation_id: Some(thread_id.to_string()),
                 app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -1336,51 +1287,6 @@ impl Session {
                 model: Some(session_model.clone()),
                 slug: Some(session_model),
             };
-            crate::config::emit_session_start_metrics(config.as_ref(), &session_telemetry);
-            let is_worktree = session_configuration.cwd().canonicalize().ok().and_then(|cwd| {
-                codex_git_utils::repository_identity(&cwd).and_then(|_| {
-                    get_git_repo_root(&cwd).map(|root| root.join(".git").is_file())
-                })
-            });
-            let is_worktree_tag = match is_worktree {
-                Some(true) => "true",
-                Some(false) => "false",
-                None => "unknown",
-            };
-            let is_git_tag = if get_git_repo_root(session_configuration.cwd()).is_some() {
-                "true"
-            } else {
-                "false"
-            };
-            session_telemetry.counter(
-                THREAD_STARTED_METRIC,
-                /*inc*/ 1,
-                &[("is_git", is_git_tag), ("is_worktree", is_worktree_tag)],
-            );
-
-            let mcp_server_names =
-                codex_mcp::effective_mcp_servers(
-                    &mcp_projection.config,
-                    auth.as_ref(),
-                )
-                    .into_iter()
-                    .filter_map(|(name, server)| server.enabled().then_some(name))
-                    .collect::<Vec<_>>();
-            session_telemetry.conversation_starts(
-                config.model_provider.name.as_str(),
-                session_configuration.step_settings.collaboration_mode.reasoning_effort(),
-                config
-                    .model_reasoning_summary
-                    .unwrap_or(ReasoningSummaryConfig::Auto),
-                config.model_context_window,
-                config.model_auto_compact_token_limit,
-                config.permissions.approval_policy.value(),
-                config
-                    .permissions
-                    .legacy_sandbox_policy(session_configuration.cwd().as_path()),
-                mcp_server_names.iter().map(String::as_str).collect(),
-            );
-
             let use_zsh_fork_shell = config.features.enabled(Feature::ShellZshFork);
             let default_shell = if let Some(user_shell_override) =
                 session_configuration.user_shell_override.clone()
@@ -1456,7 +1362,6 @@ impl Session {
                 ShellSnapshot::new(
                     config.codex_home.clone(),
                     thread_id,
-                    session_telemetry.clone(),
                     state_db_ctx.clone(),
                     snapshot_credential_broker,
                     prefer_executor_shell_snapshots,
@@ -1636,27 +1541,6 @@ impl Session {
                 });
             }
 
-            let analytics_events_client = if config.analytics_enabled == Some(false) {
-                if let Some(client) = &analytics_events_client {
-                    client.update_thread_product_sku(thread_id, ThreadProductUpdate::Clear);
-                }
-                AnalyticsEventsClient::disabled()
-            } else {
-                analytics_events_client.unwrap_or_else(|| {
-                    AnalyticsEventsClient::new(
-                        Arc::clone(&auth_manager),
-                        config.chatgpt_base_url.trim_end_matches('/').to_string(),
-                        config.analytics_enabled,
-                    )
-                })
-            };
-            analytics_events_client.update_thread_product_sku(
-                thread_id,
-                match &config.apps_mcp_product_sku {
-                    Some(product) => ThreadProductUpdate::Set(product.clone()),
-                    None => ThreadProductUpdate::Clear,
-                },
-            );
             for item in initial_history.get_rollout_items() {
                 match item {
                     RolloutItem::Compacted(compacted) => {
@@ -1679,13 +1563,7 @@ impl Session {
             }
             let session_extension_data =
                 codex_extension_api::ExtensionData::new(session_id.to_string());
-            session_extension_data.insert(analytics_events_client.clone());
-            session_extension_data.insert(session_telemetry.clone());
             let mcp_resource_client = Arc::new(McpResourceClient::new(Arc::clone(&mcp_runtime)));
-            let extension_metrics =
-                extension_metrics::from_session_telemetry(session_telemetry.clone());
-            let workspace_routing = thread_extension_data
-                .get_or_init(|| config.workspace_routing_context());
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
@@ -1693,7 +1571,6 @@ impl Session {
                     persistent_thread_state_available: state_db_ctx.is_some(),
                     environments: environment_selections,
                     mcp_resource_client: Some(Arc::clone(&mcp_resource_client)),
-                    extension_metrics: Some(Arc::clone(&extension_metrics)),
                     session_store: &session_extension_data,
                     thread_store: &thread_extension_data,
                 }).await;
@@ -1723,19 +1600,12 @@ impl Session {
                 elicitations: crate::elicitation::ElicitationService::new(),
                 shell_zsh_path: config.zsh_path.clone(),
                 main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
-                analytics_events_client,
                 hooks: arc_swap::ArcSwap::from_pointee(hooks),
                 rollout_thread_trace,
                 user_shell: Arc::new(default_shell),
                 show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 exec_policy,
                 auth_manager: Arc::clone(&auth_manager),
-                openai_file_upload_client_pool: RouteAwareClientPool::new_without_request_logging(
-                    config.http_client_factory(),
-                    ClientRouteClass::Api,
-                )
-                .with_legacy_custom_ca_fallback(),
-                session_telemetry,
                 models_manager: Arc::clone(&models_manager),
                 git_root_discovery,
                 tool_approvals: Mutex::new(ApprovalStore::default()),
@@ -1764,31 +1634,9 @@ impl Session {
                 thread_store: Arc::clone(&thread_store),
                 attestation_provider: attestation_provider.clone(),
                 time_provider,
-                model_client: ModelClient::new(
-                    Some(Arc::clone(&auth_manager)),
-                    if config.features.enabled(Feature::UseAgentIdentity) {
-                        AgentIdentityAuthPolicy::ChatGptAuth
-                    } else {
-                        AgentIdentityAuthPolicy::JwtOnly
-                    },
-                    thread_id,
-                    session_configuration.provider.info().clone(),
-                    session_configuration.session_source.clone(),
-                    session_configuration.originator.clone(),
-                    config.model_verbosity,
-                    config.features.enabled(Feature::ContentItemKinds),
-                    reasoning_effort_override_enabled,
-                    config.features.enabled(Feature::EnableRequestCompression),
-                    config.features.enabled(Feature::RuntimeMetrics),
-                    Self::build_model_client_beta_features_header(config.as_ref()),
-                    /*concurrent_reasoning_summaries_enabled*/ config
+                model_client: ModelClient::new(Some(Arc::clone(&auth_manager)), thread_id, session_configuration.provider.info().clone(), session_configuration.session_source.clone(), session_configuration.originator.clone(), config.model_verbosity, config.features.enabled(Feature::ContentItemKinds), reasoning_effort_override_enabled, config.features.enabled(Feature::EnableRequestCompression), Self::build_model_client_beta_features_header(config.as_ref()), config
                         .features
-                        .enabled(Feature::ConcurrentReasoningSummaries),
-                    attestation_provider,
-                    config.http_client_factory(),
-                    workspace_routing.as_ref().clone(),
-                    extensions.model_request_contributors().to_vec(),
-                )
+                        .enabled(Feature::ConcurrentReasoningSummaries), attestation_provider, config.http_client_factory(), extensions.model_request_contributors().to_vec())
                 .with_executed_tool_calls(executed_tool_calls.clone())
                 .with_restored_history(matches!(
                     &initial_history,
@@ -1836,7 +1684,6 @@ impl Session {
                 mcp_prewarm_tx,
                 mcp_prewarm_shutdown: CancellationToken::new(),
                 mcp_prewarm_task: std::sync::Mutex::new(None),
-                conversation: Arc::new(RealtimeConversationManager::new()),
                 realtime_history: (session_configuration.history_mode == ThreadHistoryMode::Paginated
                     && services.live_thread.is_some())
                 .then(|| Mutex::new(Default::default())),

@@ -198,11 +198,7 @@ impl ThreadQueueRequestProcessor {
             .map_err(|error| config_load_error(&error))?;
         let submission = self
             .service()?
-            .start(
-                thread.as_ref(),
-                params.queued_submission_id,
-                self.outgoing.request_trace_context(request_id).await,
-            )
+            .start(thread.as_ref(), params.queued_submission_id, None)
             .await
             .map_err(queue_error)?;
         let turn_id = match submission {

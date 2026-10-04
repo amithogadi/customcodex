@@ -1,7 +1,7 @@
 //! Tracing helpers shared by socket and in-process app-server entry points.
 //!
 //! The in-process path intentionally reuses the same span shape as JSON-RPC
-//! transports so request telemetry stays comparable across stdio, websocket,
+//! transports so local request traces stay comparable across stdio, websocket,
 //! and embedded callers. [`typed_request_span`] is the in-process counterpart
 //! of [`request_span`] and stamps `rpc.transport` as `"in-process"` while
 //! deriving client identity from the typed [`ClientRequest`] rather than
@@ -13,10 +13,6 @@ use crate::transport::AppServerTransport;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCRequest;
-use codex_otel::set_parent_from_context;
-use codex_otel::set_parent_from_w3c_trace_context;
-use codex_otel::traceparent_context_from_env;
-use codex_protocol::protocol::W3cTraceContext;
 use tracing::Span;
 use tracing::field;
 use tracing::info_span;
@@ -41,15 +37,6 @@ pub(crate) fn request_span(
         client_name(initialize_client_info.as_ref(), session),
         client_version(initialize_client_info.as_ref(), session),
     );
-
-    let parent_trace = request.trace.as_ref().and_then(|trace| {
-        trace.traceparent.as_ref()?;
-        Some(W3cTraceContext {
-            traceparent: trace.traceparent.clone(),
-            tracestate: trace.tracestate.clone(),
-        })
-    });
-    attach_parent_context(&span, method, &request.id, parent_trace.as_ref());
 
     span
 }
@@ -78,7 +65,6 @@ pub(crate) fn typed_request_span(
             .or(session.client_version()),
     );
 
-    attach_parent_context(&span, method, request.id(), /*parent_trace*/ None);
     span
 }
 
@@ -119,25 +105,6 @@ fn record_client_info(span: &Span, client_name: Option<&str>, client_version: Op
     }
     if let Some(client_version) = client_version {
         span.record("app_server.client_version", client_version);
-    }
-}
-
-fn attach_parent_context(
-    span: &Span,
-    method: &str,
-    request_id: &impl std::fmt::Display,
-    parent_trace: Option<&W3cTraceContext>,
-) {
-    if let Some(trace) = parent_trace {
-        if !set_parent_from_w3c_trace_context(span, trace) {
-            tracing::warn!(
-                rpc_method = method,
-                rpc_request_id = %request_id,
-                "ignoring invalid inbound request trace carrier"
-            );
-        }
-    } else if let Some(context) = traceparent_context_from_env() {
-        set_parent_from_context(span, context);
     }
 }
 

@@ -47,7 +47,9 @@ impl ChatWidget {
     }
 
     pub(super) fn collect_runtime_metrics_delta(&mut self) {
-        if let Some(delta) = self.session_telemetry.runtime_metrics_summary() {
+        if let Some(thread_id) = self.thread_id
+            && let Some(delta) = codex_diagnostics::take_runtime_summary(&thread_id.to_string())
+        {
             self.apply_runtime_metrics_delta(delta);
         }
     }
@@ -82,11 +84,8 @@ impl ChatWidget {
         self.turn_lifecycle.start(Instant::now());
         self.transcript.reset_turn_flags();
         self.adaptive_chunking.reset();
-        if self.plan_stream_controller.take().is_some() {
-            self.request_pending_usage_output_insertion_after_stream_shutdown();
-        }
+        if self.plan_stream_controller.take().is_some() {}
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
-        self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -165,7 +164,6 @@ impl ChatWidget {
         if !from_replay {
             self.request_status_line_branch_refresh();
             self.request_status_line_git_summary_refresh();
-            self.refresh_thread_usage_after_turn();
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.clear_context_compaction();
@@ -345,12 +343,10 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.stream_controller = None;
         self.plan_stream_controller = None;
-        self.request_pending_usage_output_insertion_after_stream_shutdown();
         self.status_state.pending_status_indicator_restore = false;
         self.safety_buffering_prompt = None;
         self.request_status_line_branch_refresh();
         self.request_status_line_git_summary_refresh();
-        self.refresh_thread_usage_after_turn();
         self.maybe_show_pending_rate_limit_prompt();
     }
 
@@ -404,7 +400,7 @@ impl ChatWidget {
         self.finalize_turn();
         self.add_to_history(history_cell::new_cyber_policy_error_event(notice));
         if notice == crate::daybreak::Notice::Disabled
-            && !self.thread_usage.replaying_turn_completion
+            && !self.replaying_turn_completion
             && !self.blocks_direct_input
             && let Some(thread_id) = self.thread_id
         {
@@ -462,35 +458,7 @@ impl ChatWidget {
             self.clear_backend_banner();
         }
         self.codex_rate_limit_reached_type = rate_limit_reached_type;
-        // Keep owner remediation in history even when the optional backend banner is unavailable.
-        let (message, nudge) = match rate_limit_reached_type {
-            Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => (
-                    "You're out of credits. Your workspace is out of credits. Add credits to continue using Codex."
-                        .to_string(),
-                    None,
-            ),
-            Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached) => (
-                    "Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex."
-                        .to_string(),
-                    None,
-            ),
-            Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted) =>
-                (message, Some(AddCreditsNudgeCreditType::Credits)),
-            Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached) =>
-                (message, Some(AddCreditsNudgeCreditType::UsageLimit)),
-            Some(RateLimitReachedType::RateLimitReached) | None => (message, None),
-        };
         self.on_error(message);
-        if !self.has_applicable_backend_banner()
-            && let Some(credit_type) = nudge
-        {
-            self.open_workspace_owner_nudge_prompt(credit_type);
-        }
-        if self.has_chatgpt_account {
-            self.app_event_tx.send(AppEvent::RefreshRateLimits {
-                origin: crate::app_event::RateLimitRefreshOrigin::Recovery,
-            });
-        }
     }
 
     pub(super) fn handle_non_retry_error(
@@ -504,7 +472,7 @@ impl ChatWidget {
         {
             return;
         }
-        let question_drafts = if self.thread_usage.replaying_turn_completion {
+        let question_drafts = if self.replaying_turn_completion {
             None
         } else {
             self.take_question_drafts()

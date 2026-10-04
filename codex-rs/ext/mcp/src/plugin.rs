@@ -1,5 +1,4 @@
 use codex_config::types::PluginMcpServerConfig;
-use codex_connectors_extension::PluginAppProvider;
 use codex_core::config::Config;
 use codex_core_plugins::loader::apply_configured_plugin_mcp_server_policies;
 use codex_core_plugins::loader::configured_plugin_mcp_server_policies;
@@ -18,7 +17,6 @@ use std::sync::OnceLock;
 
 use self::provider::PluginMcpProvider;
 use crate::PluginsThreadState;
-use crate::cloud_plugin::hosted_plugin_connectors;
 use crate::plugin_contributor::PluginContributor;
 use crate::plugin_contributor_state::CachedSelectedRoot;
 
@@ -59,13 +57,7 @@ impl PluginContributor {
         };
         let metadata = match plugin {
             Some(plugin) => {
-                // MCP server and app declarations are separate
-                // executor-owned files. Read them together so a remote environment only
-                // pays for the slower read instead of both reads back-to-back.
-                let (servers, app_declarations) = tokio::join!(
-                    PluginMcpProvider.load(&plugin),
-                    PluginAppProvider.load(&plugin)
-                );
+                let servers = PluginMcpProvider.load(&plugin).await;
                 let servers = servers.unwrap_or_else(|err| {
                     tracing::warn!(
                         selected_root = selected_root.id,
@@ -74,25 +66,13 @@ impl PluginContributor {
                     );
                     Vec::new()
                 });
-                let connector_ids = app_declarations
-                    .unwrap_or_else(|err| {
-                        tracing::warn!(
-                            selected_root = selected_root.id,
-                            error = %err,
-                            "failed to load selected plugin apps"
-                        );
-                        Vec::new()
-                    })
-                    .into_iter()
-                    .map(|declaration| declaration.connector_id.0)
-                    .collect();
                 let CapabilityRootLocation::Environment { environment_id, .. } =
                     &selected_root.location;
                 Some(SelectedPluginContribution {
                     plugin_display_name: plugin.plugin().manifest().display_name().to_string(),
                     source_environment_id: environment_id.clone(),
                     servers,
-                    connector_ids,
+                    connector_ids: Vec::new(),
                 })
             }
             None => None,
@@ -117,26 +97,9 @@ impl McpServerContributor<Config> for PluginContributor {
 
     fn contribute<'a>(
         &'a self,
-        context: McpServerContributionContext<'a, Config>,
+        _context: McpServerContributionContext<'a, Config>,
     ) -> ExtensionFuture<'a, Vec<McpServerContribution>> {
-        Box::pin(async move {
-            let Some(thread_store) = context.thread_store() else {
-                return Vec::new();
-            };
-            let cloud_plugins_enabled = self.providers.cloud.is_some()
-                && context.config().features.enabled(Feature::Plugins);
-            let state = thread_store.get_or_init(PluginsThreadState::default);
-            if !cloud_plugins_enabled {
-                state.contributor_state().cloud_generation = None;
-                return Vec::new();
-            }
-            // Core reads hosted connectors after finishing the executor registrations.
-            state
-                .cloud_catalog()
-                .as_ref()
-                .map(hosted_plugin_connectors)
-                .unwrap_or_default()
-        })
+        Box::pin(async { Vec::new() })
     }
 
     fn selected_plugins<'a>(
@@ -148,10 +111,6 @@ impl McpServerContributor<Config> for PluginContributor {
                 return Vec::new();
             };
             let state = thread_store.get_or_init(PluginsThreadState::default);
-            if context.auth_changed() {
-                // Clear the old account before executor loading can yield to other work.
-                state.contributor_state().cloud_generation = None;
-            }
             let selected_roots = context
                 .ready_selected_capability_roots()
                 .unwrap_or_default();

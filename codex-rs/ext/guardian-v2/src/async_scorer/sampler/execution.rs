@@ -3,7 +3,6 @@
 //! the same early result but keep ownership until completion to capture reusable output.
 //! Requests and retries stop when the account owner that started the classification changes.
 
-use super::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use super::ConnectionPool;
 use super::LunaSamplerConfig;
 use super::LunaSamplerError;
@@ -13,11 +12,9 @@ use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::ResponsesApiRequest;
 use codex_api::TransportError;
-use codex_extension_api::ExtensionMetrics;
 use codex_login::UnauthorizedRecovery;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::TokenUsage;
 use http::StatusCode;
 use serde_json::json;
 use std::collections::HashMap;
@@ -370,7 +367,6 @@ impl SamplingExecution {
                         };
                         scored.store(true, Ordering::Relaxed);
                         let mut remaining_events = stream.rx_event;
-                        let metrics = self.config.metrics.clone();
                         tokio::spawn(async move {
                             while let Some(event) = tokio::select! {
                                 biased;
@@ -378,11 +374,7 @@ impl SamplingExecution {
                                 event = remaining_events.recv() => event,
                             } {
                                 match event {
-                                    Ok(ResponseEvent::Completed { token_usage, .. }) => {
-                                        record_token_usage(
-                                            metrics.as_deref(),
-                                            token_usage.as_ref(),
-                                        );
+                                    Ok(ResponseEvent::Completed { token_usage: _, .. }) => {
                                         lease.reuse();
                                         break;
                                     }
@@ -407,8 +399,7 @@ impl SamplingExecution {
                             }
                         }
                     }
-                    ResponseEvent::Completed { token_usage, .. } => {
-                        record_token_usage(self.config.metrics.as_deref(), token_usage.as_ref());
+                    ResponseEvent::Completed { token_usage: _, .. } => {
                         lease.reuse();
                         if !output.is_empty() {
                             return Ok(output);
@@ -428,33 +419,5 @@ impl SamplingExecution {
             }
             return Err(LunaSamplerError::MissingOutput);
         }
-    }
-}
-
-fn record_token_usage(metrics: Option<&dyn ExtensionMetrics>, token_usage: Option<&TokenUsage>) {
-    let (Some(metrics), Some(token_usage)) = (metrics, token_usage) else {
-        return;
-    };
-
-    for (token_type, value) in [
-        ("total", token_usage.total_tokens.max(0)),
-        ("input", token_usage.input_tokens.max(0)),
-        ("cached_input", token_usage.cached_input()),
-        (
-            "cache_write_input",
-            token_usage.cache_write_input_tokens.max(0),
-        ),
-        ("non_cached_input", token_usage.non_cached_input()),
-        ("output", token_usage.output_tokens.max(0)),
-        (
-            "reasoning_output",
-            token_usage.reasoning_output_tokens.max(0),
-        ),
-    ] {
-        metrics.histogram(
-            CLASSIFICATION_TOKEN_USAGE_METRIC,
-            value,
-            &[("token_type", token_type)],
-        );
     }
 }

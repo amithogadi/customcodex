@@ -151,7 +151,6 @@ fn skills_extensions() -> Arc<ExtensionRegistry<Config>> {
         max_context_tokens: config.skill_max_context_tokens,
         bundled_skills_enabled: config.bundled_skills_enabled(),
         cloud_skill_enabled: config.cloud_skill_enabled,
-        shadow_selection_enabled: config.features.enabled(Feature::SkillSearch),
     });
     Arc::new(extensions.build())
 }
@@ -775,7 +774,6 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: false,
-            shadow_selection_enabled: false,
         },
     );
     let mock = mount_sse_sequence(
@@ -861,7 +859,6 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
     assert_eq!(outcome.await?, TurnSettingsUpdateOutcome::Applied);
     // Refresh shared MCP for the new roots (there is no Apps server in this test), then
     // replace its plugin list before the next step captures it or needs another refresh.
-    let _ = thread.refresh_codex_apps_tools().await;
     let shared = thread.thread_extension_data();
     assert_eq!(
         shared
@@ -1789,27 +1786,6 @@ async fn guardian_checkpoint_migration_request_history() -> Result<()> {
             .into_owned();
     }
     insta::assert_snapshot!("guardian_checkpoint_migration", snapshot);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_tool_exposure_request_history() -> Result<()> {
-    let requests = super::app_tool_exposure::connector_exposure_requests(
-        super::app_tool_exposure::ExposureCase::non_deferred(
-            codex_protocol::openai_models::ToolMode::CodeModeOnly,
-        ),
-    )
-    .await?;
-    insta::assert_snapshot!(
-        "app_tool_exposure_CodeModeOnly",
-        context_snapshot::format_request_history_snapshot(
-            "A non-deferred connector is called through code mode while another connector stays deferred.",
-            &requests,
-            &ContextSnapshotOptions::default()
-                .rewrite_known_segments()
-                .include_request_settings(),
-        )
-    );
     Ok(())
 }
 

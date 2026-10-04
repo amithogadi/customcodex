@@ -220,7 +220,6 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
         };
 
         let body = serde_json::to_value(&message).map_err(StreamableHttpError::Deserialize)?;
-        let request_span = crate::trace_context::request_span(&body);
         let body = serde_json::to_vec(&body).map_err(StreamableHttpError::Deserialize)?;
         let has_authorization_header = headers.contains_key(AUTHORIZATION);
         if let JsonRpcMessage::Notification(notification) = &message
@@ -236,19 +235,16 @@ impl StreamableHttpClient for StreamableHttpClientAdapter {
             return Ok(StreamableHttpPostResponse::Accepted);
         }
 
-        let request = self
-            .http_client
-            .http_request_stream(HttpRequestParams {
-                method: "POST".to_string(),
-                url: uri.to_string(),
-                headers: protocol_headers(&headers),
-                body: Some(body.into()),
-                timeout_ms,
-                redirect_policy,
-                request_id: "buffered-request".to_string(),
-                stream_response: true,
-            })
-            .instrument(request_span);
+        let request = self.http_client.http_request_stream(HttpRequestParams {
+            method: "POST".to_string(),
+            url: uri.to_string(),
+            headers: protocol_headers(&headers),
+            body: Some(body.into()),
+            timeout_ms,
+            redirect_policy,
+            request_id: "buffered-request".to_string(),
+            stream_response: true,
+        });
         let response = if is_event_stream_request {
             tokio::time::timeout(EVENT_STREAM_RESPONSE_TIMEOUT, request)
                 .await

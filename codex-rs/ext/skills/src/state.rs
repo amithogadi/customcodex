@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use codex_exec_server::EnvironmentAccessKey;
-use codex_extension_api::ExtensionMetrics;
 use codex_mcp::McpResourceClient;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
 
@@ -20,9 +19,6 @@ use crate::catalog::SkillSourceKind;
 use crate::provider::SkillListQuery;
 use crate::provider::SkillReadContext;
 use crate::provider::SkillReadRequest;
-use crate::shadow_selection_experiment::RecentSkillInvocations;
-use crate::shadow_selection_experiment::ShadowSelectionTurnState;
-use crate::shadow_selection_experiment::ShadowTaskContext;
 use crate::skills_extension_state::CachedExecutorCatalog;
 use crate::skills_extension_state::CachedExecutorDiscoveryCatalog;
 use crate::skills_extension_state::CloudResourceCache;
@@ -36,7 +32,6 @@ mod cloud_cache_tests;
 
 pub(crate) struct SkillsSessionState {
     pub(crate) mcp_resources: Option<Arc<McpResourceClient>>,
-    pub(crate) extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
 /// Thread-owned skill configuration and caches; consumers can only read catalog snapshots.
@@ -44,10 +39,7 @@ pub struct SkillsThreadState {
     config: Mutex<SkillsExtensionConfig>,
     cloud_skills_available: bool,
     skills_extension_state: Mutex<SkillsExtensionState>,
-    shadow_selection_turn: Mutex<Option<ShadowSelectionTurn>>,
     pub(crate) executor_read_snapshot: Mutex<Option<ExecutorReadSnapshot>>,
-    pub(crate) recent_skill_invocations: Arc<RecentSkillInvocations>,
-    pub(crate) shadow_task_context: Arc<ShadowTaskContext>,
 }
 
 impl SkillsThreadState {
@@ -56,10 +48,7 @@ impl SkillsThreadState {
             config: Mutex::new(config),
             cloud_skills_available,
             skills_extension_state: Mutex::new(SkillsExtensionState::default()),
-            shadow_selection_turn: Mutex::new(None),
             executor_read_snapshot: Mutex::new(None),
-            recent_skill_invocations: Arc::new(RecentSkillInvocations::default()),
-            shadow_task_context: Arc::new(ShadowTaskContext::default()),
         }
     }
 
@@ -87,33 +76,6 @@ impl SkillsThreadState {
 
     pub(crate) fn cloud_skill_enabled(&self) -> bool {
         self.cloud_skills_available && self.config().cloud_skill_enabled
-    }
-
-    pub(crate) fn replace_shadow_selection_turn(
-        &self,
-        turn_id: String,
-        state: Option<ShadowSelectionTurnState>,
-    ) {
-        *self
-            .shadow_selection_turn
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            state.map(|state| ShadowSelectionTurn {
-                turn_id,
-                state: Arc::new(state),
-            });
-    }
-
-    pub(crate) fn shadow_selection_turn(
-        &self,
-        turn_id: &str,
-    ) -> Option<Arc<ShadowSelectionTurnState>> {
-        self.shadow_selection_turn
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .as_ref()
-            .filter(|turn| turn.turn_id == turn_id)
-            .map(|turn| Arc::clone(&turn.state))
     }
 
     /// Returns the catalog for these exact roots, using the existing thread caches.
@@ -411,11 +373,6 @@ pub(crate) struct ExecutorReadSnapshot {
     // The key binds cached contents to their source filesystem and callback permissions.
     pub(crate) access: EnvironmentAccessKey,
     pub(crate) result: Arc<SkillReadResult>,
-}
-
-struct ShadowSelectionTurn {
-    turn_id: String,
-    state: Arc<ShadowSelectionTurnState>,
 }
 
 #[derive(Default)]

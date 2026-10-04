@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -16,17 +17,9 @@ from openai_codex import AsyncCodex
 
 async def main() -> None:
     async with AsyncCodex(config=runtime_config()) as codex:
-        # Browser login returns a live handle. Open `auth_url` and await `wait()`
-        # in a real app; this example cancels immediately so it stays non-blocking.
-        login = await codex.login_chatgpt()
-        canceled = await login.cancel()
-        completed = await login.wait()
+        await codex.login_api_key(os.environ["CODEX_API_KEY"])
         account = await codex.account()
 
-        print("login.id:", login.login_id)
-        print("login.auth_url:", login.auth_url)
-        print("login.cancel.status:", canceled.status)
-        print("login.completed.success:", completed.success)
         print("account.requires_openai_auth:", account.requires_openai_auth)
 
 

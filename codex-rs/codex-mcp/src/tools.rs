@@ -43,11 +43,6 @@ pub struct ToolInfo {
     pub namespace_description: Option<String>,
     /// Raw MCP tool definition; `tool.name` is sent back to the MCP server.
     pub tool: Tool,
-    /// Optional provided-file fields accepted by each declared `openai/fileParams`
-    /// argument. This is derived from the raw MCP schema before file arguments are
-    /// masked as local paths for the model.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub openai_file_input_optional_fields: HashMap<String, Vec<String>>,
     pub connector_id: Option<String>,
     pub connector_name: Option<String>,
     #[serde(default)]

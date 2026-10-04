@@ -1,4 +1,3 @@
-use super::analytics::ToolCallAnalytics;
 use super::*;
 use crate::agent::api::AgentTarget;
 use crate::tools::handlers::multi_agents_spec::create_interrupt_agent_tool_v2;
@@ -21,10 +20,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolInvocation: 'a,
     {
         Box::pin(async move {
-            let mut analytics =
-                ToolCallAnalytics::new(&invocation, CollabAgentTool::InterruptAgent);
-            let result = handle_interrupt_agent(invocation, &mut analytics).await;
-            analytics.finish(&result);
+            let result = handle_interrupt_agent(invocation).await;
             result.map(boxed_tool_output)
         })
     }
@@ -32,7 +28,6 @@ impl ToolExecutor<ToolInvocation> for Handler {
 
 async fn handle_interrupt_agent(
     invocation: ToolInvocation,
-    analytics: &mut ToolCallAnalytics,
 ) -> Result<InterruptAgentResult, FunctionCallError> {
     let ToolInvocation {
         session,
@@ -44,7 +39,6 @@ async fn handle_interrupt_agent(
     let arguments = function_arguments(payload)?;
     let args: InterruptAgentArgs = parse_arguments(&arguments)?;
     let agent_id = resolve_agent_target(&session, &turn, &args.target).await?;
-    analytics.set_receiver(agent_id);
     let snapshot = session
         .services
         .agent_control

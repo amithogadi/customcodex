@@ -11,7 +11,6 @@ use codex_api::TransportError;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::GatewayAuthManager;
-use codex_login::WorkspaceRoutingRequest;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::cache::ModelsCache;
@@ -27,14 +26,11 @@ use crate::ProviderCapabilities;
 use crate::RemoteCompactionSupport;
 use crate::ResolvedResponsesProvider;
 use crate::amazon_bedrock::AmazonBedrockModelProvider;
-use crate::auth::ProviderAuthScope;
 use crate::auth::ResolvedProviderAuth;
 use crate::auth::auth_manager_for_provider;
 use crate::auth::resolve_provider_auth;
-use crate::auth::resolve_provider_auth_for_scope;
 use crate::combined_auth::compose_auth;
 use crate::models_endpoint::OpenAiModelsEndpoint;
-use crate::workspace_routing::WorkspaceRoutingContext;
 
 /// Current app-visible account state for a model provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,43 +205,13 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     }
 
     /// Resolves routing for Responses HTTP, compaction, and WebSocket handshakes.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "serialize discovery and the session's first successful routing transition"
-    )]
-    fn responses_api_provider<'a>(
-        &'a self,
-        routing_context: &'a WorkspaceRoutingContext,
-    ) -> ModelProviderFuture<'a, codex_protocol::error::Result<ResolvedResponsesProvider>> {
+    fn responses_api_provider(
+        &self,
+    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ResolvedResponsesProvider>> {
         Box::pin(async move {
-            let mut provider = self.api_provider().await?;
-            let mut redirect_policy = ClientRedirectPolicy::Default;
-            if provider_uses_first_party_auth_path(self.info())
-                && self.info().supports_codex_backend_routes()
-                && let Some(auth) = self.auth().await.filter(CodexAuth::is_chatgpt_auth)
-                && let Some(auth_manager) = self.auth_manager()
-            {
-                let mut previously_routed = routing_context.previously_routed.lock().await;
-                if let Some(routing) = auth_manager
-                    .workspace_routing(
-                        &auth,
-                        WorkspaceRoutingRequest {
-                            provider_base_url: provider.base_url.clone(),
-                            chatgpt_base_url: routing_context.chatgpt_base_url.clone(),
-                            previously_routed: *previously_routed,
-                            session: routing_context.session.clone(),
-                        },
-                    )
-                    .await?
-                {
-                    crate::workspace_routing::apply_workspace_routing(&mut provider, routing)?;
-                    redirect_policy = ClientRedirectPolicy::Reject;
-                    *previously_routed = true;
-                }
-            }
             Ok(ResolvedResponsesProvider {
-                provider,
-                redirect_policy,
+                provider: self.api_provider().await?,
+                redirect_policy: ClientRedirectPolicy::Default,
             })
         })
     }
@@ -267,19 +233,11 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
         })
     }
 
-    /// Returns request credentials, optionally scoped to a Codex session task.
-    fn api_auth_for_scope(
+    /// Resolves the configured provider's current credentials.
+    fn api_auth_for_request(
         &self,
-        scope: ProviderAuthScope,
     ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ResolvedProviderAuth>> {
-        Box::pin(async move {
-            if !provider_uses_first_party_auth_path(self.info()) {
-                return self.api_auth().await.map(ResolvedProviderAuth::new);
-            }
-            let auth = self.auth().await;
-            resolve_provider_auth_for_scope(self.auth_manager(), auth.as_ref(), self.info(), scope)
-                .await
-        })
+        Box::pin(async move { self.api_auth().await.map(ResolvedProviderAuth::new) })
     }
 
     /// Creates the model manager implementation appropriate for this provider.
@@ -485,28 +443,6 @@ impl ModelProvider for ConfiguredModelProvider {
         })
     }
 
-    fn api_auth_for_scope(
-        &self,
-        scope: ProviderAuthScope,
-    ) -> ModelProviderFuture<'_, codex_protocol::error::Result<ResolvedProviderAuth>> {
-        Box::pin(async move {
-            let resolved = if provider_uses_first_party_auth_path(&self.info) {
-                let auth = self.auth().await;
-                resolve_provider_auth_for_scope(
-                    self.auth_manager.clone(),
-                    auth.as_ref(),
-                    &self.info,
-                    scope,
-                )
-                .await?
-            } else {
-                let auth = self.auth().await;
-                ResolvedProviderAuth::new(resolve_provider_auth(auth.as_ref(), &self.info)?)
-            };
-            compose_auth(&self.info, self.gateway_auth_manager.as_ref(), resolved).await
-        })
-    }
-
     fn account_state(&self) -> ProviderAccountResult {
         let account = if self.info.requires_openai_auth {
             self.auth_manager
@@ -528,9 +464,7 @@ impl ModelProvider for ConfiguredModelProvider {
                     }
                     CodexAuth::Chatgpt(_)
                     | CodexAuth::ChatgptAuthTokens(_)
-                    | CodexAuth::Headers(_)
-                    | CodexAuth::AgentIdentity(_)
-                    | CodexAuth::PersonalAccessToken(_) => {
+                    | CodexAuth::Headers(_) => {
                         let email = auth.get_account_email();
                         let plan_type = auth.account_plan_type();
 
@@ -583,7 +517,6 @@ mod tests {
 
     use codex_http_client::HttpClientFactory;
     use codex_http_client::OutboundProxyPolicy;
-    use codex_login::auth::AgentIdentityAuthPolicy;
     use codex_login::auth::BedrockApiKeyAuth;
     use codex_model_provider_info::AwsAuthRefreshConfig;
     use codex_model_provider_info::AwsCredentialExportConfig;
@@ -608,7 +541,6 @@ mod tests {
     use wiremock::matchers::path;
 
     use super::*;
-    use crate::auth::AgentIdentitySessionFallback;
     use crate::shared_state::process_shared_state;
 
     fn provider_info_with_command_auth() -> ModelProviderInfo {
@@ -698,11 +630,7 @@ mod tests {
         );
 
         let auth = provider
-            .api_auth_for_scope(ProviderAuthScope {
-                agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
-                session_source: SessionSource::Cli,
-                agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
-            })
+            .api_auth_for_request()
             .await
             .expect("auth should resolve");
 

@@ -221,7 +221,7 @@ impl ToolRuntime<ApplyPatchRequest, ApplyPatchRuntimeOutput> for ApplyPatchRunti
             };
         if sandbox_denied {
             // TODO(iceweasel): Report executor filesystem sandbox backends like process/start so
-            // executor-managed apply_patch denials can emit backend-specific violation telemetry.
+            // executor-managed apply_patch denials can emit backend-specific local violation diagnostics.
             if attempt.sandbox != SandboxType::None {
                 record_filesystem_sandbox_violation(attempt.sandbox, &output);
             }

@@ -7,21 +7,17 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::Sleep;
 
-use super::SharedPluginMetricsSidecar;
 use super::UnifiedExecContext;
 use super::process::OutputBuffers;
 use super::process::OutputHandles;
 use super::process::UnifiedExecProcess;
-use super::take_plugin_metrics_sidecar;
 use crate::exec::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
-use crate::plugins::metrics::finish_and_track_measurements;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
-use codex_core_plugins::PluginCommandAttribution;
 use codex_protocol::exec_output::ExecToolCallOutput;
 use codex_protocol::exec_output::StreamOutput;
 use codex_protocol::openai_models::ModelInfo;
@@ -161,16 +157,14 @@ pub(crate) fn spawn_exit_watcher(
     command: Vec<String>,
     cwd: PathUri,
     process_id: i32,
-    plugin_attribution: Option<PluginCommandAttribution>,
     output_buffer: Arc<Mutex<OutputBuffers>>,
     started_at: Instant,
     network_denial_monitor: Option<tokio::task::JoinHandle<()>>,
-    plugin_metrics_sidecar: Option<SharedPluginMetricsSidecar>,
 ) {
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.step_context.turn);
     let model_info = Arc::clone(&context.step_context.settings.model_info);
-    let model_context = context.step_context.model_context();
+    let _model_context = context.step_context.model_context();
     let call_id = context.call_id.clone();
     let exit_token = process.cancellation_token();
     let output_drained = process.output_drained_notify();
@@ -188,11 +182,7 @@ pub(crate) fn spawn_exit_watcher(
         let _interaction_guard = interaction_lock.lock_owned().await;
 
         let duration = Instant::now().saturating_duration_since(started_at);
-        let plugin_metrics_sidecar = plugin_metrics_sidecar
-            .as_ref()
-            .and_then(take_plugin_metrics_sidecar);
         if let Some(message) = process.failure_message() {
-            drop(plugin_metrics_sidecar);
             emit_failed_exec_end_for_unified_exec(
                 process.sandbox_type(),
                 session_ref,
@@ -202,7 +192,6 @@ pub(crate) fn spawn_exit_watcher(
                 command,
                 cwd,
                 Some(process_id.to_string()),
-                plugin_attribution,
                 output_buffer,
                 String::new(),
                 message,
@@ -212,15 +201,6 @@ pub(crate) fn spawn_exit_watcher(
         } else {
             let exit_code = process.exit_code().unwrap_or(-1);
             let timed_out = process.timed_out();
-            finish_and_track_measurements(
-                plugin_metrics_sidecar,
-                exit_code,
-                &session_ref,
-                &turn_ref,
-                &model_context,
-                &call_id,
-            )
-            .await;
             emit_exec_end_for_unified_exec(
                 process.sandbox_type(),
                 session_ref,
@@ -230,7 +210,6 @@ pub(crate) fn spawn_exit_watcher(
                 command,
                 cwd,
                 Some(process_id.to_string()),
-                plugin_attribution,
                 output_buffer,
                 String::new(),
                 exit_code,
@@ -337,7 +316,6 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
     command: Vec<String>,
     cwd: PathUri,
     process_id: Option<String>,
-    plugin_attribution: Option<PluginCommandAttribution>,
     output_buffer: Arc<Mutex<OutputBuffers>>,
     fallback_output: String,
     exit_code: i32,
@@ -366,7 +344,6 @@ pub(crate) async fn emit_exec_end_for_unified_exec(
         cwd,
         ExecCommandSource::UnifiedExecStartup,
         process_id,
-        plugin_attribution,
     );
     emitter
         .emit(
@@ -389,7 +366,6 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
     command: Vec<String>,
     cwd: PathUri,
     process_id: Option<String>,
-    plugin_attribution: Option<PluginCommandAttribution>,
     output_buffer: Arc<Mutex<OutputBuffers>>,
     fallback_output: String,
     message: String,
@@ -426,7 +402,6 @@ pub(crate) async fn emit_failed_exec_end_for_unified_exec(
         cwd,
         ExecCommandSource::UnifiedExecStartup,
         process_id,
-        plugin_attribution,
     );
     emitter
         .emit(

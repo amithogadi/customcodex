@@ -11,7 +11,6 @@ use crate::app_event::AppEvent;
 use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(any(target_os = "windows", test))]
 use crate::app_event::WindowsSandboxEnableMode;
-use crate::app_info::app_info_from_api;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
@@ -84,8 +83,6 @@ impl App {
                 self.agents_overview.activity.clear();
                 self.agents_overview.last_messages.clear();
                 self.agents_overview.usage.clear();
-                self.agents_overview.pending_usage = None;
-                self.agents_overview.usage_disabled = false;
                 self.repaint_agents_overview();
                 self.refresh_agents_overview_threads(app_server_client);
                 if let Some(primary_thread_id) = self.primary_thread_id
@@ -325,38 +322,17 @@ impl App {
                     .on_rolling_rate_limit_snapshot(notification.rate_limits.clone());
                 if workspace_hard_stop && self.chat_widget.has_chatgpt_account() {
                     // Background inference may publish a hard stop without a foreground Error.
-                    self.refresh_rate_limits(app_server_client, RateLimitRefreshOrigin::Recovery);
                 }
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
                 self.agents_overview.usage.clear();
-                self.agents_overview.pending_usage = None;
-                self.agents_overview.usage_disabled = false;
                 self.repaint_agents_overview();
-                self.chat_widget.invalidate_security_setup();
-                if let Some(crate::pager_overlay::Overlay::Analytics(view)) = &mut self.overlay {
-                    view.refresh();
-                }
-                if let Some(view) = &mut self.retained_analytics {
-                    view.cancel_loads();
-                }
                 self.rate_limit_hard_stop_generation =
                     self.rate_limit_hard_stop_generation.wrapping_add(1);
                 self.rate_limit_refresh_state.invalidate_recovery();
                 // Deferred terminal writes must never carry the previous account's billing into
                 // the newly authenticated identity, even when both accounts share one thread.
-                self.last_thread_usage_status_cell = None;
-                self.pending_thread_usage_history_refresh = false;
-                let has_codex_backend_auth = matches!(
-                    notification.auth_mode,
-                    Some(
-                        AuthMode::Chatgpt
-                            | AuthMode::ChatgptAuthTokens
-                            | AuthMode::AgentIdentity
-                            | AuthMode::PersonalAccessToken
-                    )
-                );
                 let account_display = status_account_display_from_auth_mode(
                     notification.auth_mode,
                     notification.plan_type,
@@ -364,22 +340,13 @@ impl App {
                 let has_chatgpt_account = notification
                     .auth_mode
                     .is_some_and(AuthMode::has_chatgpt_account);
-                self.account_email_request_id = None;
+
                 self.chat_widget.update_account_state(
                     account_display,
                     notification.plan_type,
                     has_chatgpt_account,
-                    has_codex_backend_auth,
                 );
-                if self.chat_widget.has_chatgpt_account() {
-                    self.refresh_account_email(app_server_client);
-                    crate::security_setup::prefetch(
-                        &self.config,
-                        app_server_client,
-                        self.app_event_tx.clone(),
-                        self.chat_widget.security_setup_request_id,
-                    );
-                }
+                if self.chat_widget.has_chatgpt_account() {}
                 return;
             }
             ServerNotification::ExternalAgentConfigImportCompleted(notification) => {
@@ -401,20 +368,6 @@ impl App {
                     self.chat_widget.add_plain_history_lines(
                         crate::external_agent_config_migration::flow::external_agent_config_migration_finished_lines(notification),
                     );
-                }
-                return;
-            }
-            ServerNotification::AppListUpdated(notification) => {
-                if self.current_displayed_thread_id().is_some() {
-                    self.chat_widget
-                        .refresh_connector_directory_after_notification(
-                            notification
-                                .data
-                                .iter()
-                                .cloned()
-                                .map(app_info_from_api)
-                                .collect(),
-                        );
                 }
                 return;
             }

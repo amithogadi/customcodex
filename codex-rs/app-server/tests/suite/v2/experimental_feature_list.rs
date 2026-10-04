@@ -325,8 +325,6 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
         BTreeMap::from([
             ("auth_elicitation".to_string(), true),
             ("memories".to_string(), true),
-            ("remote_plugin".to_string(), true),
-            ("tool_suggest".to_string(), false),
         ]),
     )
     .await?;
@@ -337,8 +335,6 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             enablement: BTreeMap::from([
                 ("auth_elicitation".to_string(), true),
                 ("memories".to_string(), true),
-                ("remote_plugin".to_string(), true),
-                ("tool_suggest".to_string(), false),
             ]),
         }
     );
@@ -365,41 +361,6 @@ async fn experimental_feature_enablement_set_only_updates_named_features() -> Re
             .get("features")
             .and_then(|features| features.get("memories")),
         Some(&json!(true))
-    );
-    assert_eq!(
-        config
-            .additional
-            .get("features")
-            .and_then(|features| features.get("remote_plugin")),
-        Some(&json!(true))
-    );
-    assert_eq!(
-        config
-            .additional
-            .get("features")
-            .and_then(|features| features.get("tool_suggest")),
-        Some(&json!(false))
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn experimental_feature_enablement_set_allows_remote_control() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build_initialized_with_timeout(DEFAULT_TIMEOUT)
-        .await?;
-    let remote_control_enabled = false;
-    let enablement = BTreeMap::from([("remote_control".to_string(), remote_control_enabled)]);
-
-    let actual = set_experimental_feature_enablement(&mut mcp, enablement.clone()).await?;
-
-    assert_eq!(
-        actual,
-        ExperimentalFeatureEnablementSetResponse { enablement }
     );
 
     Ok(())
@@ -454,6 +415,7 @@ async fn experimental_feature_enablement_set_ignores_invalid_features() -> Resul
         &mut mcp,
         BTreeMap::from([
             ("apps".to_string(), false),
+            ("remote_plugin".to_string(), true),
             ("auth_elicitation".to_string(), true),
             ("connectors".to_string(), false),
             ("personality".to_string(), false),

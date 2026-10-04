@@ -102,7 +102,6 @@ async fn visit(
             shutdown,
         )
         .await;
-        crate::telemetry::record_reclamation(db.label, started.elapsed(), &result);
         *due = Instant::now() + state.retry_after(&result);
     }
     scheduled

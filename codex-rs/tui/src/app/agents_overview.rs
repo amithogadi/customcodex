@@ -43,8 +43,6 @@ pub(super) struct AgentsOverviewState {
     pub(super) hidden_threads: HashSet<ThreadId>,
     pub(super) last_messages: HashMap<ThreadId, String>,
     pub(super) usage: HashMap<ThreadId, super::agents_overview_usage::AgentsOverviewUsage>,
-    pub(super) pending_usage: Option<(ThreadId, Uuid)>,
-    pub(super) usage_disabled: bool,
     pub(super) activity: HashMap<ThreadId, super::agents_overview_details::AgentsOverviewActivity>,
     pub(super) initialized: bool,
     pub(super) discovery: super::agents_overview_discovery::AgentsOverviewDiscovery,

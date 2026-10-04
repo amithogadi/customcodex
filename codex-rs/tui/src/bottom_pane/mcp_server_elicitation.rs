@@ -14,7 +14,6 @@ use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_protocol::ThreadId;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_KEY as APPROVAL_META_KIND_KEY;
 use codex_protocol::mcp_approval_meta::APPROVAL_KIND_MCP_TOOL_CALL as APPROVAL_META_KIND_MCP_TOOL_CALL;
-use codex_protocol::mcp_approval_meta::APPROVAL_KIND_TOOL_SUGGESTION as APPROVAL_META_KIND_TOOL_SUGGESTION;
 use codex_protocol::mcp_approval_meta::PERSIST_ALWAYS as APPROVAL_PERSIST_ALWAYS_VALUE;
 use codex_protocol::mcp_approval_meta::PERSIST_KEY as APPROVAL_PERSIST_KEY;
 use codex_protocol::mcp_approval_meta::PERSIST_SESSION as APPROVAL_PERSIST_SESSION_VALUE;
@@ -59,6 +58,21 @@ use crate::render::renderable::Renderable;
 use crate::text_formatting::format_json_compact;
 use crate::text_formatting::truncate_text;
 
+/// Shows a user-configured MCP server's HTTPS URL without opening a browser automatically.
+pub(crate) fn url_elicitation_message(message: &str, raw_url: &str) -> Option<String> {
+    let parsed = url::Url::parse(raw_url).ok()?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return None;
+    }
+    Some(format!(
+        "{message}\n\n{raw_url}\n\nComplete the request at this URL, then confirm."
+    ))
+}
+
 const ANSWER_PLACEHOLDER: &str = "Type your answer";
 const OPTIONAL_ANSWER_PLACEHOLDER: &str = "Type your answer (optional)";
 const FOOTER_SEPARATOR: &str = " | ";
@@ -72,11 +86,6 @@ const APPROVAL_DECLINE_VALUE: &str = "decline";
 const APPROVAL_CANCEL_VALUE: &str = "cancel";
 const APPROVAL_TOOL_PARAM_DISPLAY_LIMIT: usize = 3;
 const APPROVAL_TOOL_PARAM_VALUE_TRUNCATE_GRAPHEMES: usize = 60;
-const TOOL_TYPE_KEY: &str = "tool_type";
-const TOOL_ID_KEY: &str = "tool_id";
-const TOOL_SUGGEST_SUGGEST_TYPE_KEY: &str = "suggest_type";
-const TOOL_SUGGEST_REASON_KEY: &str = "suggest_reason";
-const TOOL_SUGGEST_INSTALL_URL_KEY: &str = "install_url";
 
 #[derive(Clone, PartialEq, Default)]
 struct ComposerDraft {
@@ -137,28 +146,6 @@ enum McpServerElicitationResponseMode {
     ApprovalAction,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ToolSuggestionToolType {
-    Connector,
-    Plugin,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ToolSuggestionType {
-    Install,
-    Enable,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ToolSuggestionRequest {
-    pub(crate) tool_type: ToolSuggestionToolType,
-    pub(crate) suggest_type: ToolSuggestionType,
-    pub(crate) suggest_reason: String,
-    pub(crate) tool_id: String,
-    pub(crate) tool_name: String,
-    pub(crate) install_url: Option<String>,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 struct McpToolApprovalDisplayParam {
     name: String,
@@ -175,7 +162,6 @@ pub(crate) struct McpServerElicitationFormRequest {
     approval_display_params: Vec<McpToolApprovalDisplayParam>,
     response_mode: McpServerElicitationResponseMode,
     fields: Vec<McpServerElicitationField>,
-    tool_suggestion: Option<ToolSuggestionRequest>,
 }
 
 #[derive(Default)]
@@ -224,7 +210,6 @@ impl McpServerElicitationFormRequest {
         message: String,
         requested_schema: Value,
     ) -> Option<Self> {
-        let tool_suggestion = parse_tool_suggestion_request(meta);
         let is_tool_approval = meta
             .and_then(Value::as_object)
             .and_then(|meta| meta.get(APPROVAL_META_KIND_KEY))
@@ -245,9 +230,7 @@ impl McpServerElicitationFormRequest {
             Vec::new()
         };
 
-        let (response_mode, fields) = if tool_suggestion.is_some() && is_message_only_schema {
-            (McpServerElicitationResponseMode::FormContent, Vec::new())
-        } else if is_message_only_schema {
+        let (response_mode, fields) = if is_message_only_schema {
             let allow_description = if is_tool_approval_action {
                 "Run the tool and continue"
             } else {
@@ -330,12 +313,7 @@ impl McpServerElicitationFormRequest {
             approval_display_params,
             response_mode,
             fields,
-            tool_suggestion,
         })
-    }
-
-    pub(crate) fn tool_suggestion(&self) -> Option<&ToolSuggestionRequest> {
-        self.tool_suggestion.as_ref()
     }
 
     pub(crate) fn thread_id(&self) -> ThreadId {
@@ -349,44 +327,6 @@ impl McpServerElicitationFormRequest {
     pub(crate) fn request_id(&self) -> &AppServerRequestId {
         &self.request_id
     }
-}
-
-fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionRequest> {
-    let meta = meta?.as_object()?;
-    if meta.get(APPROVAL_META_KIND_KEY).and_then(Value::as_str)
-        != Some(APPROVAL_META_KIND_TOOL_SUGGESTION)
-    {
-        return None;
-    }
-
-    let tool_type = match meta.get(TOOL_TYPE_KEY).and_then(Value::as_str) {
-        Some("connector") => ToolSuggestionToolType::Connector,
-        Some("plugin") => ToolSuggestionToolType::Plugin,
-        _ => return None,
-    };
-    let suggest_type = match meta
-        .get(TOOL_SUGGEST_SUGGEST_TYPE_KEY)
-        .and_then(Value::as_str)
-    {
-        Some("install") => ToolSuggestionType::Install,
-        Some("enable") => ToolSuggestionType::Enable,
-        _ => return None,
-    };
-
-    Some(ToolSuggestionRequest {
-        tool_type,
-        suggest_type,
-        suggest_reason: meta
-            .get(TOOL_SUGGEST_REASON_KEY)
-            .and_then(Value::as_str)?
-            .to_string(),
-        tool_id: meta.get(TOOL_ID_KEY).and_then(Value::as_str)?.to_string(),
-        tool_name: meta.get(TOOL_NAME_KEY).and_then(Value::as_str)?.to_string(),
-        install_url: meta
-            .get(TOOL_SUGGEST_INSTALL_URL_KEY)
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-    })
 }
 
 fn approval_supports_persist_mode(meta: Option<&Value>, expected_mode: &str) -> bool {
@@ -1882,7 +1822,6 @@ mod tests {
                         default_idx: None,
                     },
                 }],
-                tool_suggestion: None,
             }
         );
     }
@@ -1957,7 +1896,6 @@ mod tests {
                         default_idx: Some(0),
                     },
                 }],
-                tool_suggestion: None,
             }
         );
     }
@@ -2009,73 +1947,7 @@ mod tests {
                         default_idx: Some(0),
                     },
                 }],
-                tool_suggestion: None,
             }
-        );
-    }
-
-    #[test]
-    fn tool_suggestion_meta_is_parsed_into_request_payload() {
-        let request = from_form_request(
-            ThreadId::default(),
-            form_request(
-                "Suggest Google Calendar",
-                empty_object_schema(),
-                Some(serde_json::json!({
-                    "codex_approval_kind": "tool_suggestion",
-                    "tool_type": "connector",
-                    "suggest_type": "install",
-                    "suggest_reason": "Plan and reference events from your calendar",
-                    "tool_id": "connector_2128aebfecb84f64a069897515042a44",
-                    "tool_name": "Google Calendar",
-                    "install_url": "https://example.test/google-calendar",
-                })),
-            ),
-        )
-        .expect("expected tool suggestion form");
-
-        assert_eq!(
-            request.tool_suggestion(),
-            Some(&ToolSuggestionRequest {
-                tool_type: ToolSuggestionToolType::Connector,
-                suggest_type: ToolSuggestionType::Install,
-                suggest_reason: "Plan and reference events from your calendar".to_string(),
-                tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
-                tool_name: "Google Calendar".to_string(),
-                install_url: Some("https://example.test/google-calendar".to_string()),
-            })
-        );
-    }
-
-    #[test]
-    fn plugin_tool_suggestion_meta_without_install_url_is_parsed_into_request_payload() {
-        let request = from_form_request(
-            ThreadId::default(),
-            form_request(
-                "Suggest Slack",
-                empty_object_schema(),
-                Some(serde_json::json!({
-                    "codex_approval_kind": "tool_suggestion",
-                    "tool_type": "plugin",
-                    "suggest_type": "install",
-                    "suggest_reason": "Install the Slack plugin to search messages",
-                    "tool_id": "slack@openai-curated",
-                    "tool_name": "Slack",
-                })),
-            ),
-        )
-        .expect("expected tool suggestion form");
-
-        assert_eq!(
-            request.tool_suggestion(),
-            Some(&ToolSuggestionRequest {
-                tool_type: ToolSuggestionToolType::Plugin,
-                suggest_type: ToolSuggestionType::Install,
-                suggest_reason: "Install the Slack plugin to search messages".to_string(),
-                tool_id: "slack@openai-curated".to_string(),
-                tool_name: "Slack".to_string(),
-                install_url: None,
-            })
         );
     }
 

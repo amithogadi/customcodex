@@ -21,7 +21,6 @@ codex-exec-server = { workspace = true }
 codex-http-client = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-network-proxy = { workspace = true }
-codex-otel = { workspace = true }
 codex-protocol = { workspace = true }
 codex-secrets = { workspace = true }
 codex-utils-path-uri = { workspace = true }
@@ -70,7 +69,6 @@ webbrowser = { workspace = true }
 which = { workspace = true }
 
 [dev-dependencies]
-opentelemetry_sdk = { workspace = true, features = ["testing"] }
 codex-http-client = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 pretty_assertions = { workspace = true }
@@ -101,7 +99,6 @@ keyring = { workspace = true, features = ["sync-secret-service"] }
 ignored-paths = [
     "src/oauth/tests/persistor_tests.rs",
     "src/oauth/tests/credential_store_tests.rs",
-    "src/oauth/tests/telemetry_tests.rs",
 ]
 
 [lib]

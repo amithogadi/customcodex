@@ -2,7 +2,6 @@
 
 #![deny(private_bounds, private_interfaces, unreachable_pub)]
 
-pub use codex_analytics::AnalyticsEventsClient;
 pub use codex_app_server_protocol::ServerNotification;
 pub use codex_app_server_protocol::item_event_to_server_notification;
 pub use codex_arg0::Arg0DispatchPaths;
@@ -12,8 +11,6 @@ pub use codex_config::ConfigLoadOptions;
 pub use codex_config::ConfigRequirements;
 pub use codex_config::ConfigRequirementsToml;
 pub use codex_config::config_toml::ProjectConfig;
-pub use codex_config::config_toml::RealtimeAudioConfig;
-pub use codex_config::config_toml::RealtimeConfig;
 pub use codex_config::types::AuthCredentialsStoreMode;
 pub use codex_config::types::AuthKeyringBackendKind;
 pub use codex_config::types::History;
@@ -21,7 +18,6 @@ pub use codex_config::types::MemoriesConfig;
 pub use codex_config::types::ModelAvailabilityNuxConfig;
 pub use codex_config::types::Notice;
 pub use codex_config::types::OAuthCredentialsStoreMode;
-pub use codex_config::types::OtelConfig;
 pub use codex_config::types::SessionPickerViewMode;
 pub use codex_config::types::ToolSuggestConfig;
 pub use codex_config::types::TuiKeymap;

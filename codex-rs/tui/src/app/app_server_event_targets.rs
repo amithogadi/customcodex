@@ -27,8 +27,7 @@ pub(super) fn server_request_thread_id(request: &ServerRequest) -> Option<Thread
         ServerRequest::CurrentTimeRead { params, .. } => {
             ThreadId::from_string(&params.thread_id).ok()
         }
-        ServerRequest::ChatgptAuthTokensRefresh { .. }
-        | ServerRequest::AttestationGenerate { .. }
+        ServerRequest::AttestationGenerate { .. }
         | ServerRequest::ApplyPatchApproval { .. }
         | ServerRequest::ExecCommandApproval { .. } => None,
     }
@@ -204,10 +203,8 @@ pub(super) fn server_notification_thread_target(
         | ServerNotification::AccountUpdated(_)
         | ServerNotification::GatewayOAuthChanged(_)
         | ServerNotification::AccountRateLimitsUpdated(_)
-        | ServerNotification::AppListUpdated(_)
         | ServerNotification::EnvironmentConnected(_)
         | ServerNotification::EnvironmentDisconnected(_)
-        | ServerNotification::RemoteControlStatusChanged(_)
         | ServerNotification::ExternalAgentConfigImportProgress(_)
         | ServerNotification::ExternalAgentConfigImportCompleted(_)
         | ServerNotification::DeprecationNotice(_)
@@ -217,7 +214,6 @@ pub(super) fn server_notification_thread_target(
         | ServerNotification::CommandExecOutputDelta(_)
         | ServerNotification::ProcessOutputDelta(_)
         | ServerNotification::ProcessExited(_)
-        | ServerNotification::McpServerEventStream(_)
         | ServerNotification::FsChanged(_)
         | ServerNotification::WindowsWorldWritableWarning(_)
         | ServerNotification::WindowsSandboxSetupCompleted(_)

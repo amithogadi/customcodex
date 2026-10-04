@@ -7,11 +7,8 @@ import type { WebSearchMode } from "../WebSearchMode";
 import type { JsonValue } from "../serde_json/JsonValue";
 import type { AskForApproval } from "./AskForApproval";
 import type { AutoReviewRequirements } from "./AutoReviewRequirements";
-import type { BrowserUseRequirements } from "./BrowserUseRequirements";
 import type { CliAuthCredentialsStoreMode } from "./CliAuthCredentialsStoreMode";
 import type { ComputerUseRequirements } from "./ComputerUseRequirements";
-import type { FeedbackRequirements } from "./FeedbackRequirements";
-import type { InAppBrowserRequirements } from "./InAppBrowserRequirements";
 import type { ModelsRequirements } from "./ModelsRequirements";
 import type { ResidencyRequirement } from "./ResidencyRequirement";
 import type { SandboxMode } from "./SandboxMode";
@@ -27,4 +24,4 @@ modelProviders: { [key in string]?: JsonValue } | null, /**
  * Effective login methods after managed, forced-login, and workspace restrictions.
  * An empty list permits no login method. Older servers may omit this field.
  */
-allowedLoginMethods: Array<ForcedLoginMethod> | null, cliAuthCredentialsStore: CliAuthCredentialsStoreMode | null, chatgptBaseUrl: string | null, additionalDeveloperInstructions: string | null, allowedApprovalPolicies: Array<AskForApproval> | null, allowedSandboxModes: Array<SandboxMode> | null, allowedWindowsSandboxImplementations: Array<WindowsSandboxImplementation> | null, allowedPermissionProfiles: { [key in string]?: boolean } | null, defaultPermissions: string | null, allowedWebSearchModes: Array<WebSearchMode> | null, allowManagedHooksOnly: boolean | null, allowBrowserAndComputerUse: boolean | null, allowAppshots: boolean | null, allowRemoteControl: boolean | null, computerUse: ComputerUseRequirements | null, browserUse: BrowserUseRequirements | null, inAppBrowser: InAppBrowserRequirements | null, featureRequirements: { [key in string]?: boolean } | null, enforceResidency: ResidencyRequirement | null, autoReview: AutoReviewRequirements | null, models: ModelsRequirements | null, sqliteHome: PathUri | null, logDir: PathUri | null, modelCatalogJson: PathUri | null, checkForUpdateOnStartup: boolean | null, allowLoginShell: boolean | null, feedback: FeedbackRequirements | null};
+allowedLoginMethods: Array<ForcedLoginMethod> | null, cliAuthCredentialsStore: CliAuthCredentialsStoreMode | null, chatgptBaseUrl: string | null, additionalDeveloperInstructions: string | null, allowedApprovalPolicies: Array<AskForApproval> | null, allowedSandboxModes: Array<SandboxMode> | null, allowedWindowsSandboxImplementations: Array<WindowsSandboxImplementation> | null, allowedPermissionProfiles: { [key in string]?: boolean } | null, defaultPermissions: string | null, allowedWebSearchModes: Array<WebSearchMode> | null, allowManagedHooksOnly: boolean | null, allowBrowserAndComputerUse: boolean | null, allowAppshots: boolean | null, computerUse: ComputerUseRequirements | null, featureRequirements: { [key in string]?: boolean } | null, enforceResidency: ResidencyRequirement | null, autoReview: AutoReviewRequirements | null, models: ModelsRequirements | null, sqliteHome: PathUri | null, logDir: PathUri | null, modelCatalogJson: PathUri | null, allowLoginShell: boolean | null};

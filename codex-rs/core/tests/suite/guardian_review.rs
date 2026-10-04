@@ -6,7 +6,6 @@ use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
 use codex_config::types::McpServerConfig;
-use codex_config::types::OtelExporterKind;
 use codex_core::SleepFuture;
 use codex_core::TimeFuture;
 use codex_core::TimeProvider;
@@ -1971,14 +1970,11 @@ async fn interrupted_guardian_review_across_model_change_does_not_execute_the_co
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[tracing_test::traced_test]
-#[test_case(None, false; "legacy_fallback")]
-#[test_case(None, true; "otel_enabled")]
-#[test_case(Some("Acting model rejection instructions."), false; "catalog_override")]
-#[test_case(Some(""), false; "empty_override")]
+#[test_case(None; "legacy_fallback")]
+#[test_case(Some("Acting model rejection instructions."); "catalog_override")]
+#[test_case(Some(""); "empty_override")]
 async fn guardian_denial_rejects_tool_call_with_rationale(
     rejection_instructions: Option<&'static str>,
-    log_assessments: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
@@ -2026,12 +2022,6 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
             });
         })
         .with_config(move |config| {
-            config.otel.log_guardian_assessments = log_assessments;
-            config.otel.exporter = OtelExporterKind::OtlpGrpc {
-                endpoint: "http://127.0.0.1:1".to_string(),
-                headers: Default::default(),
-                tls: None,
-            };
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config
                 .set_legacy_sandbox_policy(sandbox_policy_for_config)
@@ -2118,14 +2108,6 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
     assert!(guardian_request.body_contains_text(&command));
     assert_eq!(guardian_request.body_json()["model"], "gpt-5.6-luna");
 
-    let feedback = codex_feedback::guardian_review_failures(&[test.session_configured.thread_id])
-        .attachment
-        .expect("failed Guardian review");
-    let record: serde_json::Value = serde_json::from_slice(&feedback.buffer)?;
-    assert!(
-        guardian_request.body_contains_text(record["action"].as_str().expect("reviewed action"))
-    );
-    let recorded_history: Vec<ResponseItem> = serde_json::from_value(record["history"].clone())?;
     let inspection_request = requests
         .iter()
         .find(|request| {
@@ -2147,38 +2129,6 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
             item["type"] == "function_call_output" && item["call_id"] == "exec-guardian-inspect"
         })
         .expect("inspection response item");
-    assert!(recorded_history.contains(&serde_json::from_value(inspection_output)?));
-    assert!(recorded_history.iter().any(|item| {
-        matches!(item, ResponseItem::Message { role, content, .. }
-        if role == "assistant" && content.iter().any(|part| {
-            matches!(part, ContentItem::OutputText { text }
-                if Some(text.as_str()) == record["decision"].as_str())
-        }))
-    }));
-    assert_eq!(
-        json!({
-            "reviewed_thread_id": record["reviewed_thread_id"],
-            "reviewer_thread_id": record["reviewer_thread_id"],
-            "status": record["status"],
-            "decision": serde_json::from_str::<serde_json::Value>(
-                record["decision"].as_str().expect("raw Guardian decision"),
-            )?,
-            "context_omitted": record["context_omitted"],
-        }),
-        json!({
-            "reviewed_thread_id": test.session_configured.thread_id,
-            "reviewer_thread_id": guardian_request.body_json()["client_metadata"]["thread_id"],
-            "status": "denied",
-            "decision": {
-                "risk_level": "high",
-                "user_authorization": "low",
-                "outcome": "deny",
-                "rationale": "The requested write has unacceptable test risk.",
-            },
-            "context_omitted": false,
-        })
-    );
-
     let tool_output = requests
         .iter()
         .find_map(|request| request.function_call_output_text("exec-call-denied"))
@@ -2202,31 +2152,6 @@ async fn guardian_denial_rejects_tool_call_with_rationale(
     );
 
     // Approval workers do not inherit the test span, so select the conversation explicitly.
-    let thread_id = test.session_configured.thread_id;
-    let logs = String::from_utf8(
-        tracing_test::internal::global_buf()
-            .lock()
-            .expect("captured logs")
-            .clone(),
-    )?;
-    let assessments: Vec<_> = logs
-        .lines()
-        .filter(|line| {
-            line.contains("codex.guardian_assessment")
-                && line.contains(&format!("conversation.id={thread_id}"))
-        })
-        .collect();
-    assert_eq!(assessments.len(), usize::from(log_assessments));
-    if let Some(log) = assessments.first() {
-        for field in [
-            "status=\"denied\"",
-            "outcome=\"deny\"",
-            "item.id=\"exec-call-denied\"",
-            "rationale=\"The requested write has unacceptable test risk.\"",
-        ] {
-            assert!(log.contains(field), "missing {field}: {log}");
-        }
-    }
     Ok(())
 }
 

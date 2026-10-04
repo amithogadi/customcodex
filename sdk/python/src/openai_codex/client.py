@@ -24,8 +24,6 @@ from .generated.v2_all import (
     AccountLoginCompletedNotification,
     AgentMessageDeltaNotification,
     CancelLoginAccountResponse,
-    ChatgptDeviceCodeLoginAccountResponse,
-    ChatgptLoginAccountResponse,
     GetAccountParams as V2GetAccountParams,
     GetAccountResponse,
     IdleThreadStatus,
@@ -447,12 +445,6 @@ class CodexClient:
             _params_dict(params),
             response_model=LoginAccountResponse,
         )
-        response_root = response.root
-        if isinstance(
-            response_root,
-            ChatgptLoginAccountResponse | ChatgptDeviceCodeLoginAccountResponse,
-        ):
-            self.register_login_notifications(response_root.login_id)
         return response
 
     def account_login_cancel(self, login_id: str) -> CancelLoginAccountResponse:

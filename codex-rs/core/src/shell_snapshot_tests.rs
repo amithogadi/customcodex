@@ -209,18 +209,6 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
         "printf started > startup-ran\n",
     )?;
     let session_id = ThreadId::new();
-    let session_telemetry = SessionTelemetry::new(
-        session_id,
-        "test",
-        "test",
-        /*account_id*/ None,
-        /*account_email*/ None,
-        /*auth_mode*/ None,
-        "test".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        codex_protocol::protocol::SessionSource::Cli,
-    );
     let shell = Shell {
         shell_type: ShellType::Bash,
         shell_path: PathBuf::from("/bin/bash"),
@@ -263,7 +251,6 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
         let config = Arc::new(ShellSnapshotConfig {
             codex_home: dir.path().abs(),
             session_id,
-            session_telemetry: session_telemetry.clone(),
             state_db: None,
             credential_broker: Some(receiver),
             prefer_executor_snapshots,
@@ -294,7 +281,6 @@ async fn inactive_profiles_keep_snapshots_but_active_brokers_require_sandbox() -
     let snapshot_builder = ShellSnapshot::new(
         dir.path().abs(),
         session_id,
-        session_telemetry,
         /*state_db*/ None,
         Some(sender),
         /*prefer_executor_snapshots*/ false,

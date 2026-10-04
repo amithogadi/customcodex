@@ -603,24 +603,6 @@ pub enum Op {
     /// Use this when callers intentionally want to stop long-lived background shells.
     CleanBackgroundTerminals,
 
-    /// Start a realtime conversation stream.
-    RealtimeConversationStart(ConversationStartParams),
-
-    /// Send audio input to the running realtime conversation stream.
-    RealtimeConversationAudio(ConversationAudioParams),
-
-    /// Send text input to the running realtime conversation stream.
-    RealtimeConversationText(ConversationTextParams),
-
-    /// Append speakable text to the running realtime conversation stream.
-    RealtimeConversationSpeech(ConversationSpeechParams),
-
-    /// Close the running realtime conversation stream.
-    RealtimeConversationClose,
-
-    /// Request the list of voices supported by realtime conversation streams.
-    RealtimeConversationListVoices,
-
     /// Submit turn input using the requested routing behavior.
     TurnInput {
         request: Box<TurnInputRequest>,
@@ -935,12 +917,6 @@ impl Op {
             Self::Interrupt => "interrupt",
             Self::InterruptIfNoPendingInput { .. } => "interrupt_if_no_pending_input",
             Self::CleanBackgroundTerminals => "clean_background_terminals",
-            Self::RealtimeConversationStart(_) => "realtime_conversation_start",
-            Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
-            Self::RealtimeConversationText(_) => "realtime_conversation_text",
-            Self::RealtimeConversationSpeech(_) => "realtime_conversation_speech",
-            Self::RealtimeConversationClose => "realtime_conversation_close",
-            Self::RealtimeConversationListVoices => "realtime_conversation_list_voices",
             Self::TurnInput { .. } => "turn_input",
             Self::RecoverTurn { .. } => "recover_turn",
             Self::SuspendTurnAndShutdown { .. } => "suspend_turn_and_shutdown",

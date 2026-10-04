@@ -9,7 +9,6 @@ use codex_tools::ToolCall;
 use codex_tools::ToolExecutor;
 
 use crate::ExtensionData;
-use crate::ExtensionMetrics;
 
 mod approval_review;
 mod context;
@@ -285,7 +284,6 @@ pub trait TurnInputContributor: Send + Sync {
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext<'a>,
-        extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,

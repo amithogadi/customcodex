@@ -4,6 +4,10 @@ use super::*;
 use core_test_support::responses::sse_response;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
+use wiremock::Mock;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const SPAWN: &str = "spawn-environment-worker";
 const WAIT_CHILD: &str = "wait-for-environment-worker";

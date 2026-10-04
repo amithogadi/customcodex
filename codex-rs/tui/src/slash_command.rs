@@ -39,7 +39,6 @@ pub enum SlashCommand {
     Compact,
     Recap,
     Plan,
-    Voice,
     Goal,
     Agents,
     Side,
@@ -56,7 +55,6 @@ pub enum SlashCommand {
     Cd,
     #[strum(to_string = "pwd", serialize = "cwd")]
     Pwd,
-    Usage,
     DebugConfig,
     Title,
     Statusline,
@@ -64,12 +62,10 @@ pub enum SlashCommand {
     #[strum(to_string = "pets", serialize = "pet")]
     Pets,
     Mcp,
-    Apps,
     Plugins,
     Logout,
     Quit,
     Exit,
-    Feedback,
     Rollout,
     Ps,
     #[strum(to_string = "stop", serialize = "clean")]
@@ -89,7 +85,6 @@ impl SlashCommand {
     /// User-visible description shown in the popup.
     pub fn description(self) -> &'static str {
         match self {
-            SlashCommand::Feedback => "send logs to maintainers",
             SlashCommand::New => "start a new chat during a conversation",
             SlashCommand::Init => "create an AGENTS.md file with instructions for Codex",
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
@@ -117,7 +112,6 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Cd => "change the current working directory",
             SlashCommand::Pwd => "show the current working directory",
-            SlashCommand::Usage => "view account usage or use a usage limit reset",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -133,7 +127,6 @@ impl SlashCommand {
                 "include current selection, open files, and other context from your IDE"
             }
             SlashCommand::Plan => "switch to Plan mode",
-            SlashCommand::Voice => "start or stop voice; use /voice settings to choose a voice",
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Agents => "open the agent command center",
             SlashCommand::MultiAgents => "switch between this session's subagents",
@@ -148,7 +141,6 @@ impl SlashCommand {
             SlashCommand::AutoReview => "approve one retry of a recent auto-review denial",
             SlashCommand::Memories => "configure memory use and generation",
             SlashCommand::Mcp => "list MCP tools; use /mcp verbose or /mcp login <name>",
-            SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
@@ -173,7 +165,6 @@ impl SlashCommand {
                 | SlashCommand::Fork
                 | SlashCommand::Plan
                 | SlashCommand::Goal
-                | SlashCommand::Voice
                 | SlashCommand::Ide
                 | SlashCommand::Keymap
                 | SlashCommand::Mcp
@@ -181,7 +172,6 @@ impl SlashCommand {
                 | SlashCommand::Raw
                 | SlashCommand::Cd
                 | SlashCommand::Pwd
-                | SlashCommand::Usage
                 | SlashCommand::Pets
                 | SlashCommand::Side
                 | SlashCommand::Btw
@@ -203,7 +193,6 @@ impl SlashCommand {
                 | SlashCommand::Daemon
                 | SlashCommand::Warnings
                 | SlashCommand::Pwd
-                | SlashCommand::Usage
                 | SlashCommand::Ide
         )
     }
@@ -276,19 +265,15 @@ impl SlashCommand {
             | SlashCommand::Daemon
             | SlashCommand::Warnings
             | SlashCommand::Pwd
-            | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
             | SlashCommand::Goal
-            | SlashCommand::Voice
             | SlashCommand::Mcp
-            | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Title
             | SlashCommand::Statusline
             | SlashCommand::AutoReview
-            | SlashCommand::Feedback
             | SlashCommand::Ide
             | SlashCommand::Quit
             | SlashCommand::Exit
@@ -304,7 +289,6 @@ impl SlashCommand {
     fn is_visible(self) -> bool {
         match self {
             SlashCommand::Copy => !cfg!(target_os = "android"),
-            SlashCommand::Voice => true,
             SlashCommand::Rollout | SlashCommand::TestApproval => cfg!(debug_assertions),
             _ => true,
         }

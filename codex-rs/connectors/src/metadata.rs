@@ -12,10 +12,6 @@ pub fn connector_mention_slug_from_name(name: &str) -> String {
     crate::connector_name_slug(name)
 }
 
-pub fn connector_install_url(name: &str, connector_id: &str) -> String {
-    crate::connector_install_url(name, connector_id)
-}
-
 pub fn sanitize_name(name: &str) -> String {
     crate::connector_name_slug(name).replace("-", "_")
 }

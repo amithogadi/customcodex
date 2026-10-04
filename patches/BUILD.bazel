@@ -26,7 +26,6 @@ exports_files([
     "v8_bazel_rules.patch",
     "v8_module_deps.patch",
     "v8_source_portability.patch",
-    "webrtc-sys_hermetic_darwin_sysroot.patch",
     "windows-link.patch",
     "windows-support-remote-case-aliases.patch",
     "windows-support-native-tools.patch",

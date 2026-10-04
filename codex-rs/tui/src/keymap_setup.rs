@@ -1166,22 +1166,6 @@ mod tests {
     }
 
     #[test]
-    fn picker_voice_toggle_snapshot() {
-        assert_snapshot!(
-            "keymap_voice_toggle",
-            render_picker(
-                build_keymap_action_menu_params(
-                    "chat".into(),
-                    "toggle_voice".into(),
-                    &RuntimeKeymap::defaults(),
-                    &TuiKeymap::default(),
-                ),
-                /*width*/ 80,
-            )
-        );
-    }
-
-    #[test]
     fn picker_question_actions_snapshot() {
         let runtime = RuntimeKeymap::defaults();
         let params = build_keymap_picker_params_for_selected_action(
@@ -1490,7 +1474,7 @@ mod tests {
     }
 
     #[test]
-    fn debug_view_reports_detected_key_and_matching_actions() {
+    fn debug_view_reports_detected_unassigned_key() {
         let mut view = build_keymap_debug_view(&RuntimeKeymap::defaults(), &TuiKeymap::default());
         view.show_delayed_hint_for_test();
 

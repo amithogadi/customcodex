@@ -35,7 +35,10 @@ use read_api_key::read_auth_header_from_stdin;
 
 /// CLI arguments for the proxy.
 #[derive(Debug, Clone, Parser)]
-#[command(name = "responses-api-proxy", about = "Minimal OpenAI responses proxy")]
+#[command(
+    name = "responses-api-proxy",
+    about = "Responses proxy for an explicit upstream endpoint"
+)]
 pub struct Args {
     /// Port to listen on. If not set, an ephemeral port is used.
     #[arg(long)]
@@ -49,8 +52,8 @@ pub struct Args {
     #[arg(long)]
     pub http_shutdown: bool,
 
-    /// Absolute URL the proxy should forward requests to (defaults to OpenAI).
-    #[arg(long, default_value = "https://api.openai.com/v1/responses")]
+    /// Absolute URL the proxy should forward requests to.
+    #[arg(long)]
     pub upstream_url: String,
 
     /// Directory where request/response dumps should be written as JSON.
@@ -272,4 +275,26 @@ fn forward_request(
 
     let _ = req.respond(response);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+    use clap::Parser;
+
+    #[test]
+    fn proxy_requires_an_explicit_upstream_endpoint() {
+        let error = Args::try_parse_from(["responses-api-proxy"]).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        let args = Args::try_parse_from([
+            "responses-api-proxy",
+            "--upstream-url",
+            "http://127.0.0.1:8080/v1/responses",
+        ])
+        .unwrap();
+        assert_eq!(args.upstream_url, "http://127.0.0.1:8080/v1/responses");
+    }
 }

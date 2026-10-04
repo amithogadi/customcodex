@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 use crate::AppInfo;
-use crate::metadata::connector_install_url;
+
 use crate::metadata::sort_connectors_by_accessibility_and_name;
 
 pub fn merge_connectors(
@@ -53,9 +53,6 @@ pub fn merge_connectors(
 
     let mut merged = merged.into_values().collect::<Vec<_>>();
     for connector in &mut merged {
-        if connector.install_url.is_none() {
-            connector.install_url = Some(connector_install_url(&connector.name, &connector.id));
-        }
         connector.plugin_display_names.sort_unstable();
         connector.plugin_display_names.dedup();
     }
@@ -119,7 +116,7 @@ pub fn plugin_connector_to_app_info(connector_id: String) -> AppInfo {
         branding: None,
         app_metadata: None,
         labels: None,
-        install_url: Some(connector_install_url(&name, &connector_id)),
+        install_url: None,
         is_accessible: false,
         is_enabled: true,
         plugin_display_names: Vec::new(),
@@ -129,7 +126,7 @@ pub fn plugin_connector_to_app_info(connector_id: String) -> AppInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metadata::connector_install_url;
+
     use crate::metadata::connector_mention_slug;
     use pretty_assertions::assert_eq;
 
@@ -178,7 +175,7 @@ mod tests {
                 branding: None,
                 app_metadata: None,
                 labels: None,
-                install_url: Some(connector_install_url("calendar", "calendar")),
+                install_url: None,
                 is_accessible: true,
                 is_enabled: true,
                 plugin_display_names: Vec::new(),
@@ -210,7 +207,7 @@ mod tests {
                 branding: None,
                 app_metadata: None,
                 labels: None,
-                install_url: Some(connector_install_url("calendar", "calendar")),
+                install_url: None,
                 is_accessible: true,
                 is_enabled: true,
                 plugin_display_names: plugin_names(&["alpha", "beta", "sample"]),

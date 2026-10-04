@@ -21,9 +21,7 @@ impl ChatWidget {
             enhanced_keys_supported,
             has_chatgpt_account,
             requires_openai_auth,
-            has_codex_backend_auth,
             model_catalog,
-            feedback,
             is_first_run,
             status_account_display,
             initial_plan_type,
@@ -31,7 +29,6 @@ impl ChatWidget {
             startup_tooltip_override,
             status_line_invalid_items_warned,
             terminal_title_invalid_items_warned,
-            session_telemetry,
         } = common;
         // Keep asynchronous widget callbacks scoped separately from the app and other widgets.
         let app_event_tx = AppEventSender::new(app_event_tx.app_event_tx);
@@ -84,16 +81,11 @@ impl ChatWidget {
             .as_ref()
             .map(|keymap| keymap.chat.clone())
             .unwrap_or_else(|| default_keymap.chat.clone());
-        let pet_http_client = codex_http_client::RouteAwareClientPool::new(
-            config.http_client_factory(),
-            codex_http_client::ClientRouteClass::Other,
-        );
         pets::start_configured_pet_load_if_needed(
             &local_settings,
             /*ambient_pet_missing*/ true,
             frame_requester.clone(),
             app_event_tx.clone(),
-            pet_http_client.clone(),
         );
         let mut widget = Self {
             empty_state_animation: std::cell::RefCell::new(empty_state_animation),
@@ -123,7 +115,6 @@ impl ChatWidget {
             active_collaboration_mask,
             has_chatgpt_account,
             requires_openai_auth,
-            has_codex_backend_auth,
             model_catalog,
             model_popup_request_id: None,
             permission_popup_request_id: None,
@@ -131,7 +122,6 @@ impl ChatWidget {
             worktree_popup_request_id: None,
             permission_profiles_menu_opened: false,
             model_popup_model_ids: Vec::new(),
-            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             status_account_display,
@@ -149,14 +139,6 @@ impl ChatWidget {
             rate_limit_snapshots_by_limit_id: BTreeMap::new(),
             refreshing_status_outputs: Vec::new(),
             next_status_refresh_request_id: 0,
-            pending_rate_limit_reset_request_id: None,
-            pending_rate_limit_reset_idempotency_key: None,
-            rate_limit_reset_picker_request_id: None,
-            pending_rate_limit_reset_hint_request_id: None,
-            pending_usage_menu_rate_limit_request_id: None,
-            pending_rate_limit_reset_hint: None,
-            available_rate_limit_reset_credits: None,
-            next_rate_limit_reset_request_id: 0,
             plan_type: initial_plan_type,
             codex_rate_limit_reached_type: None,
             codex_spend_control_reached: None,
@@ -164,16 +146,11 @@ impl ChatWidget {
             clock_format: crate::clock_format::ClockFormat::system(),
             usage_notice_state: usage_notice::UsageNoticeState::default(),
             backend_banner_state: backend_banners::BackendBannerState::default(),
-            security_setup_request_id: uuid::Uuid::new_v4(),
-            security_setup_presented: false,
-            security_setup_identity: None,
-            security_setup_dismissed: false,
             automatic_model_switch_state: backend_banners::AutomaticModelSwitchState::default(),
             backend_banner_notice_model: None,
             luna_reserve_notice_account_id: None,
             warning_display_state: WarningDisplayState::default(),
             rate_limit_switch_prompt: RateLimitSwitchPromptState::default(),
-            add_credits_nudge_email_in_flight: None,
             adaptive_chunking: AdaptiveChunkingPolicy::default(),
             stream_controller: None,
             plan_stream_controller: None,
@@ -188,7 +165,6 @@ impl ChatWidget {
             unified_exec_wait_streak: None,
             turn_lifecycle: TurnLifecycleState::new(prevent_idle_sleep),
             realtime_conversation: RealtimeConversationUiState::default(),
-            realtime_conversation_available_for_thread: false,
             safety_buffering: SafetyBufferingState::default(),
             task_complete_pending: false,
             unified_exec_processes: Vec::new(),
@@ -198,15 +174,9 @@ impl ChatWidget {
             mcp_startup_allow_terminal_only_next_round: false,
             mcp_startup_pending_next_round: HashMap::new(),
             mcp_startup_pending_next_round_saw_starting: false,
-            connectors: ConnectorsState::default(),
             ide_context: IdeContextState::default(),
             plugins_cache: PluginsCacheState::default(),
             plugins_fetch_state: PluginListFetchState::default(),
-            plugin_remote_sections_loading: false,
-            plugin_remote_sections_loaded: false,
-            plugin_remote_section_errors: Vec::new(),
-            plugin_install_apps_needing_auth: Vec::new(),
-            plugin_install_auth_flow: None,
             plugins_active_tab_id: None,
             newly_installed_marketplace_tab_id: None,
             interrupts: InterruptManager::new(),
@@ -216,7 +186,6 @@ impl ChatWidget {
             status_state: StatusState::default(),
             review: ReviewState::default(),
             active_hook_cell: None,
-            pet_http_client,
             ambient_pet: None,
             pet_picker_preview_state: crate::pets::PetPickerPreviewState::default(),
             pet_picker_preview_pet: None,
@@ -251,7 +220,6 @@ impl ChatWidget {
             quit_shortcut_key: None,
             turn_runtime_metrics: RuntimeMetricsSummary::default(),
             last_rendered_width: std::cell::Cell::new(None),
-            feedback,
             current_rollout_path: None,
             current_cwd,
             workspace_command_runner,
@@ -273,12 +241,7 @@ impl ChatWidget {
             status_line_git_summary_cwd: None,
             status_line_git_summary_pending: false,
             status_line_git_summary_lookup_complete: false,
-            status_line_workspace_headline: None,
-            status_line_workspace_headline_pending_request_id: None,
-            next_status_line_workspace_headline_request_id: 0,
-            status_line_workspace_headline_last_requested_at: None,
-            status_line_workspace_messages_disabled: false,
-            thread_usage: thread_usage::ThreadUsageState::default(),
+            replaying_turn_completion: false,
             current_goal_status_indicator: None,
             current_goal_status: None,
             external_editor_state: ExternalEditorState::Closed,
@@ -289,7 +252,6 @@ impl ChatWidget {
             test_codex_home: None,
         };
 
-        widget.prefetch_rate_limits();
         if let Some(keymap) = runtime_keymap {
             widget.bottom_pane.set_keymap_bindings(&keymap);
         }
@@ -308,18 +270,9 @@ impl ChatWidget {
         widget.sync_worktrees_enabled();
         widget.sync_plugins_command_enabled();
         widget.sync_goal_command_enabled();
-        widget
-            .bottom_pane
-            .set_voice_command_enabled(/*enabled*/ false);
         widget.sync_mentions_v2_enabled();
         widget.update_collaboration_mode_indicator();
 
-        widget
-            .bottom_pane
-            .set_connectors_enabled(widget.connectors_enabled());
-        widget
-            .bottom_pane
-            .set_token_activity_command_enabled(widget.has_codex_backend_auth);
         widget.refresh_status_surfaces();
 
         widget

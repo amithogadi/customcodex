@@ -22,11 +22,6 @@ use codex_config::config_toml::AutoReviewToml;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::ExperimentalRequestUserInput;
 use codex_config::config_toml::ProjectConfig;
-use codex_config::config_toml::RealtimeConfig;
-use codex_config::config_toml::RealtimeToml;
-use codex_config::config_toml::RealtimeTransport;
-use codex_config::config_toml::RealtimeWsMode;
-use codex_config::config_toml::RealtimeWsVersion;
 use codex_config::config_toml::ToolsToml;
 use codex_config::loader::project_trust_key;
 use codex_config::permissions_toml::FilesystemPermissionToml;
@@ -43,7 +38,6 @@ use codex_config::permissions_toml::WorkspaceRootsToml;
 use codex_config::types::AppToolApproval;
 use codex_config::types::ApprovalsReviewer;
 use codex_config::types::BundledSkillsConfig;
-use codex_config::types::FeedbackConfigToml;
 use codex_config::types::HistoryPersistence;
 use codex_config::types::McpServerEnvVar;
 use codex_config::types::McpServerOAuthConfig;
@@ -56,8 +50,6 @@ use codex_config::types::Notice;
 use codex_config::types::NotificationCondition;
 use codex_config::types::NotificationMethod;
 use codex_config::types::Notifications;
-use codex_config::types::OtelConfigToml;
-use codex_config::types::OtelExporterKind;
 use codex_config::types::ResumeCwdMode;
 use codex_config::types::SandboxWorkspaceWrite;
 use codex_config::types::SessionPickerViewMode;
@@ -100,7 +92,6 @@ use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::MultiAgentVersion;
 use codex_protocol::protocol::NetworkAccess;
-use codex_protocol::protocol::RealtimeVoice;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_path_uri::LegacyAppPathString;
 use serde::Deserialize;
@@ -2024,16 +2015,6 @@ respect_system_proxy = true
             .http_client_factory()
             .outbound_proxy_policy(),
         codex_http_client::OutboundProxyPolicy::RespectSystemProxy
-    );
-    assert_eq!(
-        config.plugins_config_input().remote_plugin_service_config(),
-        codex_core_plugins::remote::RemotePluginServiceConfig::new(
-            config.chatgpt_base_url,
-            codex_http_client::HttpClientFactory::new(
-                codex_http_client::OutboundProxyPolicy::RespectSystemProxy,
-            ),
-            /*product_sku*/ None,
-        )
     );
     Ok(())
 }
@@ -6394,26 +6375,6 @@ fn local_dev_builds_force_file_mcp_oauth_store_modes() {
     );
 }
 
-#[tokio::test]
-async fn feedback_enabled_defaults_to_true() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let cfg = ConfigToml {
-        feedback: Some(FeedbackConfigToml::default()),
-        ..Default::default()
-    };
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(config.feedback_enabled, true);
-
-    Ok(())
-}
-
 #[test]
 fn web_search_mode_defaults_to_none_if_unset() {
     let cfg = ConfigToml::default();
@@ -7065,35 +7026,6 @@ approval_mode = "approve"
     );
 }
 
-
-#[tokio::test]
-async fn to_mcp_config_preserves_apps_feature_from_config() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let mut config = Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-    let plugins_manager =
-        plugins_manager_for_config(&config, auth_manager_from_optional_auth(/*auth*/ None));
-
-    config.apps_mcp_product_sku = Some("tpp".to_string());
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-    assert!(mcp_config.apps_enabled);
-    assert_eq!(mcp_config.apps_mcp_product_sku.as_deref(), Some("tpp"));
-
-    let _ = config.features.disable(Feature::Apps);
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-    assert!(!mcp_config.apps_enabled);
-
-    let _ = config.features.enable(Feature::Apps);
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
-    assert!(mcp_config.apps_enabled);
-
-    Ok(())
-}
-
 #[tokio::test]
 async fn to_mcp_config_flows_mcp_tool_prefix_from_feature() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -7132,7 +7064,7 @@ async fn to_mcp_config_flows_mcp_tool_prefix_from_feature() -> std::io::Result<(
 }
 
 #[tokio::test]
-async fn to_mcp_config_flows_independent_mcp_2026_features() -> std::io::Result<()> {
+async fn to_mcp_config_flows_mcp_2026_feature() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let mut config = Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
@@ -7143,45 +7075,20 @@ async fn to_mcp_config_flows_independent_mcp_2026_features() -> std::io::Result<
     let plugins_manager =
         plugins_manager_for_config(&config, auth_manager_from_optional_auth(/*auth*/ None));
 
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert_eq!(
-        (
-            mcp_config.protocol_mode,
-            mcp_config.host_owned_apps_protocol_mode,
-        ),
-        (
-            codex_mcp::McpProtocolMode::Legacy,
-            codex_mcp::McpProtocolMode::Legacy,
-        )
+        config.to_mcp_config(&plugins_manager).await.protocol_mode,
+        codex_mcp::McpProtocolMode::Legacy,
     );
-
     let _ = config.features.enable(Feature::Mcp20260728);
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert_eq!(
-        (
-            mcp_config.protocol_mode,
-            mcp_config.host_owned_apps_protocol_mode,
-        ),
-        (
-            codex_mcp::McpProtocolMode::V20260728,
-            codex_mcp::McpProtocolMode::Legacy,
-        )
+        config.to_mcp_config(&plugins_manager).await.protocol_mode,
+        codex_mcp::McpProtocolMode::V20260728,
     );
-
     let _ = config.features.disable(Feature::Mcp20260728);
-    let _ = config.features.enable(Feature::CodexAppsMcp20260728);
-    let mcp_config = config.to_mcp_config(&plugins_manager).await;
     assert_eq!(
-        (
-            mcp_config.protocol_mode,
-            mcp_config.host_owned_apps_protocol_mode,
-        ),
-        (
-            codex_mcp::McpProtocolMode::Legacy,
-            codex_mcp::McpProtocolMode::V20260728,
-        )
+        config.to_mcp_config(&plugins_manager).await.protocol_mode,
+        codex_mcp::McpProtocolMode::Legacy,
     );
-
     Ok(())
 }
 
@@ -9780,9 +9687,6 @@ fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
 model = "o3"
 approval_policy = "on-request"
 
-[analytics]
-enabled = true
-
 [model_providers.openai-custom]
 name = "OpenAI custom"
 base_url = "https://api.openai.com/v1"
@@ -9808,9 +9712,6 @@ model_provider = "openai-custom"
 model = "o3"
 model_provider = "openai"
 approval_policy = "on-request"
-
-[profiles.zdr.analytics]
-enabled = false
 
 [profiles.gpt5]
 model = "gpt-5.4"
@@ -9861,180 +9762,6 @@ async fn legacy_profile_selection_is_rejected() -> std::io::Result<()> {
         err.to_string()
             .contains("legacy `profile = \"gpt3\"` config is no longer supported"),
         "unexpected error: {err}"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn metrics_exporter_defaults_to_statsig_when_missing() -> std::io::Result<()> {
-    let fixture = create_test_fixture()?;
-
-    let config = Config::load_from_base_config_with_overrides(
-        fixture.cfg.clone(),
-        ConfigOverrides {
-            cwd: Some(fixture.cwd_path()),
-            ..Default::default()
-        },
-        fixture.codex_home(),
-    )
-    .await?;
-
-    assert_eq!(config.otel.metrics_exporter, OtelExporterKind::Statsig);
-    assert!(!config.otel.agent_response_logging_enabled());
-    assert!(!config.otel.guardian_assessment_logging_enabled());
-    Ok(())
-}
-
-#[tokio::test]
-async fn trace_exporter_defaults_to_none_when_log_exporter_is_set() -> std::io::Result<()> {
-    let fixture = create_test_fixture()?;
-    let mut cfg = fixture.cfg.clone();
-    cfg.otel = Some(OtelConfigToml {
-        tool_result: toml::from_str("max_bytes = 8192").expect("tool-result logging config"),
-        log_agent_responses: Some(true),
-        log_guardian_assessments: Some(true),
-        exporter: Some(OtelExporterKind::OtlpHttp {
-            endpoint: "http://localhost:14318/v1/logs".to_string(),
-            headers: HashMap::new(),
-            protocol: codex_config::types::OtelHttpProtocol::Binary,
-            tls: None,
-        }),
-        metrics_exporter: Some(OtelExporterKind::None),
-        ..Default::default()
-    });
-
-    let mut config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides {
-            cwd: Some(fixture.cwd_path()),
-            ..Default::default()
-        },
-        fixture.codex_home(),
-    )
-    .await?;
-
-    assert_eq!(config.otel.tool_result.max_bytes, 8192);
-    assert!(config.otel.agent_response_logging_enabled());
-    assert!(config.otel.guardian_assessment_logging_enabled());
-    assert!(matches!(
-        config.otel.exporter,
-        OtelExporterKind::OtlpHttp { .. }
-    ));
-    assert_eq!(config.otel.trace_exporter, OtelExporterKind::None);
-    config.otel.exporter = OtelExporterKind::None;
-    assert!(!config.otel.guardian_assessment_logging_enabled());
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_config_applies_otel_trace_metadata() -> std::io::Result<()> {
-    let mut fixture = create_test_fixture()?;
-    fixture.cfg = toml::from_str(
-        r#"
-[otel.span_attributes]
-"example.trace_attr" = "enabled"
-
-[otel.tracestate.example]
-alpha = "one"
-beta = "two"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    let config = Config::load_from_base_config_with_overrides(
-        fixture.cfg.clone(),
-        ConfigOverrides {
-            cwd: Some(fixture.cwd_path()),
-            ..Default::default()
-        },
-        fixture.codex_home(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.otel.span_attributes,
-        BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
-    );
-    assert_eq!(
-        config.otel.tracestate,
-        BTreeMap::from([(
-            "example".to_string(),
-            BTreeMap::from([
-                ("alpha".to_string(), "one".to_string()),
-                ("beta".to_string(), "two".to_string()),
-            ]),
-        )])
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn load_config_drops_invalid_otel_trace_metadata_entries() -> std::io::Result<()> {
-    let mut fixture = create_test_fixture()?;
-    fixture.cfg = toml::from_str(
-        r#"
-[otel]
-environment = "test"
-
-[otel.span_attributes]
-"" = "missing-key"
-"example.trace_attr" = "enabled"
-
-[otel.tracestate.example]
-alpha = "one"
-beta = "two\ntoo"
-
-[otel.tracestate.bad]
-alpha = "one\ntwo"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    let config = Config::load_from_base_config_with_overrides(
-        fixture.cfg.clone(),
-        ConfigOverrides {
-            cwd: Some(fixture.cwd_path()),
-            ..Default::default()
-        },
-        fixture.codex_home(),
-    )
-    .await?;
-
-    assert_eq!(config.otel.environment, "test");
-    assert_eq!(
-        config.otel.span_attributes,
-        BTreeMap::from([("example.trace_attr".to_string(), "enabled".to_string())])
-    );
-    assert_eq!(
-        config.otel.tracestate,
-        BTreeMap::from([(
-            "example".to_string(),
-            BTreeMap::from([("alpha".to_string(), "one".to_string())]),
-        )])
-    );
-    assert!(
-        config.startup_warnings.iter().any(|warning| {
-            warning.contains("Ignoring invalid `otel.span_attributes` config")
-                && warning.contains("configured span attribute key must not be empty")
-        }),
-        "{:?}",
-        config.startup_warnings
-    );
-    assert!(
-        config.startup_warnings.iter().any(|warning| {
-            warning.contains("Ignoring invalid `otel.tracestate` config")
-                && warning.contains("invalid configured tracestate value for example.beta")
-        }),
-        "{:?}",
-        config.startup_warnings
-    );
-    assert!(
-        config.startup_warnings.iter().any(|warning| {
-            warning.contains("Ignoring invalid `otel.tracestate` config")
-                && warning.contains("invalid configured tracestate value for bad.alpha")
-        }),
-        "{:?}",
-        config.startup_warnings
     );
     Ok(())
 }
@@ -10217,9 +9944,7 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         sqlite_home: None,
         log_dir: None,
         model_catalog_json: None,
-        check_for_update_on_startup: None,
         allow_login_shell: None,
-        feedback: None,
         allowed_approval_policies: None,
         allowed_approvals_reviewers: None,
         allowed_sandbox_modes: None,
@@ -10230,7 +9955,6 @@ async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() 
         application: None,
         allow_managed_hooks_only: None,
         allow_appshots: None,
-        allow_remote_control: None,
         allow_browser_and_computer_use: None,
         computer_use: None,
         windows: None,
@@ -10761,27 +10485,6 @@ allow_login_shell = false
     .await?;
 
     assert!(!config.permissions.allow_login_shell);
-    Ok(())
-}
-
-#[tokio::test]
-async fn config_loads_apps_mcp_product_sku_from_toml() -> std::io::Result<()> {
-    let codex_home = TempDir::new()?;
-    let toml = r#"
-model = "gpt-5.4"
-apps_mcp_product_sku = "tpp"
-"#;
-    let cfg: ConfigToml =
-        toml::from_str(toml).expect("TOML deserialization should succeed for apps MCP SKU");
-
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(config.apps_mcp_product_sku.as_deref(), Some("tpp"));
     Ok(())
 }
 
@@ -11595,10 +11298,6 @@ auto_review = false
 
     Ok(())
 }
-
-
-
-
 
 #[tokio::test]
 async fn explicit_feature_config_is_normalized_by_requirements() -> std::io::Result<()> {
@@ -12850,261 +12549,6 @@ disabled_tools = [
     Ok(())
 }
 
-#[tokio::test]
-async fn experimental_realtime_start_instructions_load_from_config_toml() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-experimental_realtime_start_instructions = "start instructions from config"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.experimental_realtime_start_instructions.as_deref(),
-        Some("start instructions from config")
-    );
-
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.experimental_realtime_start_instructions.as_deref(),
-        Some("start instructions from config")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
-experimental_realtime_webrtc_call_base_url = "http://127.0.0.1:8082/v1"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.experimental_realtime_ws_base_url.as_deref(),
-        Some("http://127.0.0.1:8011")
-    );
-    assert_eq!(
-        cfg.experimental_realtime_webrtc_call_base_url.as_deref(),
-        Some("http://127.0.0.1:8082/v1")
-    );
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.experimental_realtime_ws_base_url.as_deref(),
-        Some("http://127.0.0.1:8011")
-    );
-    assert_eq!(
-        config.experimental_realtime_webrtc_call_base_url.as_deref(),
-        Some("http://127.0.0.1:8082/v1")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn experimental_realtime_ws_backend_prompt_loads_from_config_toml() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-experimental_realtime_ws_backend_prompt = "prompt from config"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.experimental_realtime_ws_backend_prompt.as_deref(),
-        Some("prompt from config")
-    );
-
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.experimental_realtime_ws_backend_prompt.as_deref(),
-        Some("prompt from config")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn experimental_realtime_ws_startup_context_loads_from_config_toml() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-experimental_realtime_ws_startup_context = "startup context from config"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.experimental_realtime_ws_startup_context.as_deref(),
-        Some("startup context from config")
-    );
-
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.experimental_realtime_ws_startup_context.as_deref(),
-        Some("startup context from config")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn experimental_realtime_ws_model_loads_from_config_toml() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-experimental_realtime_ws_model = "realtime-test-model"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.experimental_realtime_ws_model.as_deref(),
-        Some("realtime-test-model")
-    );
-
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.experimental_realtime_ws_model.as_deref(),
-        Some("realtime-test-model")
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn realtime_config_partial_table_uses_realtime_defaults() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[realtime]
-voice = "marin"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.realtime,
-        RealtimeConfig {
-            voice: Some(RealtimeVoice::Marin),
-            ..RealtimeConfig::default()
-        }
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn realtime_loads_from_config_toml() -> std::io::Result<()> {
-    let cfg: ConfigToml = toml::from_str(
-        r#"
-[realtime]
-version = "v2"
-type = "transcription"
-transport = "webrtc"
-voice = "cedar"
-"#,
-    )
-    .expect("TOML deserialization should succeed");
-
-    assert_eq!(
-        cfg.realtime,
-        Some(RealtimeToml {
-            version: Some(RealtimeWsVersion::V2),
-            session_type: Some(RealtimeWsMode::Transcription),
-            transport: Some(RealtimeTransport::WebRtc),
-            voice: Some(RealtimeVoice::Cedar),
-        })
-    );
-
-    let codex_home = TempDir::new()?;
-    let config = Config::load_from_base_config_with_overrides(
-        cfg,
-        ConfigOverrides::default(),
-        codex_home.abs(),
-    )
-    .await?;
-
-    assert_eq!(
-        config.realtime,
-        RealtimeConfig {
-            version: RealtimeWsVersion::V2,
-            session_type: RealtimeWsMode::Transcription,
-            transport: RealtimeTransport::WebRtc,
-            voice: Some(RealtimeVoice::Cedar),
-        }
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn realtime_audio_loads_from_config_toml() -> std::io::Result<()> {
-    for selection in ["1", "[1, 2]"] {
-        let cfg: ConfigToml = toml::from_str(&format!(
-            "[audio]\nmicrophone = \"USB Mic\"\nmicrophone_channel = {selection}\nspeaker = \"Desk Speakers\"\n"
-        )).expect("TOML deserialization should succeed");
-        let expected_audio = cfg.audio.as_ref().unwrap().clone();
-        let codex_home = TempDir::new()?;
-        let config = Config::load_from_base_config_with_overrides(
-            cfg,
-            ConfigOverrides::default(),
-            codex_home.abs(),
-        )
-        .await?;
-        assert_eq!(
-            config.realtime_audio,
-            codex_config::config_toml::RealtimeAudioConfig {
-                microphone: Some("USB Mic".into()),
-                speaker: Some("Desk Speakers".into()),
-                microphone_channel: expected_audio.microphone_channel,
-            }
-        );
-    }
-    for invalid in ["0", "[1, 0]"] {
-        assert!(
-            toml::from_str::<ConfigToml>(&format!("[audio]\nmicrophone_channel = {invalid}"))
-                .is_err()
-        );
-    }
-    Ok(())
-}
-
 #[derive(Deserialize, Debug, PartialEq)]
 struct TuiTomlTest {
     #[serde(default, flatten)]
@@ -13224,11 +12668,7 @@ async fn exact_requirements_apply_to_runtime_config() -> std::io::Result<()> {
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
         r#"
-check_for_update_on_startup = true
 allow_login_shell = true
-
-[feedback]
-enabled = true
 "#,
     )?;
 
@@ -13239,11 +12679,7 @@ enabled = true
 sqlite_home = {:?}
 log_dir = {:?}
 model_catalog_json = {:?}
-check_for_update_on_startup = false
 allow_login_shell = false
-
-[feedback]
-enabled = false
 "#,
         required_sqlite_home.display(),
         required_log_dir.display(),
@@ -13254,12 +12690,7 @@ enabled = false
     assert_eq!(config.sqlite.home(), required_sqlite_home.as_path());
     assert_eq!(config.log_dir, required_log_dir);
     assert_eq!(config.model_catalog, Some(catalog));
-    assert!(!config.check_for_update_on_startup);
     assert!(!config.permissions.allow_login_shell);
-    assert!(!config.feedback_enabled);
-    assert!(config.startup_warnings.iter().any(|warning| {
-        warning.contains("Configured value for `check_for_update_on_startup` is overridden")
-    }));
     Ok(())
 }
 

@@ -15,9 +15,6 @@ use tokio::process::ChildStdout;
 
 use anyhow::Context;
 use anyhow::ensure;
-use codex_app_server_protocol::AppsInstalledParams;
-use codex_app_server_protocol::AppsListParams;
-use codex_app_server_protocol::AppsReadParams;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
@@ -30,7 +27,6 @@ use codex_app_server_protocol::CommandExecWriteParams;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::ConfigValueWriteParams;
-use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
 use codex_app_server_protocol::ExperimentalFeatureListParams;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCreateDirectoryParams;
@@ -54,10 +50,8 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::ListMcpServerStatusParams;
-use codex_app_server_protocol::LoginAccountParams;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceRemoveParams;
-use codex_app_server_protocol::MarketplaceUpgradeParams;
 use codex_app_server_protocol::McpResourceReadParams;
 use codex_app_server_protocol::McpServerToolCallParams;
 use codex_app_server_protocol::MockExperimentalMethodParams;
@@ -68,21 +62,14 @@ use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstalledParams;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginReadParams;
-use codex_app_server_protocol::PluginSearchParams;
-use codex_app_server_protocol::PluginSkillReadParams;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::ProcessKillParams;
 use codex_app_server_protocol::ProcessSpawnParams;
 use codex_app_server_protocol::ProjectImportParams;
 use codex_app_server_protocol::ProjectListParams;
 use codex_app_server_protocol::ProjectReadParams;
-use codex_app_server_protocol::RemoteControlClientsListParams;
-use codex_app_server_protocol::RemoteControlClientsRevokeParams;
-use codex_app_server_protocol::RemoteControlPairingStartParams;
-use codex_app_server_protocol::RemoteControlPairingStatusParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
-use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsExtraRootsSetParams;
 use codex_app_server_protocol::SkillsListParams;
@@ -97,12 +84,6 @@ use codex_app_server_protocol::ThreadLoadedListParams;
 use codex_app_server_protocol::ThreadMemoryModeSetParams;
 use codex_app_server_protocol::ThreadMetadataUpdateParams;
 use codex_app_server_protocol::ThreadReadParams;
-use codex_app_server_protocol::ThreadRealtimeAppendAudioParams;
-use codex_app_server_protocol::ThreadRealtimeAppendSpeechParams;
-use codex_app_server_protocol::ThreadRealtimeAppendTextParams;
-use codex_app_server_protocol::ThreadRealtimeListVoicesParams;
-use codex_app_server_protocol::ThreadRealtimeStartParams;
-use codex_app_server_protocol::ThreadRealtimeStopParams;
 use codex_app_server_protocol::ThreadResumeParams;
 use codex_app_server_protocol::ThreadSearchOccurrencesParams;
 use codex_app_server_protocol::ThreadSearchParams;
@@ -135,11 +116,6 @@ use core_test_support::test_codex::test_env;
 use serde::de::DeserializeOwned;
 use tempfile::TempDir;
 use tokio::process::Command;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 use crate::json_logging::JsonLogCapture;
 use crate::local_websocket_exec_server::LocalWebsocketExecServer;
@@ -160,13 +136,11 @@ pub struct TestAppServer {
     // Fields drop in declaration order. Tear down the delayed child before
     // removing an owned CODEX_HOME that may still be its cwd on Windows.
     _delayed_exec_server: Option<(LocalWebsocketExecServer, WebsocketDelayInterposer)>,
-    _attribution_settings_server: Option<MockServer>,
     _owned_install_dir: Option<TempDir>,
     _owned_codex_home: Option<TempDir>,
 }
 
 pub const DEFAULT_CLIENT_NAME: &str = "codex-app-server-tests";
-pub const DISABLE_PLUGIN_STARTUP_TASKS_ARG: &str = "--disable-plugin-startup-tasks-for-tests";
 const DISABLE_MANAGED_CONFIG_ENV_VAR: &str = "CODEX_APP_SERVER_DISABLE_MANAGED_CONFIG";
 #[cfg(windows)]
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
@@ -182,9 +156,8 @@ impl TestAppServer {
             environment: TestAppServerEnvironment::Auto,
             program: None,
             env_overrides: Vec::new(),
-            args: vec![DISABLE_PLUGIN_STARTUP_TASKS_ARG.to_string()],
+            args: Vec::new(),
             exec_server_delay: None,
-            mock_chatgpt_backend: false,
         }
     }
 
@@ -249,6 +222,15 @@ impl TestAppServer {
         event_name: &str,
     ) -> anyhow::Result<serde_json::Value> {
         self.json_logs.wait_for_event(event_name).await
+    }
+
+    /// Waits for local JSON stderr messages, including repeated completion events.
+    pub async fn wait_for_json_log_messages(
+        &self,
+        message: &str,
+        count: usize,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        self.json_logs.wait_for_messages(message, count).await
     }
 
     async fn new_with_program_env_and_args(
@@ -330,7 +312,6 @@ impl TestAppServer {
             auto_env: None,
             json_logs,
             _delayed_exec_server: None,
-            _attribution_settings_server: None,
             _owned_install_dir: None,
             _owned_codex_home: None,
         })
@@ -438,34 +419,6 @@ impl TestAppServer {
         self.send_request("getConversationSummary", params).await
     }
 
-    /// Send an `account/rateLimits/read` JSON-RPC request.
-    pub async fn send_get_account_rate_limits_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("account/rateLimits/read", /*params*/ None)
-            .await
-    }
-
-    /// Send an `account/rateLimitResetCredit/consume` JSON-RPC request.
-    pub async fn send_consume_account_rate_limit_reset_credit_request(
-        &mut self,
-        params: ConsumeAccountRateLimitResetCreditParams,
-    ) -> anyhow::Result<i64> {
-        self.send_request(
-            "account/rateLimitResetCredit/consume",
-            Some(serde_json::to_value(params)?),
-        )
-        .await
-    }
-
-    /// Send an `account/sendAddCreditsNudgeEmail` JSON-RPC request.
-    pub async fn send_add_credits_nudge_email_request(
-        &mut self,
-        params: SendAddCreditsNudgeEmailParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("account/sendAddCreditsNudgeEmail", params)
-            .await
-    }
-
     /// Send an `account/read` JSON-RPC request.
     pub async fn send_get_account_request(
         &mut self,
@@ -473,22 +426,6 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("account/read", params).await
-    }
-
-    /// Send an `account/login/start` JSON-RPC request with ChatGPT auth tokens.
-    pub async fn send_chatgpt_auth_tokens_login_request(
-        &mut self,
-        access_token: String,
-        chatgpt_account_id: String,
-        chatgpt_plan_type: Option<String>,
-    ) -> anyhow::Result<i64> {
-        let params = LoginAccountParams::ChatgptAuthTokens {
-            access_token,
-            chatgpt_account_id,
-            chatgpt_plan_type,
-        };
-        self.send_login_account_request(serde_json::to_value(params)?)
-            .await
     }
 
     /// Send a `thread/start` JSON-RPC request.
@@ -769,102 +706,6 @@ impl TestAppServer {
             .await
     }
 
-    /// Send a `remoteControl/enable` JSON-RPC request.
-    pub async fn send_remote_control_enable_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("remoteControl/enable", /*params*/ None)
-            .await
-    }
-
-    /// Send a runtime-only `remoteControl/enable` JSON-RPC request.
-    pub async fn send_remote_control_ephemeral_enable_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request(
-            "remoteControl/enable",
-            Some(serde_json::json!({ "ephemeral": true })),
-        )
-        .await
-    }
-
-    /// Send a `remoteControl/disable` JSON-RPC request.
-    pub async fn send_remote_control_disable_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("remoteControl/disable", /*params*/ None)
-            .await
-    }
-
-    /// Send a runtime-only `remoteControl/disable` JSON-RPC request.
-    pub async fn send_remote_control_ephemeral_disable_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request(
-            "remoteControl/disable",
-            Some(serde_json::json!({ "ephemeral": true })),
-        )
-        .await
-    }
-
-    /// Send a `remoteControl/status/read` JSON-RPC request.
-    pub async fn send_remote_control_status_read_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("remoteControl/status/read", /*params*/ None)
-            .await
-    }
-
-    /// Send a `remoteControl/pairing/start` JSON-RPC request.
-    pub async fn send_remote_control_pairing_start_request(
-        &mut self,
-        params: RemoteControlPairingStartParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("remoteControl/pairing/start", params)
-            .await
-    }
-
-    /// Send a `remoteControl/pairing/status` JSON-RPC request.
-    pub async fn send_remote_control_pairing_status_request(
-        &mut self,
-        params: RemoteControlPairingStatusParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("remoteControl/pairing/status", params)
-            .await
-    }
-
-    /// Send a `remoteControl/client/list` JSON-RPC request.
-    pub async fn send_remote_control_clients_list_request(
-        &mut self,
-        params: RemoteControlClientsListParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("remoteControl/client/list", params).await
-    }
-
-    /// Send a `remoteControl/client/revoke` JSON-RPC request.
-    pub async fn send_remote_control_clients_revoke_request(
-        &mut self,
-        params: RemoteControlClientsRevokeParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("remoteControl/client/revoke", params)
-            .await
-    }
-
-    /// Send an `app/list` JSON-RPC request.
-    pub async fn send_apps_list_request(&mut self, params: AppsListParams) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("app/list", params).await
-    }
-
-    /// Send an `app/installed` JSON-RPC request.
-    pub async fn send_apps_installed_request(
-        &mut self,
-        params: AppsInstalledParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("app/installed", params).await
-    }
-
-    /// Send an `app/read` JSON-RPC request.
-    pub async fn send_apps_read_request(&mut self, params: AppsReadParams) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("app/read", params).await
-    }
-
     /// Send an `mcpServer/resource/read` JSON-RPC request.
     pub async fn send_mcp_resource_read_request(
         &mut self,
@@ -928,15 +769,6 @@ impl TestAppServer {
         self.send_request("marketplace/remove", params).await
     }
 
-    /// Send a `marketplace/upgrade` JSON-RPC request.
-    pub async fn send_marketplace_upgrade_request(
-        &mut self,
-        params: MarketplaceUpgradeParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("marketplace/upgrade", params).await
-    }
-
     /// Send a `plugin/install` JSON-RPC request.
     pub async fn send_plugin_install_request(
         &mut self,
@@ -964,15 +796,6 @@ impl TestAppServer {
         self.send_request("plugin/list", params).await
     }
 
-    /// Send a `plugin/search` JSON-RPC request.
-    pub async fn send_plugin_search_request(
-        &mut self,
-        params: PluginSearchParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("plugin/search", params).await
-    }
-
     /// Send a `plugin/installed` JSON-RPC request.
     pub async fn send_plugin_installed_request(
         &mut self,
@@ -989,15 +812,6 @@ impl TestAppServer {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("plugin/read", params).await
-    }
-
-    /// Send a `plugin/skill/read` JSON-RPC request.
-    pub async fn send_plugin_skill_read_request(
-        &mut self,
-        params: PluginSkillReadParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("plugin/skill/read", params).await
     }
 
     /// Send an `mcpServerStatus/list` JSON-RPC request.
@@ -1158,68 +972,11 @@ impl TestAppServer {
         self.send_request("turn/interrupt", params).await
     }
 
-    /// Send a `thread/realtime/start` JSON-RPC request (v2).
-    pub async fn send_thread_realtime_start_request(
-        &mut self,
-        params: ThreadRealtimeStartParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/start", params).await
-    }
-
-    /// Send a `thread/realtime/appendAudio` JSON-RPC request (v2).
-    pub async fn send_thread_realtime_append_audio_request(
-        &mut self,
-        params: ThreadRealtimeAppendAudioParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/appendAudio", params)
-            .await
-    }
-
-    /// Send a `thread/realtime/appendText` JSON-RPC request (v2).
-    pub async fn send_thread_realtime_append_text_request(
-        &mut self,
-        params: ThreadRealtimeAppendTextParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/appendText", params)
-            .await
-    }
-
-    /// Send a `thread/realtime/appendSpeech` JSON-RPC request (v2).
-    pub async fn send_thread_realtime_append_speech_request(
-        &mut self,
-        params: ThreadRealtimeAppendSpeechParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/appendSpeech", params)
-            .await
-    }
-
-    /// Send a `thread/realtime/stop` JSON-RPC request (v2).
-    pub async fn send_thread_realtime_stop_request(
-        &mut self,
-        params: ThreadRealtimeStopParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/stop", params).await
-    }
-
     pub async fn send_thread_timeline_list_request(
         &mut self,
         params: ThreadTimelineListParams,
     ) -> anyhow::Result<i64> {
         self.send_request("thread/timeline/list", Some(serde_json::to_value(params)?))
-            .await
-    }
-
-    pub async fn send_thread_realtime_list_voices_request(
-        &mut self,
-        params: ThreadRealtimeListVoicesParams,
-    ) -> anyhow::Result<i64> {
-        let params = Some(serde_json::to_value(params)?);
-        self.send_request("thread/realtime/listVoices", params)
             .await
     }
 
@@ -1436,22 +1193,6 @@ impl TestAppServer {
             "region": region,
         });
         self.send_request("account/login/start", Some(params)).await
-    }
-
-    /// Send an `account/login/start` JSON-RPC request for ChatGPT login.
-    pub async fn send_login_account_chatgpt_request(&mut self) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "type": "chatgpt"
-        });
-        self.send_login_account_request(params).await
-    }
-
-    /// Send an `account/login/start` JSON-RPC request for ChatGPT device code login.
-    pub async fn send_login_account_chatgpt_device_code_request(&mut self) -> anyhow::Result<i64> {
-        let params = serde_json::json!({
-            "type": "chatgptDeviceCode"
-        });
-        self.send_login_account_request(params).await
     }
 
     /// Send an `account/login/cancel` JSON-RPC request.
@@ -1857,7 +1598,6 @@ pub struct TestAppServerBuilder {
     env_overrides: Vec<(String, Option<String>)>,
     args: Vec<String>,
     exec_server_delay: Option<Duration>,
-    mock_chatgpt_backend: bool,
 }
 
 enum TestAppServerEnvironment {
@@ -1866,11 +1606,6 @@ enum TestAppServerEnvironment {
 }
 
 impl TestAppServerBuilder {
-    pub fn with_mock_chatgpt_backend(mut self) -> Self {
-        self.mock_chatgpt_backend = true;
-        self
-    }
-
     /// Uses this existing CODEX_HOME instead of a temporary one.
     pub fn with_codex_home(mut self, codex_home: &Path) -> Self {
         self.codex_home = Some(codex_home.to_path_buf());
@@ -1893,13 +1628,6 @@ impl TestAppServerBuilder {
     pub fn with_args(mut self, args: &[&str]) -> Self {
         self.args
             .extend(args.iter().map(|argument| (*argument).to_string()));
-        self
-    }
-
-    /// Enables startup tasks that the default test arguments disable.
-    pub fn with_plugin_startup_tasks(mut self) -> Self {
-        self.args
-            .retain(|argument| argument != DISABLE_PLUGIN_STARTUP_TASKS_ARG);
         self
     }
 
@@ -1965,7 +1693,6 @@ impl TestAppServerBuilder {
             mut env_overrides,
             args,
             exec_server_delay,
-            mock_chatgpt_backend,
         } = self;
         let (codex_home, owned_codex_home) = match codex_home {
             Some(codex_home) => (codex_home, None),
@@ -1976,43 +1703,6 @@ impl TestAppServerBuilder {
                     Some(owned_codex_home),
                 )
             }
-        };
-        let attribution_settings_server = if mock_chatgpt_backend
-            || codex_home.join("auth.json").is_file()
-        {
-            let config_path = codex_home.join("config.toml");
-            let config = std::fs::read_to_string(&config_path)?;
-            if config
-                .lines()
-                .any(|line| line.trim_start().starts_with("chatgpt_base_url"))
-            {
-                None
-            } else {
-                let settings_server = MockServer::start().await;
-                crate::mount_workspace_routing(&settings_server).await;
-                Mock::given(method("GET"))
-                    .and(path("/backend-api/wham/config/bundle"))
-                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-                    .mount(&settings_server)
-                    .await;
-                Mock::given(method("GET"))
-                    .and(path("/backend-api/wham/settings/user"))
-                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                        "commit_attribution_enabled": false,
-                    })))
-                    .mount(&settings_server)
-                    .await;
-                std::fs::write(
-                    &config_path,
-                    format!(
-                        "chatgpt_base_url = \"{}/backend-api\"\n{config}",
-                        settings_server.uri()
-                    ),
-                )?;
-                Some(settings_server)
-            }
-        } else {
-            None
         };
         let (auto_env, delayed_exec_server) = match environment {
             TestAppServerEnvironment::Auto => {
@@ -2143,7 +1833,6 @@ impl TestAppServerBuilder {
         app_server._owned_install_dir = owned_install_dir;
         app_server._owned_codex_home = owned_codex_home;
         app_server._delayed_exec_server = delayed_exec_server;
-        app_server._attribution_settings_server = attribution_settings_server;
         Ok(app_server)
     }
 }

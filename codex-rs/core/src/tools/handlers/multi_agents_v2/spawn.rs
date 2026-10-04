@@ -11,11 +11,9 @@ use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
 use crate::codex_thread::ThreadConfigSnapshot;
 use crate::session::multi_agents::resolve_usage_hints;
-use crate::tools::handlers::multi_agents::collab_tool_call_status;
 use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
-use crate::turn_timing::now_unix_timestamp_ms;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -53,46 +51,7 @@ impl ToolExecutor<ToolInvocation> for Handler {
         ToolInvocation: 'a,
     {
         Box::pin(async move {
-            let analytics = invocation.session.services.analytics_events_client.clone();
-            let sender_thread_id = invocation.session.thread_id;
-            let turn_id = invocation.step_context.turn.sub_id.clone();
-            let call_id = invocation.call_id.clone();
-            let started_at_ms = now_unix_timestamp_ms();
             let result = handle_spawn_agent(invocation).await;
-            let completed_at_ms = now_unix_timestamp_ms();
-            let (status, receiver_thread_ids, agents_states) = match &result {
-                Ok((_, thread_id, agent_status, _)) => (
-                    collab_tool_call_status(agent_status, Some(*thread_id)),
-                    vec![*thread_id],
-                    [(*thread_id, agent_status.clone())].into_iter().collect(),
-                ),
-                Err(_) => (
-                    CollabAgentToolCallStatus::Failed,
-                    Vec::new(),
-                    Default::default(),
-                ),
-            };
-            let agent_snapshot = result.as_ref().ok().map(|(_, _, _, snapshot)| snapshot);
-
-            analytics.track_collab_tool_call(
-                turn_id,
-                CollabAgentToolCallItem {
-                    id: call_id,
-                    tool: CollabAgentTool::SpawnAgent,
-                    status,
-                    sender_thread_id,
-                    receiver_thread_ids,
-                    receiver_agents: Vec::new(),
-                    prompt: None,
-                    model: agent_snapshot.map(|snapshot| snapshot.model.clone()),
-                    reasoning_effort: agent_snapshot
-                        .and_then(|snapshot| snapshot.reasoning_effort.clone()),
-                    agents_states,
-                },
-                started_at_ms,
-                completed_at_ms,
-            );
-
             result.map(|(output, _, _, _)| boxed_tool_output(output))
         })
     }
@@ -205,16 +164,7 @@ async fn handle_spawn_agent(
             },
         })
         .await
-        .map_err(|err| {
-            record_collab_spawn_failure(
-                &turn.session_telemetry,
-                turn.config.apps_mcp_product_sku.as_deref(),
-                &err,
-                fork_mode.as_ref(),
-                MultiAgentVersion::V2,
-            );
-            collab_spawn_error(err)
-        })?;
+        .map_err(|err| collab_spawn_error(err))?;
     let new_thread_id = spawned_agent.thread_id;
     let agent_status = spawned_agent.status;
     let nickname = agent_snapshot
@@ -232,12 +182,7 @@ async fn handle_spawn_agent(
         },
     )
     .await;
-    let role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-    turn.session_telemetry.counter(
-        "codex.multi_agent.spawn",
-        /*inc*/ 1,
-        &[("role", role_tag), ("version", "v2")],
-    );
+    let _role_tag = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     let task_name = String::from(new_agent_path);
 
     let hide_agent_metadata = turn.config.multi_agent_v2.hide_spawn_agent_metadata;

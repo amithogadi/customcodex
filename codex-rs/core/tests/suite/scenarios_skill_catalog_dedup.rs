@@ -80,7 +80,6 @@ async fn cloud_preference_preserves_executor_aliases_and_description_budget() ->
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
     let mock = responses::mount_sse_sequence(

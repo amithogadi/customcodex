@@ -62,10 +62,7 @@ impl Service {
     ) -> Result<GuardedResponse, rpc::JSONRPCErrorError> {
         // A network peer must sign on its own device. Stdio belongs to the local
         // parent process; in-process calls belong to the embedded application.
-        if matches!(
-            origin,
-            ConnectionOrigin::WebSocket | ConnectionOrigin::RemoteControl
-        ) && !matches!(operation, Operation::Status)
+        if matches!(origin, ConnectionOrigin::WebSocket) && !matches!(operation, Operation::Status)
         {
             return Err(unavailable());
         }

@@ -9,7 +9,6 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_api::AuthProvider;
 use codex_config::types::ApprovalsReviewer;
 use codex_core::CodexThreadSettingsOverrides;
 use codex_core::EnvironmentConfig;
@@ -26,14 +25,12 @@ use codex_exec_server::CopyOptions;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::EnvironmentReadyInfo;
 use codex_exec_server::ExecServerError;
-use codex_exec_server::ExecServerRuntimeOptions;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::NoiseChannelPublicKey;
 use codex_exec_server::NoiseRendezvousConnectBundle;
 use codex_exec_server::NoiseRendezvousConnectProvider;
 use codex_exec_server::REMOTE_ENVIRONMENT_ID;
-use codex_exec_server::RemoteEnvironmentConfig;
 use codex_exec_server::RemoveOptions;
 use codex_extension_api::ContextContributor;
 use codex_extension_api::ExtensionDataInit;
@@ -46,8 +43,6 @@ use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_features::Feature;
 use codex_history::RolloutItem;
-use codex_http_client::HttpClientFactory;
-use codex_http_client::OutboundProxyPolicy;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::capabilities::CapabilityRootLocation;
 use codex_protocol::capabilities::SelectedCapabilityRoot;
@@ -122,7 +117,6 @@ use core_test_support::wait_for_event_match;
 use futures::SinkExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
-use http::HeaderMap;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -145,11 +139,6 @@ use tokio::time::timeout;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 const WAIT_FOR_ENVIRONMENT_TEST_TOOL_DESCRIPTION: &str = "Test wait tool description";
 const WAIT_FOR_ENVIRONMENT_TEST_ENVIRONMENT_ID_DESCRIPTION: &str =
@@ -1576,43 +1565,6 @@ impl NoiseRendezvousConnectProvider for FailingNoiseConnectProvider {
     }
 }
 
-struct OfflineThenReadyNoiseConnectProvider {
-    websocket_url: String,
-    executor_public_key: NoiseChannelPublicKey,
-    calls: AtomicUsize,
-}
-
-impl NoiseRendezvousConnectProvider for OfflineThenReadyNoiseConnectProvider {
-    fn connect_bundle(
-        &self,
-        _: NoiseChannelPublicKey,
-    ) -> BoxFuture<'_, std::result::Result<NoiseRendezvousConnectBundle, ExecServerError>> {
-        if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
-            return Box::pin(async {
-                Err(ExecServerError::EnvironmentRegistryHttp {
-                    status: http::StatusCode::CONFLICT,
-                    code: Some("environment_offline".to_string()),
-                    message: "test environment is offline".to_string(),
-                })
-            });
-        }
-        let bundle = NoiseRendezvousConnectBundle {
-            websocket_url: self.websocket_url.clone(),
-            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-            executor_registration_id: "ready-first-registration".to_string(),
-            executor_public_key: self.executor_public_key.clone(),
-            harness_key_authorization: "ready-first-authorization".to_string(),
-        };
-        Box::pin(async move { Ok(bundle) })
-    }
-}
-
-struct NoopRegistryAuthProvider;
-
-impl AuthProvider for NoopRegistryAuthProvider {
-    fn add_auth_headers(&self, _: &mut HeaderMap) {}
-}
-
 async fn wait_for_response_request_count(response_mock: &ResponseMock, expected_count: usize) {
     timeout(Duration::from_secs(5), async {
         while response_mock.requests().len() < expected_count {
@@ -2413,276 +2365,6 @@ async fn active_environment_update_wakes_the_old_wait_with_the_new_selection() -
         )));
         assert_eq!(context.contains("<status>starting</status>"), is_starting);
     }
-    Ok(())
-}
-
-#[test_case(true; "uses refreshed executor root")]
-#[test_case(false; "preserves persisted root when executor reports none")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn ready_before_selection_resolves_resumed_thread_capability_root_after_wait(
-    executor_reports_refreshed_root: bool,
-) -> Result<()> {
-    const WAIT_CALL_ID: &str = "wait-ready-before-selection";
-
-    let rendezvous = TcpListener::bind("127.0.0.1:0").await?;
-    let rendezvous_url = format!("ws://{}", rendezvous.local_addr()?);
-    let registry = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path(format!(
-            "/cloud/environment/{REMOTE_ENVIRONMENT_ID}/register"
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "environment_id": REMOTE_ENVIRONMENT_ID,
-            "url": format!("{rendezvous_url}/relay?role=environment"),
-            "security_profile": "noise_hybrid_ik_v1",
-            "executor_registration_id": "ready-first-registration",
-        })))
-        .expect(1)
-        .mount(&registry)
-        .await;
-    Mock::given(method("POST"))
-        .and(path(format!(
-            "/cloud/environment/{REMOTE_ENVIRONMENT_ID}/validate"
-        )))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "valid": true })))
-        .expect(1)
-        .mount(&registry)
-        .await;
-
-    let runtime_paths = ExecServerRuntimeOptions::new(
-        std::env::current_exe()?,
-        /*codex_linux_sandbox_exe*/ None,
-    )?;
-    let remote_config = RemoteEnvironmentConfig::new(
-        registry.uri(),
-        REMOTE_ENVIRONMENT_ID.to_string(),
-        Arc::new(NoopRegistryAuthProvider),
-        HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-    )?;
-    let remote_environment = tokio::spawn(codex_exec_server::run_remote_environment(
-        remote_config,
-        runtime_paths,
-    ));
-    let (environment_socket, _) = timeout(Duration::from_secs(5), rendezvous.accept())
-        .await
-        .context("remote environment should reach rendezvous")??;
-    let environment_websocket = timeout(Duration::from_secs(5), accept_async(environment_socket))
-        .await
-        .context("remote environment websocket handshake should complete")??;
-    let executor_public_key = registry
-        .received_requests()
-        .await
-        .context("wiremock should retain registration requests")?
-        .iter()
-        .find(|request| request.url.path().ends_with("/register"))
-        .context("remote environment should register its public key")
-        .and_then(|request| {
-            serde_json::from_slice::<Value>(&request.body).context("registration request body")
-        })
-        .and_then(|body| {
-            serde_json::from_value(body["executor_public_key"].clone())
-                .context("registered executor public key")
-        })?;
-
-    let server = start_mock_server().await;
-    let response_mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("ready-first-wait"),
-                ev_function_call(
-                    WAIT_CALL_ID,
-                    "wait_for_environment",
-                    &json!({ "environment_id": REMOTE_ENVIRONMENT_ID }).to_string(),
-                ),
-                ev_completed("ready-first-wait"),
-            ]),
-            sse(vec![
-                ev_response_created("ready-first-done"),
-                ev_assistant_message("ready-first-message", "done"),
-                ev_completed("ready-first-done"),
-            ]),
-        ],
-    )
-    .await;
-    let observed_roots = Arc::new(Mutex::new(Vec::new()));
-    let mut extensions = ExtensionRegistryBuilder::new();
-    extensions.thread_lifecycle_contributor(Arc::new(WaitForEnvironmentTestExtension));
-    extensions.prompt_contributor(Arc::new(ReadyCapabilityRootsTestExtension {
-        observed_roots: Some(Arc::clone(&observed_roots)),
-    }));
-    let mut builder = test_codex()
-        .with_extensions(Arc::new(extensions.build()))
-        .with_config(|config| {
-            config.project_doc_max_bytes = 0;
-            assert!(config.features.enable(Feature::DeferredExecutor).is_ok());
-        });
-    let test = builder.build(&server).await?;
-    let refreshed_root = SelectedCapabilityRoot {
-        id: "ready-first-root".to_string(),
-        location: CapabilityRootLocation::Environment {
-            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-            path: PathUri::parse("file:///ready-first-root")?,
-        },
-    };
-    let stale_root = SelectedCapabilityRoot {
-        id: refreshed_root.id.clone(),
-        location: CapabilityRootLocation::Environment {
-            environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-            path: PathUri::parse("file:///stale-ready-first-root")?,
-        },
-    };
-    let expected_root = if executor_reports_refreshed_root {
-        refreshed_root.clone()
-    } else {
-        stale_root.clone()
-    };
-    let provider = Arc::new(OfflineThenReadyNoiseConnectProvider {
-        websocket_url: format!("{rendezvous_url}/relay?role=harness"),
-        executor_public_key,
-        calls: AtomicUsize::new(0),
-    });
-    let environment = test
-        .thread_manager
-        .environment_manager()
-        .report_environment_provisioning_status(
-            REMOTE_ENVIRONMENT_ID.to_string(),
-            Ok(EnvironmentReadyInfo {
-                selected_capability_roots: if executor_reports_refreshed_root {
-                    vec![refreshed_root.clone()]
-                } else {
-                    Vec::new()
-                },
-            }),
-            provider.clone(),
-        )?
-        .context("Ready-first report should create the environment")?;
-
-    assert!(!environment.startup_finished());
-    let relay = tokio::spawn(async move {
-        let (harness_socket, _) = timeout(Duration::from_secs(5), rendezvous.accept())
-            .await
-            .context("selecting the ready environment should start its Noise connection")??;
-        let harness_websocket = timeout(Duration::from_secs(5), accept_async(harness_socket))
-            .await
-            .context("harness websocket handshake should complete")??;
-        let mut environment_websocket = environment_websocket;
-        let mut harness_websocket = harness_websocket;
-        loop {
-            tokio::select! {
-                message = environment_websocket.next() => {
-                    let Some(message) = message else {
-                        break;
-                    };
-                    harness_websocket.send(message?).await?;
-                }
-                message = harness_websocket.next() => {
-                    let Some(message) = message else {
-                        break;
-                    };
-                    environment_websocket.send(message?).await?;
-                }
-            }
-        }
-        anyhow::Ok(())
-    });
-
-    let selection = TurnEnvironmentSelection {
-        environment_id: REMOTE_ENVIRONMENT_ID.to_string(),
-        cwd: PathUri::from_abs_path(&test.config.cwd),
-        workspace_roots: vec![PathUri::from_abs_path(&test.config.cwd)],
-        config: EnvironmentConfigState::FromThread,
-    };
-    let mut thread_extension_init = ExtensionDataInit::new();
-    thread_extension_init.insert(vec![stale_root]);
-    let resumed = test
-        .thread_manager
-        .start_thread(StartThreadOptions {
-            environments: Some(vec![selection.clone()]),
-            thread_extension_init,
-            ..StartThreadOptions::new(test.config.clone())
-        })
-        .await?;
-    resumed
-        .thread
-        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "use the ready environment".to_string(),
-            text_elements: Vec::new(),
-        }]))
-        .await?;
-    wait_for_event(&resumed.thread, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
-    })
-    .await;
-
-    assert_eq!(
-        resumed.thread.environment_selections().await,
-        vec![selection]
-    );
-    assert_eq!(
-        resumed
-            .thread
-            .inspect_selected_capability_roots()
-            .ready_roots,
-        vec![expected_root.clone()]
-    );
-
-    let requests = response_mock.requests();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(provider.calls.load(Ordering::Relaxed), 2);
-    // Provisioning was reported ready before selection, but selection materialization remains
-    // nonblocking while the transport starts.
-    // The first request may legally see either Starting or Ready; the wait makes step two ready.
-    let first_tools = tool_names(&requests[0].body_json());
-    assert!(first_tools.contains(&"wait_for_environment".to_string()));
-    let first_user_context = requests[0].message_input_texts("user");
-    let first_environment_context = first_user_context
-        .iter()
-        .rfind(|text| text.contains("<environment_context>"))
-        .context("initial environment context should be model visible")?;
-    let first_has_ready_root = first_user_context
-        .iter()
-        .any(|text| text.contains("<ready_capability_roots>ready-first-root"));
-    if first_tools.contains(&"exec_command".to_string()) {
-        assert!(!first_environment_context.contains("<status>starting</status>"));
-        assert!(first_environment_context.contains("<shell>"));
-        assert!(first_has_ready_root);
-    } else {
-        assert!(first_environment_context.contains("<status>starting</status>"));
-        assert!(!first_has_ready_root);
-    }
-
-    let (_, wait_succeeded) = requests[1]
-        .function_call_output_content_and_success(WAIT_CALL_ID)
-        .context("wait_for_environment output should be model visible")?;
-    assert_ne!(wait_succeeded, Some(false));
-    assert!(tool_names(&requests[1].body_json()).contains(&"exec_command".to_string()));
-    let user_context = requests[1].message_input_texts("user");
-    let environment_context = user_context
-        .iter()
-        .rfind(|text| text.contains("<environment_context>"))
-        .context("ready environment context should be model visible")?;
-    assert!(!environment_context.contains("status=\"unavailable\""));
-    assert!(!environment_context.contains("<status>starting</status>"));
-    assert!(environment_context.contains("<shell>"));
-    assert!(
-        user_context
-            .iter()
-            .any(|text| text.contains("<ready_capability_roots>ready-first-root"))
-    );
-    let observed_selected_roots = observed_roots
-        .lock()
-        .expect("observed capability roots should not be poisoned")
-        .iter()
-        .rfind(|roots| roots.iter().any(|root| root.id == expected_root.id))
-        .cloned()
-        .context("selected capability root should reach world state")?;
-    assert_eq!(observed_selected_roots, vec![expected_root]);
-
-    relay.abort();
-    remote_environment.abort();
-    let _ = relay.await;
-    let _ = remote_environment.await;
     Ok(())
 }
 

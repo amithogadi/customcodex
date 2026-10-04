@@ -315,8 +315,6 @@ impl SandboxManager {
         has_managed_network_requirements: bool,
     ) -> SandboxType {
         #[cfg(windows)]
-        crate::windows_mxc::record_availability_once();
-
         if !self.should_sandbox(permission_profile, pref, has_managed_network_requirements) {
             return SandboxType::None;
         }

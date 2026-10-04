@@ -1220,7 +1220,7 @@ async fn interrupt_exec_marks_failed_snapshot() {
     assert_chatwidget_snapshot!("interrupt_exec_marks_failed", exec_blob);
 }
 
-// Interruptions show a short, neutral notice with the feedback command.
+// Interruptions show a short, neutral notice.
 #[tokio::test]
 async fn interrupted_turn_error_message_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;

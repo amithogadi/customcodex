@@ -68,7 +68,7 @@ fn config_error_from_ignored_toml_value_fields_for_source<T: DeserializeOwned + 
     contents: &str,
     value: TomlValue,
 ) -> Option<ConfigError> {
-    let unknown_feature_paths = unknown_feature_toml_value_path(&value);
+    let mut unknown_feature_paths = unknown_feature_toml_value_path(&value);
     let unknown_tui_paths = if TypeId::of::<T>() == TypeId::of::<ConfigToml>() {
         unknown_tui_toml_value_path(&value)
     } else {
@@ -84,6 +84,10 @@ fn config_error_from_ignored_toml_value_fields_for_source<T: DeserializeOwned + 
     let deserializer = serde_ignored::Deserializer::new(value, &mut ignored_callback);
     let result: Result<T, _> = serde_path_to_error::deserialize(deserializer);
 
+    if TypeId::of::<T>() == TypeId::of::<ConfigToml>() {
+        ignored_paths.retain(|path| !crate::retired::is_retired_config_path(path));
+        unknown_feature_paths.retain(|path| !crate::retired::is_retired_config_path(path));
+    }
     match result {
         Ok(_) => unknown_field_error_from_paths(source, contents, ignored_paths)
             .or_else(|| unknown_field_error_from_paths(source, contents, unknown_tui_paths))
@@ -145,7 +149,7 @@ pub(crate) fn ignored_toml_value_fields<T: DeserializeOwned>(value: TomlValue) -
 pub(crate) fn unknown_feature_toml_value_field(value: &TomlValue) -> Option<String> {
     unknown_feature_toml_value_path(value)
         .into_iter()
-        .next()
+        .find(|path| !crate::retired::is_retired_config_path(path))
         .map(|path_segments| path_segments.join("."))
 }
 
@@ -295,28 +299,32 @@ pub(crate) fn ignored_config_warning(
     for (source, path) in fields.iter().take(3) {
         let source = bounded_label(source);
         let key = bounded_label(&path.join("."));
-        let hint = match path
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .as_slice()
-        {
-            ["windows", "sandbox_private_desktop"] => {
-                " Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
+        let hint = if crate::retired::is_retired_config_path(path) {
+            " This service was removed; the setting has no effect."
+        } else {
+            match path
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .as_slice()
+            {
+                ["windows", "sandbox_private_desktop"] => {
+                    " Remove windows.sandbox_private_desktop; legacy Windows sandboxes always use a private desktop."
+                }
+                ["network_proxy"] => {
+                    " Use [permissions.<name>.network] for network settings, or [experimental_network] in requirements.toml for enforced network policy."
+                }
+                ["allowed_permissions"] => {
+                    " Use [allowed_permission_profiles] and default_permissions; the old allowlist is ignored even when both forms are present."
+                }
+                ["include_view_image_tool"]
+                | ["features", "include_view_image_tool"]
+                | ["profiles", _, "include_view_image_tool"]
+                | ["profiles", _, "features", "include_view_image_tool"] => {
+                    " Use [features].view_image to configure the image tool."
+                }
+                _ => "",
             }
-            ["network_proxy"] => {
-                " Use [permissions.<name>.network] for network settings, or [experimental_network] in requirements.toml for enforced network policy."
-            }
-            ["allowed_permissions"] => {
-                " Use [allowed_permission_profiles] and default_permissions; the old allowlist is ignored even when both forms are present."
-            }
-            ["include_view_image_tool"]
-            | ["features", "include_view_image_tool"]
-            | ["profiles", _, "include_view_image_tool"]
-            | ["profiles", _, "features", "include_view_image_tool"] => {
-                " Use [features].view_image to configure the image tool."
-            }
-            _ => "",
         };
         let _ = write!(warning, "\n  {source}: `{key}` is ignored.{hint}");
     }

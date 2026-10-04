@@ -304,12 +304,12 @@ async fn apps_cache_filled_during_binding_capture_reaches_the_model() -> anyhow:
                 if !matches!(context.session_source(), Some(SessionSource::SubAgent(_))) {
                     return Vec::new();
                 }
-                vec![McpServerContribution::HostedApps {
+                vec![McpServerContribution::Set {
+                    name: codex_mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     config: Box::new(
                         serde_json::from_value(json!({ "url": self.0 }))
                             .expect("child Apps MCP config"),
                     ),
-                    protocol_mode: None,
                 }]
             })
         }

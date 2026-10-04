@@ -146,15 +146,6 @@ impl PreparedGuardianContext {
             thread_instructions: inherited.thread,
             ..context
         };
-        crate::session::emit_subagent_session_started(
-            &self.parent.services.analytics_events_client,
-            self.parent.app_server_client_metadata().await,
-            session.session_id(),
-            session.thread_id(),
-            Some(self.parent.thread_id()),
-            session.thread_config_snapshot().await,
-            SubAgentSource::Other(GUARDIAN_REVIEWER_NAME.to_owned()),
-        );
         GuardianReviewSession {
             session,
             io,
@@ -198,7 +189,6 @@ impl ReviewerRequest for PreparedReview {
             self.params.deadline,
         ))
         .await;
-        record_failed_review(&session.session, &self.params, &result.outcome).await;
         result
     }
 }
@@ -206,7 +196,7 @@ impl ReviewerRequest for PreparedReview {
 pub(crate) async fn run_guardian_review_session(
     pool: Arc<ReviewerPool<GuardianReviewSession>>,
     params: GuardianReviewSessionParams,
-) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult) {
+) -> (GuardianReviewSessionOutcome, GuardianReviewDetails) {
     let context_mode = GuardianContextMode::from_history(
         params
             .parent_history
@@ -217,7 +207,7 @@ pub(crate) async fn run_guardian_review_session(
         Ok(prepared) => pool.review(prepared).await,
         Err(error) => (
             GuardianReviewSessionOutcome::PromptBuildFailed(error),
-            GuardianReviewAnalyticsResult::without_session(),
+            GuardianReviewDetails::without_session(),
         ),
     };
     // Keep the captured mode even when preparation or reviewer startup fails.

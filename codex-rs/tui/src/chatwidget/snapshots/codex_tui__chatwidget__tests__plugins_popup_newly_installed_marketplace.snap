@@ -6,7 +6,7 @@ expression: popup
   Debug Marketplace installed successfully.
   Select the plugins you want to use and press Enter to install or view details.
 
-   All Plugins   Installed (0)   OpenAI Curated   Workspace   Debug Marketplace   Add Marketplace
+   All Plugins   Installed (0)   ChatGPT Marketplace   Debug Marketplace   Add Marketplace
 
   Type to search plugins
 
@@ -19,4 +19,4 @@ expression: popup
 
 
 
-  ⌃u upgrade · ⌃r remove · space toggle · ←/→ tabs · enter details · esc close
+  ⌃r remove · space toggle · ←/→ tabs · enter details · esc close

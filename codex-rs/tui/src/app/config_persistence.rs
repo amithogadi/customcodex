@@ -1422,8 +1422,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::app::test_support::app_enabled_in_effective_config;
     use crate::app::test_support::make_test_app;
+    use crate::app::test_support::plugin_enabled_in_effective_config;
     use crate::legacy_core::config::edit::ConfigEdit;
     use crate::test_support::PathBufExt;
     use codex_config::ConfigLayerEntry;
@@ -1697,101 +1697,41 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refresh_in_memory_config_from_disk_loads_latest_apps_state() -> Result<()> {
+    async fn refresh_in_memory_config_from_disk_loads_latest_plugin_state() -> Result<()> {
         let mut app = make_test_app().await;
         let codex_home = tempdir()?;
         app.config.codex_home = codex_home.path().to_path_buf().abs();
-        let app_id = "unit_test_refresh_in_memory_config_connector".to_string();
+        let plugin_id = "local@test".to_string();
 
-        assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
+        assert_eq!(
+            plugin_enabled_in_effective_config(&app.config, &plugin_id),
+            None
+        );
 
         ConfigEditsBuilder::for_config(&app.config)
-            .with_edits([
-                ConfigEdit::SetPath {
-                    segments: vec!["apps".to_string(), app_id.clone(), "enabled".to_string()],
-                    value: false.into(),
-                },
-                ConfigEdit::SetPath {
-                    segments: vec![
-                        "apps".to_string(),
-                        app_id.clone(),
-                        "disabled_reason".to_string(),
-                    ],
-                    value: "user".into(),
-                },
-            ])
+            .with_edits([ConfigEdit::SetPath {
+                segments: vec![
+                    "plugins".to_string(),
+                    plugin_id.clone(),
+                    "enabled".to_string(),
+                ],
+                value: false.into(),
+            }])
             .apply()
             .await
-            .expect("persist app toggle");
+            .expect("persist plugin toggle");
 
-        assert_eq!(app_enabled_in_effective_config(&app.config, &app_id), None);
+        assert_eq!(
+            plugin_enabled_in_effective_config(&app.config, &plugin_id),
+            None
+        );
 
         app.refresh_in_memory_config_from_disk().await?;
 
         assert_eq!(
-            app_enabled_in_effective_config(&app.config, &app_id),
+            plugin_enabled_in_effective_config(&app.config, &plugin_id),
             Some(false)
         );
-        Ok(())
-    }
-
-    // Regression coverage for `/new` and `/clear`: cloud requirements
-    // must survive the config refresh that runs before thread transitions.
-    #[tokio::test]
-    async fn refresh_in_memory_config_from_disk_keeps_cloud_requirements_for_thread_transitions()
-    -> Result<()> {
-        let mut app = make_test_app().await;
-        let codex_home = tempdir()?;
-        let required_policy = codex_protocol::protocol::AskForApproval::Never;
-        let cloud_config_bundle =
-            codex_config::test_support::CloudConfigBundleFixture::loader_with_enterprise_requirement(
-                r#"allowed_approval_policies = ["never"]"#,
-            );
-
-        let config = ConfigBuilder::default()
-            .codex_home(codex_home.path().to_path_buf())
-            .loader_overrides(LoaderOverrides::without_managed_config_for_tests())
-            .cloud_config_bundle(cloud_config_bundle.clone())
-            .build()
-            .await?;
-        app.config = config;
-        app.cloud_config_bundle = cloud_config_bundle;
-        let app_id = "unit_test_cloud_requirements_reload_marker";
-        std::fs::write(
-            codex_home.path().join("config.toml"),
-            format!(
-                r#"
-[apps.{app_id}]
-enabled = false
-"#
-            ),
-        )?;
-
-        let assert_cloud_requirements = |app: &App| {
-            let config = &app.config;
-            assert_eq!(
-                config
-                    .config_layer_stack
-                    .requirements_toml()
-                    .allowed_approval_policies
-                    .clone(),
-                Some(vec![required_policy])
-            );
-            assert_eq!(config.permissions.approval_policy.value(), required_policy);
-        };
-
-        assert_cloud_requirements(&app);
-        assert_eq!(app_enabled_in_effective_config(&app.config, app_id), None);
-
-        // This is the fallible reload that the best-effort `/new`, `/clear`,
-        // `/fork`, side-conversation, and session-picker paths wrap.
-        app.refresh_in_memory_config_from_disk().await?;
-
-        assert_eq!(
-            app_enabled_in_effective_config(&app.config, app_id),
-            Some(false)
-        );
-        assert_cloud_requirements(&app);
         Ok(())
     }
 
@@ -1830,15 +1770,14 @@ enabled = false
         let permission_config = app
             .rebuild_config_for_permission_profile(":workspace")
             .await?;
-        let pet_url =
-            "https://persistent.oaistatic.com/codex/pets/v1/dewey-spritesheet-v4.webp".parse()?;
+        let blocked_url = "https://blocked.example/assets/image.webp".parse()?;
         for config in [&app.config, &new_config, &permission_config] {
             assert_eq!(config.application_network_policy, controller.policy());
             assert_eq!(
                 config
                     .http_client_factory()
                     .network_policy()
-                    .acquire(&pet_url)
+                    .acquire(&blocked_url)
                     .map(|_| ()),
                 Err(NetworkPolicyDenied::Destination),
             );

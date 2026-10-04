@@ -10,8 +10,6 @@ pub use conversation::ConversationCheckpoint;
 pub use conversation::ConversationState;
 mod deadline;
 mod execution;
-mod feedback;
-mod metrics;
 mod model;
 mod outcome;
 mod pool;
@@ -62,9 +60,6 @@ pub use settings::ReviewerTurn;
 pub use settings::reviewer_permission_profile;
 pub use settings::reviewer_tool_policy;
 
-pub use feedback::FailedReviewFeedback;
-pub use feedback::ReviewFeedbackContext;
-pub use feedback::ReviewFeedbackSettings;
 pub use reporting::ReviewDenials;
 pub use reporting::ReviewMetadata;
 pub use reporting::ReviewReport;

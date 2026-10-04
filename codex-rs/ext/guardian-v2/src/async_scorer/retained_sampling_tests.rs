@@ -46,8 +46,6 @@ async fn retained_websocket_requests_preserve_model_output_and_ids() -> Result<(
                 parent_history_version: 0,
                 transcript_entry_count: 0,
             },
-            truncations: Vec::new(),
-            section_costs: Vec::new(),
         };
         let (completed, score) = tokio::join!(sampler.sample_retained(prepared, ready), score);
         assert_eq!(score??, "low");
@@ -142,8 +140,6 @@ async fn retention_overflow_or_incomplete_stream_keeps_early_score() -> Result<(
                 parent_history_version: 0,
                 transcript_entry_count: 0,
             },
-            truncations: Vec::new(),
-            section_costs: Vec::new(),
         };
         let (history, score) = tokio::join!(sampler.sample_retained(prepared, ready), score);
         assert_eq!(score??, "low");

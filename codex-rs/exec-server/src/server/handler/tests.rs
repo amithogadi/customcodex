@@ -91,7 +91,7 @@ fn test_http_client_factory() -> HttpClientFactory {
 
 async fn initialized_handler() -> Arc<ExecServerHandler> {
     let (outgoing_tx, _outgoing_rx) = mpsc::channel(16);
-    let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
+    let registry = SessionRegistry::new();
     let handler = Arc::new(ExecServerHandler::new(
         registry,
         RpcNotificationSender::new(outgoing_tx),
@@ -117,8 +117,8 @@ async fn duplicate_process_ids_allow_only_one_successful_start() {
     let second_handler = Arc::clone(&handler);
 
     let (first, second) = tokio::join!(
-        first_handler.exec(exec_params("proc-1"), /*launch_context*/ None),
-        second_handler.exec(exec_params("proc-1"), /*launch_context*/ None),
+        first_handler.exec(exec_params("proc-1")),
+        second_handler.exec(exec_params("proc-1")),
     );
 
     let (successes, failures): (Vec<_>, Vec<_>) =
@@ -142,7 +142,7 @@ async fn duplicate_process_ids_allow_only_one_successful_start() {
 async fn terminate_reports_false_after_process_exit() {
     let handler = initialized_handler().await;
     handler
-        .exec(exec_params("proc-1"), /*launch_context*/ None)
+        .exec(exec_params("proc-1"))
         .await
         .expect("start process");
 
@@ -170,7 +170,7 @@ async fn terminate_reports_false_after_process_exit() {
 #[tokio::test]
 async fn long_poll_read_fails_after_session_resume() {
     let (first_tx, _first_rx) = mpsc::channel(16);
-    let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
+    let registry = SessionRegistry::new();
     let first_handler = Arc::new(ExecServerHandler::new(
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
@@ -189,13 +189,10 @@ async fn long_poll_read_fails_after_session_resume() {
     // Keep the process quiet and alive so the pending read can only complete
     // after session resume, not because the process produced output or exited.
     first_handler
-        .exec(
-            exec_params_with_argv(
-                "proc-long-poll",
-                shell_argv("sleep 5", "ping -n 6 127.0.0.1 >NUL"),
-            ),
-            /*launch_context*/ None,
-        )
+        .exec(exec_params_with_argv(
+            "proc-long-poll",
+            shell_argv("sleep 5", "ping -n 6 127.0.0.1 >NUL"),
+        ))
         .await
         .expect("start process");
 
@@ -248,7 +245,7 @@ async fn long_poll_read_fails_after_session_resume() {
 #[tokio::test]
 async fn active_session_resume_is_rejected() {
     let (first_tx, _first_rx) = mpsc::channel(16);
-    let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
+    let registry = SessionRegistry::new();
     let first_handler = Arc::new(ExecServerHandler::new(
         Arc::clone(&registry),
         RpcNotificationSender::new(first_tx),
@@ -294,7 +291,7 @@ async fn active_session_resume_is_rejected() {
 async fn output_and_exit_are_retained_after_notification_receiver_closes() {
     let (outgoing_tx, outgoing_rx) = mpsc::channel(16);
     let handler = Arc::new(ExecServerHandler::new(
-        SessionRegistry::new(crate::ExecServerTelemetry::default()),
+        SessionRegistry::new(),
         RpcNotificationSender::new(outgoing_tx),
         test_runtime_paths(),
         test_http_client_factory(),
@@ -310,16 +307,13 @@ async fn output_and_exit_are_retained_after_notification_receiver_closes() {
 
     let process_id = ProcessId::from("proc-notification-fail");
     handler
-        .exec(
-            exec_params_with_argv(
-                process_id.as_str(),
-                shell_argv(
-                    "sleep 0.05; printf 'first\\n'; sleep 0.05; printf 'second\\n'",
-                    "echo first&& ping -n 2 127.0.0.1 >NUL&& echo second",
-                ),
+        .exec(exec_params_with_argv(
+            process_id.as_str(),
+            shell_argv(
+                "sleep 0.05; printf 'first\\n'; sleep 0.05; printf 'second\\n'",
+                "echo first&& ping -n 2 127.0.0.1 >NUL&& echo second",
             ),
-            /*launch_context*/ None,
-        )
+        ))
         .await
         .expect("start process");
 
@@ -331,10 +325,7 @@ async fn output_and_exit_are_retained_after_notification_receiver_closes() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     handler
-        .exec(
-            exec_params(process_id.as_str()),
-            /*launch_context*/ None,
-        )
+        .exec(exec_params(process_id.as_str()))
         .await
         .expect("process id should be reusable after exit retention");
 

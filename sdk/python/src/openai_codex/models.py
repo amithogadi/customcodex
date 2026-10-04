@@ -13,7 +13,6 @@ from .generated.v2_all import (
     AccountRateLimitsUpdatedNotification as AccountRateLimitsUpdatedNotification,
     AccountUpdatedNotification as AccountUpdatedNotification,
     AgentMessageDeltaNotification as AgentMessageDeltaNotification,
-    AppListUpdatedNotification as AppListUpdatedNotification,
     CommandExecutionOutputDeltaNotification as CommandExecutionOutputDeltaNotification,
     ConfigWarningNotification as ConfigWarningNotification,
     ContextCompactedNotification as ContextCompactedNotification,

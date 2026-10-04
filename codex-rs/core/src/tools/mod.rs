@@ -3,14 +3,13 @@ pub(crate) mod call_trace;
 mod catalog_parameters;
 pub(crate) mod code_mode;
 pub(crate) mod context;
-mod control_tool_analytics;
 pub(crate) mod events;
 mod executed_tool_calls;
 pub(crate) mod handlers;
 pub(crate) mod hook_names;
 pub(crate) mod hosted_spec;
 pub(crate) mod lifecycle;
-pub(crate) mod metadata_metrics;
+pub(crate) mod metadata_budget;
 mod multi_agent_tool;
 pub(crate) mod network_approval;
 pub(crate) mod orchestrator;
@@ -41,7 +40,7 @@ pub(crate) use executed_tool_calls::ExecutedToolCalls;
 pub(crate) use multi_agent_tool::MULTI_AGENT_V2_NAMESPACE_DESCRIPTION;
 pub use router::ToolRouter;
 
-/// Legacy boundaries such as hook payloads, telemetry tags, and Responses tool
+/// Legacy boundaries such as hook payloads and Responses tool
 /// names still require a single flattened string. Keep comparisons and sorting
 /// on `ToolName` itself; use this only when crossing those boundaries.
 pub(crate) fn flat_tool_name(tool_name: &ToolName) -> Cow<'_, str> {

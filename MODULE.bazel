@@ -142,11 +142,6 @@ use_repo(osx, "macos_sdk")
 # Needed to disable xcode...
 bazel_dep(name = "apple_support", version = "2.1.0")
 bazel_dep(name = "rules_cc", version = "0.2.18")
-
-# Windows voice jobs explicitly select the installed MSVC C toolchains.
-cc_configure = use_extension("@rules_cc//cc:extensions.bzl", "cc_configure_extension")
-use_repo(cc_configure, "local_config_cc")
-
 single_version_override(
     module_name = "rules_cc",
     patch_strip = 1,
@@ -172,13 +167,7 @@ single_version_override(
 
 bazel_dep(name = "rules_python", version = "1.7.0")
 
-voice_python = use_extension("@rules_python//python/extensions:python.bzl", "python")
-voice_python.defaults(python_version = "3.11")
-voice_python.toolchain(python_version = "3.12")
-use_repo(voice_python, "python_3_12")
-
-# Use the existing pinned Make build for foreign_cc consumers, including the
-# native voice pkg-config bootstrap, instead of a PATH-provided Make.
+# Use the existing pinned Make build for foreign_cc consumers.
 register_toolchains("@rules_foreign_cc//toolchains:built_make_toolchain")
 
 foreign_cc_tools = use_extension("@rules_foreign_cc//foreign_cc:extensions.bzl", "tools")
@@ -518,33 +507,6 @@ new_local_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:local.
 
 include("//bazel/modules:wine.MODULE.bazel")
 
-voice_sources = use_extension("//third_party/voice:extensions.bzl", "voice_sources")
-use_repo(
-    voice_sources,
-    "voice_archive_glib",
-    "voice_archive_gst_plugins_base",
-    "voice_archive_gst_plugins_good",
-    "voice_archive_gstreamer",
-    "voice_archive_libffi",
-    "voice_archive_meson",
-    "voice_archive_ninja",
-    "voice_archive_opus",
-    "voice_archive_pcre2",
-    "voice_archive_proxy_libintl",
-    "voice_archive_zlib",
-    "voice_glib",
-    "voice_gst_plugins_base",
-    "voice_gst_plugins_good",
-    "voice_gstreamer",
-    "voice_libffi",
-    "voice_meson",
-    "voice_ninja",
-    "voice_opus",
-    "voice_pcre2",
-    "voice_proxy_libintl",
-    "voice_zlib",
-)
-
 new_local_repository(
     name = "v8_targets",
     build_file = "//third_party/v8:BUILD.bazel",
@@ -587,46 +549,7 @@ inject_repo(crate, "v8_targets")
 llvm = use_extension("@llvm//extensions:llvm.bzl", "llvm")
 use_repo(llvm, "llvm-project")
 
-crate.annotation(
-    # Provide the hermetic SDK path so the build script doesn't try to invoke an unhermetic `xcrun --show-sdk-path`.
-    build_script_data = [
-        "@macos_sdk//sysroot",
-    ],
-    build_script_env = {
-        "BINDGEN_EXTRA_CLANG_ARGS": "-Xclang -internal-isystem -Xclang $(location @llvm//:builtin_resource_dir)/include",
-        "COREAUDIO_SDK_PATH": "$(location @macos_sdk//sysroot)",
-        "LIBCLANG_PATH": "$(location @llvm-project//clang:libclang_interface_output)",
-    },
-    build_script_tools = [
-        "@llvm-project//clang:libclang_interface_output",
-        "@llvm//:builtin_resource_dir",
-    ],
-    crate = "coreaudio-sys",
-    gen_build_script = "on",
-)
-
 inject_repo(crate, "llvm", "llvm-project", "macos_sdk")
-
-# The bundled Opus encoder uses CMake; supply executable tools and their data,
-# rather than relying on a build worker's PATH. Versions are pinned by the module.
-crate.annotation(
-    build_script_data = ["//third_party/voice:opus-toolchain.cmake"],
-    build_script_env = {
-        "CMAKE": "$${pwd}/$(CMAKE)",
-        "CMAKE_GENERATOR": "Ninja",
-        "CMAKE_TOOLCHAIN_FILE": "$(execpath @@//third_party/voice:opus-toolchain.cmake)",
-        "CODEX_VOICE_NINJA": "$${pwd}/$(NINJA)",
-    },
-    build_script_toolchains = [
-        "@rules_foreign_cc//toolchains:current_cmake_toolchain",
-        "@rules_foreign_cc//toolchains:current_ninja_toolchain",
-    ],
-    build_script_tools = [
-        "@rules_foreign_cc//toolchains:current_cmake_toolchain",
-        "@rules_foreign_cc//toolchains:current_ninja_toolchain",
-    ],
-    crate = "opusic-sys",
-)
 
 # The musl CLI's allocator needs declared native tools and consistent header flags.
 crate.annotation(
@@ -651,23 +574,6 @@ crate.annotation(
 
 inject_repo(crate, "rules_foreign_cc")
 
-crate.annotation(
-    # Provide the hermetic SDK path so the build script doesn't try to invoke an unavailable `xcrun --show-sdk-path`.
-    build_script_data = [
-        "@macos_sdk//sysroot",
-    ],
-    build_script_env = {
-        "WEBRTC_SYS_DARWIN_SDK_PATH": "$(location @macos_sdk//sysroot)",
-        "WEBRTC_SYS_LINK_OUT_DIR": "1",
-    },
-    crate = "webrtc-sys",
-    gen_build_script = "on",
-    patch_args = ["-p1"],
-    patches = [
-        "//patches:webrtc-sys_hermetic_darwin_sysroot.patch",
-    ],
-)
-
 # Fix readme inclusions
 crate.annotation(
     crate = "windows-link",
@@ -676,104 +582,6 @@ crate.annotation(
         "//patches:windows-link.patch",
     ],
 )
-
-bazel_dep(name = "alsa_lib", version = "1.2.9.bcr.4")
-
-crate.annotation(
-    crate = "alsa-sys",
-    gen_build_script = "off",
-    deps = ["@alsa_lib"],
-)
-
-inject_repo(crate, "alsa_lib")
-
-# Keep upstream pkg-config version probes, but link only the prepared runtime.
-# system-deps applies these path/flag overrides after a successful version probe.
-[
-    crate.annotation(
-        build_script_data = [
-            "//third_party/voice:native_link",
-            "//third_party/voice:native_sdk",
-        ],
-        build_script_env = {
-            "PKG_CONFIG": "$(execpath @@//third_party/voice:pkg_config)",
-            "PKG_CONFIG_LIBDIR": "$(execpath @@//third_party/voice:native_sdk)/lib/pkgconfig",
-            "PKG_CONFIG_PATH": "",
-        } | {
-            "SYSTEM_DEPS_" + key + "_SEARCH_NATIVE": "$(execpath @@//third_party/voice:native_link)/.."
-            for key in keys
-        } | {
-            # GStreamer's .pc files add an absolute rpath; CcInfo supplies the
-            # relative Bazel runpath instead. Library/version checks still run.
-            "SYSTEM_DEPS_" + key + "_LDFLAGS": ""
-            for key in keys
-            if key.startswith("GSTREAMER_")
-        },
-        build_script_tools = ["//third_party/voice:pkg_config"],
-        crate = name,
-        gen_build_script = "on",
-        version = version,
-        deps = ["//third_party/voice:native_link"],
-    )
-    for name, version, keys in [
-        (
-            "glib-sys",
-            "0.22.8",
-            [
-                "GLIB_2_0",
-                "GOBJECT_2_0",
-            ],
-        ),
-        (
-            "gobject-sys",
-            "0.22.6",
-            ["GOBJECT_2_0"],
-        ),
-        (
-            "gio-sys",
-            "0.22.8",
-            ["GIO_2_0"],
-        ),
-        (
-            "gstreamer-sys",
-            "0.25.2",
-            ["GSTREAMER_1_0"],
-        ),
-        (
-            "gstreamer-base-sys",
-            "0.25.3",
-            ["GSTREAMER_BASE_1_0"],
-        ),
-        (
-            "gstreamer-app-sys",
-            "0.25.0",
-            ["GSTREAMER_APP_1_0"],
-        ),
-        (
-            "gstreamer-audio-sys",
-            "0.25.3",
-            ["GSTREAMER_AUDIO_1_0"],
-        ),
-        (
-            "glib-sys",
-            "0.22.9",
-            [
-                "GLIB_2_0",
-                "GOBJECT_2_0",
-            ],
-        ),
-        (
-            "gobject-sys",
-            "0.22.9",
-            ["GOBJECT_2_0"],
-        ),
-        (
-            "gio-sys",
-            "0.22.9",
-            ["GIO_2_0"],
-        ),
-    ]
-]
 
 bazel_dep(name = "v8", version = "15.0.245.2")
 archive_override(

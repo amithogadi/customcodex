@@ -234,14 +234,8 @@ impl PreparedMcpCall {
 
     /// Returns whether this call is bound to the host-owned Codex Apps server.
     pub fn is_host_owned_apps(&self) -> bool {
-        self.config
-            .mcp_server_catalog
-            .server(&self.server_name)
-            .is_some_and(|registration| {
-                registration
-                    .source()
-                    .is_host_owned_apps(&self.server_name, registration.config())
-            })
+        // Hosted Apps registrations are no longer supplied by this terminal build.
+        false
     }
 
     pub fn server_origin(&self) -> Option<&str> {
@@ -321,36 +315,7 @@ impl PreparedMcpCall {
             .tool_catalog
             .run_with_snapshot(&self.catalog_snapshot, || async {
                 let (arguments, meta) = prepare().await?;
-                let timeout_deadline =
-                    effective_timeout.map(|timeout| tokio::time::Instant::now() + timeout);
-                let add_trusted_access_context = self.connections.add_trusted_access_context(
-                    &self.tool_info,
-                    &self.server_metadata,
-                    arguments.as_ref(),
-                    meta,
-                );
-                let meta = match effective_timeout.zip(timeout_deadline) {
-                    Some((timeout, deadline)) => {
-                        tokio::time::timeout_at(deadline, add_trusted_access_context)
-                            .await
-                            .map_err(|_| {
-                                anyhow::anyhow!("timed out awaiting tools/call after {timeout:.0?}")
-                            })?
-                    }
-                    None => add_trusted_access_context.await,
-                };
-                let remaining_timeout = match effective_timeout.zip(timeout_deadline) {
-                    Some((timeout, deadline)) => {
-                        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-                        if remaining.is_zero() {
-                            return Err(anyhow::anyhow!(
-                                "timed out awaiting tools/call after {timeout:.0?}"
-                            ));
-                        }
-                        Some(remaining)
-                    }
-                    None => None,
-                };
+                let remaining_timeout = effective_timeout;
                 self.client
                     .client
                     .call_tool(tool_name.clone(), arguments, meta, remaining_timeout)

@@ -14,10 +14,6 @@ from openai_codex import (
     CodexConfig,
     ApprovalMode,
     Sandbox,
-    ChatgptLoginHandle,
-    DeviceCodeLoginHandle,
-    AsyncChatgptLoginHandle,
-    AsyncDeviceCodeLoginHandle,
     Thread,
     AsyncThread,
     TurnHandle,
@@ -63,8 +59,6 @@ Properties/methods:
 - `metadata -> InitializeResponse`
 - `close() -> None`
 - `login_api_key(api_key: str) -> None`
-- `login_chatgpt() -> ChatgptLoginHandle`
-- `login_chatgpt_device_code() -> DeviceCodeLoginHandle`
 - `account(*, refresh_token: bool = False) -> GetAccountResponse`
 - `logout() -> None`
 - `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox: Sandbox | None = None) -> Thread`
@@ -131,8 +125,6 @@ Properties/methods:
 - `metadata -> InitializeResponse`
 - `close() -> Awaitable[None]`
 - `login_api_key(api_key: str) -> Awaitable[None]`
-- `login_chatgpt() -> Awaitable[AsyncChatgptLoginHandle]`
-- `login_chatgpt_device_code() -> Awaitable[AsyncDeviceCodeLoginHandle]`
 - `account(*, refresh_token: bool = False) -> Awaitable[GetAccountResponse]`
 - `logout() -> Awaitable[None]`
 - `thread_start(*, approval_mode=ApprovalMode.auto_review, base_instructions=None, config=None, cwd=None, developer_instructions=None, ephemeral=None, model=None, model_provider=None, personality=None, sandbox: Sandbox | None = None) -> Awaitable[AsyncThread]`
@@ -152,30 +144,6 @@ Async context manager:
 async with AsyncCodex() as codex:
     ...
 ```
-
-## Login handles
-
-### ChatgptLoginHandle / AsyncChatgptLoginHandle
-
-- `login_id: str`
-- `auth_url: str`
-- `wait() -> AccountLoginCompletedNotification`
-- `cancel() -> CancelLoginAccountResponse`
-
-Async handle methods return awaitables.
-
-### DeviceCodeLoginHandle / AsyncDeviceCodeLoginHandle
-
-- `login_id: str`
-- `verification_url: str`
-- `user_code: str`
-- `wait() -> AccountLoginCompletedNotification`
-- `cancel() -> CancelLoginAccountResponse`
-
-Async handle methods return awaitables.
-
-`wait()` consumes only the completion notification for its matching login
-attempt. API-key login completes synchronously and does not return a handle.
 
 ## Thread / AsyncThread
 
@@ -221,12 +189,12 @@ Use `turn(...)` when you need low-level turn control (`stream()`, `steer()`,
 
 These options have the same behavior on sync and async `run(...)` and `turn(...)`:
 
-| Option | Behavior |
-| --- | --- |
+| Option                                    | Behavior                                                                                                                                                                   |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `personality: Personality \| None = None` | `Personality.friendly` and `Personality.pragmatic` are deprecated and no longer select a style. See [deprecated personality selection](#deprecated-personality-selection). |
-| `service_tier: str | None = None` | Sets the thread's service tier for this and subsequent turns. |
-| `turn_service_tier: str | None = None` | Overrides the tier for a newly started turn only. `None` inherits the thread setting; `"default"` selects standard speed. Does not change the thread default and is ignored when input joins an active turn. |
-| `source: str | None = None` | Labels the caller that initiated a new turn, such as `"review_ui"`. This is metadata; it does not schedule work or grant authority. Ignored when input joins an active turn. |
+| `service_tier: str                        | None = None`                                                                                                                                                               | Sets the thread's service tier for this and subsequent turns.                                                                                                                                                |
+| `turn_service_tier: str                   | None = None`                                                                                                                                                               | Overrides the tier for a newly started turn only. `None` inherits the thread setting; `"default"` selects standard speed. Does not change the thread default and is ignored when input joins an active turn. |
+| `source: str                              | None = None`                                                                                                                                                               | Labels the caller that initiated a new turn, such as `"review_ui"`. This is metadata; it does not schedule work or grant authority. Ignored when input joins an active turn.                                 |
 
 `ExternalMessage`, `turn_service_tier`, `source`, and explicit `include_turns`
 on resume/fork require Codex CLI 0.151.0 or newer. The SDK raises `CodexError`
@@ -325,11 +293,11 @@ message = ExternalMessage(
 result = thread.run(message)
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `tool_name: str` | Required, nonempty name of the tool or application delivering the message. |
-| `content` | Required text, or a sequence of structured content dictionaries or generated `FunctionCallOutputContentItem` models. Structured image content requires inline data URLs. |
-| `namespace: str | None = None` | Optional namespace for the tool name. |
+| Field            | Meaning                                                                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
+| `tool_name: str` | Required, nonempty name of the tool or application delivering the message.                                                                                               |
+| `content`        | Required text, or a sequence of structured content dictionaries or generated `FunctionCallOutputContentItem` models. Structured image content requires inline data URLs. |
+| `namespace: str  | None = None`                                                                                                                                                             | Optional namespace for the tool name. |
 
 Pass one `ExternalMessage` as the complete input to `run(...)` or `turn(...)`.
 It starts a turn when the thread is idle or joins an active regular turn. It

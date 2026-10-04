@@ -24,16 +24,6 @@ from ._inputs import (
     _to_wire_input,
     _to_wire_turn_input,
 )
-from ._login import (
-    AsyncChatgptLoginHandle,
-    AsyncDeviceCodeLoginHandle,
-    ChatgptLoginHandle,
-    DeviceCodeLoginHandle,
-    async_start_chatgpt_login,
-    async_start_device_code_login,
-    start_chatgpt_login,
-    start_device_code_login,
-)
 from ._message_router import _TurnSubscription
 from ._run import (
     TurnResult,
@@ -114,14 +104,6 @@ class Codex:
                 )
             )
         )
-
-    def login_chatgpt(self) -> ChatgptLoginHandle:
-        """Start browser-based ChatGPT login and return its live handle."""
-        return start_chatgpt_login(self._client)
-
-    def login_chatgpt_device_code(self) -> DeviceCodeLoginHandle:
-        """Start device-code ChatGPT login and return its live handle."""
-        return start_device_code_login(self._client)
 
     def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
         """Read the current Codex account state."""
@@ -368,16 +350,6 @@ class AsyncCodex:
                 )
             )
         )
-
-    async def login_chatgpt(self) -> AsyncChatgptLoginHandle:
-        """Start browser-based ChatGPT login and return its live handle."""
-        await self._ensure_initialized()
-        return await async_start_chatgpt_login(self)
-
-    async def login_chatgpt_device_code(self) -> AsyncDeviceCodeLoginHandle:
-        """Start device-code ChatGPT login and return its live handle."""
-        await self._ensure_initialized()
-        return await async_start_device_code_login(self)
 
     async def account(self, *, refresh_token: bool = False) -> GetAccountResponse:
         """Read the current Codex account state."""

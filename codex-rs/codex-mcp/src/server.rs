@@ -144,9 +144,6 @@ pub(crate) struct McpServerConnectionIdentity {
     resolved_environment: Result<Option<Arc<Environment>>, String>,
     local_stdio_fallback_cwd: Option<PathBuf>,
     referenced_environment_variables: Vec<(String, Option<OsString>)>,
-    runtime_auth: Option<CodexAuth>,
-    runtime_auth_token: Option<String>,
-    codex_apps_cache_identity: Option<(PathBuf, ConnectorRuntimeContextKey)>,
     client_elicitation_capability: ElicitationCapability,
     client_mcp_extensions: ClientMcpExtensions,
     agent_plugin: bool,
@@ -164,9 +161,6 @@ impl McpServerConnectionIdentity {
         oauth_refresh_mode: McpOAuthRefreshMode,
         resolved_environment: &Result<Option<Arc<Environment>>, String>,
         runtime_context: &McpRuntimeContext,
-        runtime_auth_provider: Option<&SharedAuthProvider>,
-        auth: Option<&CodexAuth>,
-        codex_apps_cache_identity: Option<(PathBuf, ConnectorRuntimeContextKey)>,
         client_elicitation_capability: ElicitationCapability,
         client_mcp_extensions: ClientMcpExtensions,
         previous_identity: Option<&Self>,
@@ -177,10 +171,7 @@ impl McpServerConnectionIdentity {
                 .bytes()
                 .all(|byte| byte == b'\t' || (byte >= b' ' && byte != 0x7f))
         };
-        let stored_oauth_url = if runtime_auth_provider.is_none()
-            && !matches!(config.auth, McpServerAuth::EmaAuth)
-            && (!matches!(config.auth, McpServerAuth::ChatGpt) || config.is_local_environment())
-        {
+        let stored_oauth_url = if matches!(config.auth, McpServerAuth::OAuth) {
             match &config.transport {
                 McpServerTransportConfig::StreamableHttp {
                     url,
@@ -248,8 +239,6 @@ impl McpServerConnectionIdentity {
             McpCredentialPolicy::HostFallbackAllowed => referenced_environment_variables(config),
             McpCredentialPolicy::ExecutorOnly => Vec::new(),
         };
-        let runtime_auth = runtime_auth_provider.and(auth).cloned();
-        let runtime_auth_token = runtime_auth.as_ref().and_then(|auth| auth.get_token().ok());
         let oauth_store_was_contended = oauth_credentials
             .as_ref()
             .ok()
@@ -272,9 +261,6 @@ impl McpServerConnectionIdentity {
             resolved_environment: resolved_environment.clone(),
             local_stdio_fallback_cwd,
             referenced_environment_variables,
-            runtime_auth,
-            runtime_auth_token,
-            codex_apps_cache_identity,
             client_elicitation_capability,
             client_mcp_extensions,
             agent_plugin: server.is_agent_plugin(),
@@ -283,19 +269,6 @@ impl McpServerConnectionIdentity {
     }
 
     pub(crate) fn has_same_connection_config(&self, other: &Self) -> bool {
-        let same_runtime_auth = match (&self.runtime_auth, &other.runtime_auth) {
-            (Some(CodexAuth::AgentIdentity(left)), Some(CodexAuth::AgentIdentity(right))) => {
-                left.record() == right.record()
-            }
-            (Some(left), Some(right)) => {
-                left == right
-                    && left.get_account_id() == right.get_account_id()
-                    && left.get_chatgpt_user_id() == right.get_chatgpt_user_id()
-                    && left.is_fedramp_account() == right.is_fedramp_account()
-            }
-            (None, None) => true,
-            (Some(_), None) | (None, Some(_)) => false,
-        };
         self.auth == other.auth
             && self.credential_policy == other.credential_policy
             && self.transport == other.transport
@@ -311,9 +284,6 @@ impl McpServerConnectionIdentity {
             && same_resolved_environment(&self.resolved_environment, &other.resolved_environment)
             && self.local_stdio_fallback_cwd == other.local_stdio_fallback_cwd
             && self.referenced_environment_variables == other.referenced_environment_variables
-            && same_runtime_auth
-            && self.runtime_auth_token == other.runtime_auth_token
-            && self.codex_apps_cache_identity == other.codex_apps_cache_identity
             && self.client_elicitation_capability == other.client_elicitation_capability
             && self.client_mcp_extensions == other.client_mcp_extensions
             && self.agent_plugin == other.agent_plugin

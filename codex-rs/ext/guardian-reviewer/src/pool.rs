@@ -7,9 +7,9 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use codex_analytics::GuardianReviewAnalyticsResult;
-use codex_analytics::GuardianReviewSessionKind;
 use codex_extension_api::ExtensionFuture;
+use codex_protocol::guardian_review::GuardianReviewDetails;
+use codex_protocol::guardian_review::GuardianReviewSessionKind;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
@@ -61,7 +61,7 @@ pub trait ReviewerRequest: Send + Sync {
 pub struct ReviewSessionResult {
     pub outcome: GuardianReviewSessionOutcome,
     pub disposition: SessionDisposition,
-    pub analytics: GuardianReviewAnalyticsResult,
+    pub analytics: GuardianReviewDetails,
 }
 
 /// Whether the host drained the session sufficiently for another review to use it.
@@ -173,7 +173,7 @@ impl<S: ReviewerSession> ReviewerPool<S> {
     pub async fn review<R>(
         &self,
         request: R,
-    ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult)
+    ) -> (GuardianReviewSessionOutcome, GuardianReviewDetails)
     where
         R: ReviewerRequest<Session = S>,
     {
@@ -213,11 +213,11 @@ impl<S: ReviewerSession> ReviewerPool<S> {
                         Ok(Err(error)) => {
                             return (
                                 GuardianReviewSessionOutcome::PromptBuildFailed(error),
-                                GuardianReviewAnalyticsResult::without_session(),
+                                GuardianReviewDetails::without_session(),
                             );
                         }
                         Err(outcome) => {
-                            return (outcome, GuardianReviewAnalyticsResult::without_session());
+                            return (outcome, GuardianReviewDetails::without_session());
                         }
                     };
                     *state = Some(Arc::new(Trunk {
@@ -229,14 +229,14 @@ impl<S: ReviewerSession> ReviewerPool<S> {
                 }
                 (state.as_ref().cloned(), context)
             }
-            Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
+            Err(outcome) => return (outcome, GuardianReviewDetails::without_session()),
         };
         let Some(trunk) = trunk else {
             return (
                 GuardianReviewSessionOutcome::Completed(Err(anyhow::anyhow!(
                     "guardian review session was not available after spawn"
                 ))),
-                GuardianReviewAnalyticsResult::without_session(),
+                GuardianReviewDetails::without_session(),
             );
         };
         if trunk.session.context() != &context {
@@ -293,7 +293,7 @@ impl<S: ReviewerSession> ReviewerPool<S> {
         request: &R,
         context: S::Context,
         snapshot: Option<S::Snapshot>,
-    ) -> (GuardianReviewSessionOutcome, GuardianReviewAnalyticsResult)
+    ) -> (GuardianReviewSessionOutcome, GuardianReviewDetails)
     where
         R: ReviewerRequest<Session = S>,
     {
@@ -316,10 +316,10 @@ impl<S: ReviewerSession> ReviewerPool<S> {
             Ok(Err(error)) => {
                 return (
                     GuardianReviewSessionOutcome::PromptBuildFailed(error),
-                    GuardianReviewAnalyticsResult::without_session(),
+                    GuardianReviewDetails::without_session(),
                 );
             }
-            Err(outcome) => return (outcome, GuardianReviewAnalyticsResult::without_session()),
+            Err(outcome) => return (outcome, GuardianReviewDetails::without_session()),
         };
         let ReviewSessionResult {
             outcome, analytics, ..

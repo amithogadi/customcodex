@@ -8,21 +8,15 @@ use codex_protocol::mcp::OPENAI_STANDARD_FORM_INPUT_EXTENSION_ID;
 use serde_json::Map;
 use serde_json::Value;
 
-/// Restricts verification to the host-owned plugin service, even when another server uses its name.
+/// Projects supported extensions without the retired hosted verification bridge.
 pub(crate) fn server_mcp_extensions(
     extensions: &ClientMcpExtensions,
-    server_name: &str,
-    server: Option<&crate::catalog::ResolvedMcpServer>,
+    _server_name: &str,
+    _server: Option<&crate::catalog::ResolvedMcpServer>,
 ) -> ClientMcpExtensions {
-    let plugin_service = server.is_some_and(|server| {
-        server
-            .source()
-            .is_host_owned_apps(server_name, server.config())
-    });
     ClientMcpExtensions::new(extensions.iter().map(|(id, settings)| {
         let mut settings = settings.clone();
-        if !plugin_service
-            && id == OPENAI_ELICITATION_EXTENSION_ID
+        if id == OPENAI_ELICITATION_EXTENSION_ID
             && let Some(settings) = settings.as_object_mut()
         {
             settings.remove("userVerification");

@@ -1,7 +1,3 @@
-use crate::metrics::MEMORY_PHASE_TWO_E2E_MS;
-use crate::metrics::MEMORY_PHASE_TWO_INPUT;
-use crate::metrics::MEMORY_PHASE_TWO_JOBS;
-use crate::metrics::MEMORY_PHASE_TWO_TOKEN_USAGE;
 use crate::prompts::build_consolidation_prompt_for_version;
 use crate::prune_old_extension_resources;
 use crate::rebuild_raw_memories_file_from_memories;
@@ -51,8 +47,6 @@ pub async fn run(
     config: Arc<Config>,
     parent_permission_profile: PermissionProfile,
 ) {
-    let phase_two_e2e_timer = context.start_timer(MEMORY_PHASE_TWO_E2E_MS);
-
     let Some(db) = context.memory_store().await else {
         // This should not happen.
         return;
@@ -67,7 +61,6 @@ pub async fn run(
     let claim = match job::claim(context.as_ref(), &db).await {
         Ok(claim) => claim,
         Err(e) => {
-            context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", e)]);
             return;
         }
     };
@@ -144,10 +137,7 @@ pub async fn run(
             "succeeded_no_workspace_changes",
         )
         .await
-        {
-            drop(phase_two_e2e_timer);
-            context.record_storage_size(&root).await;
-        }
+        {}
         return;
     }
 
@@ -181,14 +171,12 @@ pub async fn run(
         root,
         config.memories.version,
         agent,
-        phase_two_e2e_timer,
     );
 
     // 10. Emit dispatch metrics.
     let counters = Counters {
         input: raw_memory_count as i64,
     };
-    emit_metrics(context.as_ref(), counters);
 }
 
 async fn sync_phase2_workspace_inputs(
@@ -226,14 +214,7 @@ mod job {
             codex_state::Phase2JobClaimOutcome::Claimed {
                 ownership_token,
                 input_watermark,
-            } => {
-                context.counter(
-                    MEMORY_PHASE_TWO_JOBS,
-                    /*inc*/ 1,
-                    &[("status", "claimed")],
-                );
-                (ownership_token, input_watermark)
-            }
+            } => (ownership_token, input_watermark),
             codex_state::Phase2JobClaimOutcome::SkippedRetryUnavailable => {
                 return Err("skipped_retry_unavailable");
             }
@@ -252,7 +233,6 @@ mod job {
         claim: &Claim,
         reason: &'static str,
     ) {
-        context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", reason)]);
         if matches!(
             db.mark_global_phase2_job_failed(
                 &claim.token,
@@ -280,7 +260,6 @@ mod job {
         selected_outputs: &[codex_state::Stage1Output],
         reason: &'static str,
     ) -> bool {
-        context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", reason)]);
         db.mark_global_phase2_job_succeeded(&claim.token, completion_watermark, selected_outputs)
             .await
             .unwrap_or(false)
@@ -371,7 +350,6 @@ mod agent {
         memory_root: codex_utils_absolute_path::AbsolutePathBuf,
         version: MemoryVersion,
         agent: SpawnedConsolidationAgent,
-        phase_two_e2e_timer: Option<codex_otel::Timer>,
     ) {
         tokio::spawn(async move {
             let Some(db) = context.memory_store().await else {
@@ -389,9 +367,7 @@ mod agent {
                     .token_usage_info()
                     .await
                     .map(|info| info.total_token_usage)
-            {
-                emit_token_usage_metrics(context.as_ref(), &token_usage);
-            }
+            {}
 
             if let Err(err) = context
                 .shutdown_consolidation_agent(SpawnedConsolidationAgent { thread_id, thread })
@@ -461,8 +437,6 @@ mod agent {
                             "failed marking global memory consolidation job succeeded after resetting workspace baseline"
                         );
                     } else {
-                        drop(phase_two_e2e_timer);
-                        context.record_storage_size(&memory_root).await;
                     }
                 }
             } else if !agent_completed {
@@ -565,49 +539,4 @@ fn is_final_agent_status(status: &AgentStatus) -> bool {
         status,
         AgentStatus::PendingInit | AgentStatus::Running | AgentStatus::Interrupted
     )
-}
-
-fn emit_metrics(context: &MemoryStartupContext, counters: Counters) {
-    if counters.input > 0 {
-        context.counter(MEMORY_PHASE_TWO_INPUT, counters.input, &[]);
-    }
-
-    context.counter(
-        MEMORY_PHASE_TWO_JOBS,
-        /*inc*/ 1,
-        &[("status", "agent_spawned")],
-    );
-}
-
-fn emit_token_usage_metrics(context: &MemoryStartupContext, token_usage: &TokenUsage) {
-    context.histogram(
-        MEMORY_PHASE_TWO_TOKEN_USAGE,
-        token_usage.total_tokens.max(0),
-        &[("token_type", "total")],
-    );
-    context.histogram(
-        MEMORY_PHASE_TWO_TOKEN_USAGE,
-        token_usage.input_tokens.max(0),
-        &[("token_type", "input")],
-    );
-    context.histogram(
-        MEMORY_PHASE_TWO_TOKEN_USAGE,
-        token_usage.cached_input(),
-        &[("token_type", "cached_input")],
-    );
-    context.histogram(
-        MEMORY_PHASE_TWO_TOKEN_USAGE,
-        token_usage.cache_write_input_tokens.max(0),
-        &[("token_type", "cache_write_input")],
-    );
-    context.histogram(
-        MEMORY_PHASE_TWO_TOKEN_USAGE,
-        token_usage.output_tokens.max(0),
-        &[("token_type", "output")],
-    );
-    context.histogram(
-        MEMORY_PHASE_TWO_TOKEN_USAGE,
-        token_usage.reasoning_output_tokens.max(0),
-        &[("token_type", "reasoning_output")],
-    );
 }

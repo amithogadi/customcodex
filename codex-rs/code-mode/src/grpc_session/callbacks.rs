@@ -122,15 +122,6 @@ impl SessionInner {
             cell.id = %call.cell_id,
             invocation.id = %call.invocation_id,
         );
-        if let Some(traceparent) = call.traceparent.as_ref() {
-            codex_otel::set_parent_from_w3c_trace_context(
-                &callback_span,
-                &W3cTraceContext {
-                    traceparent: Some(traceparent.clone()),
-                    tracestate: None,
-                },
-            );
-        }
         let invocation_id = call.invocation_id.clone();
         let cancellation = match admission {
             CallbackAdmission::Active(cancellation, delegate) => Ok((cancellation, delegate)),

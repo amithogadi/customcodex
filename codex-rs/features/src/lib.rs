@@ -92,8 +92,6 @@ impl Stage {
 /// Unique features toggled via configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
-    /// Preview consumer five-hour and weekly allowance history.
-    AnalyticsPlanHistory,
     /// Discover model catalogs for OpenAI API-key authentication.
     ApiKeyModelDiscovery,
     /// Forward explicit programs with builtin OpenAI API keys.
@@ -180,8 +178,6 @@ pub enum Feature {
     DeferredExecutor,
     /// Use the current working directory for turn diff display paths.
     CwdRelativeTurnDiffs,
-    /// Enable runtime metrics snapshots via a manual reader.
-    RuntimeMetrics,
     /// Enable startup memory extraction and file-backed memory consolidation.
     MemoryTool,
     /// Enable importing project-scoped memory from external agents.
@@ -319,8 +315,6 @@ pub enum Feature {
     GuardianConversationHistoryTools,
     /// Enable Guardian V2 automatic approval reviews.
     GuardianV2,
-    /// Run Decisions alongside Guardian V2 for measurement without changing approvals.
-    GuardianV2DecisionsComparison,
     /// Removed compatibility flag for the unused Guardian extension prototype.
     GuardianExt,
     /// Enable persisted thread goals and automatic goal continuation.
@@ -351,8 +345,6 @@ pub enum Feature {
     FastMode,
     /// Enable explicitly requested model changes for later step captures.
     StepModelSwitching,
-    /// Enable voice conversations in the TUI.
-    RealtimeConversation,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
     /// Removed compatibility key, still advertised to the Responses API.
@@ -361,8 +353,6 @@ pub enum Feature {
     CompactionImageBudget,
     /// Retain client-authored developer messages across compacted context windows.
     RetainClientDeveloperMessages,
-    /// Use Agent Identity for ChatGPT-authenticated sessions.
-    UseAgentIdentity,
     /// Enable workspace dependency support.
     WorkspaceDependencies,
 
@@ -405,8 +395,6 @@ pub enum Feature {
     /// Enable collaboration modes (Plan, Default).
     /// Kept for config backward compatibility; behavior is always collaboration-modes-enabled.
     CollaborationModes,
-    /// Removed compatibility flag for the deleted remote control feature.
-    RemoteControl,
     /// Removed compatibility flag retained as a no-op so old wrappers can
     /// still pass `--enable image_detail_original`.
     ImageDetailOriginal,
@@ -916,16 +904,6 @@ pub struct FeatureSpec {
 
 pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
-        id: Feature::AnalyticsPlanHistory,
-        key: "analytics_plan_history",
-        stage: Stage::Experimental {
-            name: "Analytics plan history",
-            menu_description: "Preview five-hour and weekly allowance history for consumer accounts in /analytics.",
-            announcement: "",
-        },
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::DaemonAutoStart,
         key: "daemon_auto_start",
         stage: Stage::Stable,
@@ -1132,12 +1110,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::CodexGitCommit,
         key: "codex_git_commit",
         stage: Stage::Removed,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::RuntimeMetrics,
-        key: "runtime_metrics",
-        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
@@ -1661,12 +1633,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::GuardianV2DecisionsComparison,
-        key: "guardianv2_decisions_comparison",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::GuardianExt,
         key: "guardian_ext",
         stage: Stage::Removed,
@@ -1763,18 +1729,6 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
-        id: Feature::RealtimeConversation,
-        key: "realtime_conversation",
-        stage: Stage::Stable,
-        default_enabled: true,
-    },
-    FeatureSpec {
-        id: Feature::RemoteControl,
-        key: "remote_control",
-        stage: Stage::Removed,
-        default_enabled: false,
-    },
-    FeatureSpec {
         id: Feature::ImageDetailOriginal,
         key: "image_detail_original",
         stage: Stage::Removed,
@@ -1837,12 +1791,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RetainClientDeveloperMessages,
         key: "retain_client_developer_messages",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::UseAgentIdentity,
-        key: "use_agent_identity",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

@@ -14,6 +14,8 @@ use crate::LocalFileSystem;
 use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
+use crate::connection_metadata::ConnectionTransport;
+use crate::connection_metadata::ExecutorRegistration;
 use crate::discover_v2::capability_locations::CapabilityLocationRequest;
 use crate::discover_v2::capability_manager::CapabilityManager;
 use crate::rpc::RpcCallError;
@@ -27,9 +29,6 @@ use crate::server::registry::build_router;
 use crate::server::request_dispatcher::RequestDispatcher;
 use crate::server::request_dispatcher::RequestTaskResult;
 use crate::server::session_registry::SessionRegistry;
-use crate::telemetry::ConnectionTransport;
-use crate::telemetry::ExecServerTelemetry;
-use crate::telemetry::ExecutorRegistration;
 use codex_http_client::HttpClientFactory;
 use codex_utils_path_uri::PathUri;
 
@@ -39,7 +38,6 @@ pub(crate) struct ConnectionProcessor {
     capability_prewarm: Arc<AbortOnDropHandle<()>>,
     session_registry: Arc<SessionRegistry>,
     runtime_paths: ExecServerRuntimeOptions,
-    telemetry: ExecServerTelemetry,
     http_client_factory: HttpClientFactory,
     request_dispatch_mode: RequestDispatchMode,
 }
@@ -49,7 +47,6 @@ impl ConnectionProcessor {
     pub(crate) fn new(runtime_paths: ExecServerRuntimeOptions) -> Self {
         Self::new_with_location_request(
             runtime_paths,
-            ExecServerTelemetry::default(),
             codex_http_client::HttpClientFactory::new(
                 codex_http_client::OutboundProxyPolicy::ReqwestDefault,
             ),
@@ -61,9 +58,8 @@ impl ConnectionProcessor {
         )
     }
 
-    pub(crate) fn new_with_telemetry(
+    pub(crate) fn new_with_options(
         runtime_paths: ExecServerRuntimeOptions,
-        telemetry: ExecServerTelemetry,
         http_client_factory: HttpClientFactory,
         request_dispatch_mode: RequestDispatchMode,
     ) -> Self {
@@ -75,7 +71,6 @@ impl ConnectionProcessor {
             });
         Self::new_with_location_request(
             runtime_paths,
-            telemetry,
             http_client_factory,
             request_dispatch_mode,
             request,
@@ -84,7 +79,6 @@ impl ConnectionProcessor {
 
     fn new_with_location_request(
         runtime_paths: ExecServerRuntimeOptions,
-        telemetry: ExecServerTelemetry,
         http_client_factory: HttpClientFactory,
         request_dispatch_mode: RequestDispatchMode,
         request: io::Result<CapabilityLocationRequest>,
@@ -106,11 +100,10 @@ impl ConnectionProcessor {
             }
         });
         Self {
-            session_registry: SessionRegistry::new(telemetry.clone()),
+            session_registry: SessionRegistry::new(),
             capability_manager,
             capability_prewarm: Arc::new(AbortOnDropHandle::new(prewarm)),
             runtime_paths,
-            telemetry,
             http_client_factory,
             request_dispatch_mode,
         }
@@ -153,7 +146,7 @@ impl ConnectionProcessor {
 async fn run_connection(
     connection: JsonRpcConnection,
     processor: ConnectionProcessor,
-    transport: ConnectionTransport,
+    _transport: ConnectionTransport,
     executor_registration: Option<Arc<ExecutorRegistration>>,
 ) {
     let ConnectionProcessor {
@@ -161,11 +154,9 @@ async fn run_connection(
         capability_prewarm: _capability_prewarm,
         session_registry,
         runtime_paths,
-        telemetry,
         http_client_factory,
         request_dispatch_mode,
     } = processor;
-    let _connection_metrics = telemetry.connection_started(transport);
     let JsonRpcConnection {
         outgoing_tx: json_outgoing_tx,
         mut incoming_rx,
@@ -207,7 +198,6 @@ async fn run_connection(
         outgoing_tx.clone(),
         disconnected_rx.clone(),
         requests.clone(),
-        telemetry,
         request_dispatch_mode,
     );
 
@@ -387,7 +377,6 @@ mod tests {
         std::fs::create_dir_all(&skill_root)?;
         let mut processor = super::ConnectionProcessor::new_with_location_request(
             paths,
-            crate::ExecServerTelemetry::default(),
             codex_http_client::HttpClientFactory::new(
                 codex_http_client::OutboundProxyPolicy::ReqwestDefault,
             ),
@@ -435,7 +424,7 @@ mod tests {
 
     #[tokio::test]
     async fn connection_accepts_pipelined_scalar_requests() {
-        let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
+        let registry = SessionRegistry::new();
         let (mut writer, mut lines, task) = spawn_test_connection(registry, "pipelined-scalar");
 
         send_request(
@@ -529,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn transport_disconnect_detaches_session_during_in_flight_read() {
-        let registry = SessionRegistry::new(crate::ExecServerTelemetry::default());
+        let registry = SessionRegistry::new();
         let (mut first_writer, mut first_lines, first_task) =
             spawn_test_connection(Arc::clone(&registry), "first");
 
@@ -631,7 +620,7 @@ mod tests {
                 session_registry: registry,
                 ..super::ConnectionProcessor::new(test_runtime_paths())
             },
-            crate::telemetry::ConnectionTransport::Stdio,
+            crate::connection_metadata::ConnectionTransport::Stdio,
             /*executor_registration*/ None,
         ));
         (client_writer, BufReader::new(client_reader).lines(), task)

@@ -25,7 +25,6 @@ use crate::session::GitEnrichmentPolicy;
 use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
-use crate::session::emit_subagent_session_started;
 use crate::session::session::Session;
 use crate::session::startup::SessionStartup;
 use crate::session::startup::SessionStartupGuard;
@@ -125,7 +124,6 @@ pub(crate) async fn run_codex_thread_interactive(
             runtime,
         },
         dynamic_tools: Vec::new(),
-        metrics_service_name: None,
         user_shell_override: None,
         inherited_environments: Some(parent_environments.clone()),
         inherited_exec_policy: Some(Arc::clone(&parent_session.services.exec_policy)),
@@ -136,7 +134,6 @@ pub(crate) async fn run_codex_thread_interactive(
         turn_extension_init: Default::default(),
         client_mcp_extensions: parent_session.services.client_mcp_extensions.clone(),
         reserved_thread_id: None,
-        analytics_events_client: Some(parent_session.services.analytics_events_client.clone()),
         image_store: Arc::clone(&parent_session.services.image_store),
         thread_store: Arc::clone(&parent_session.services.thread_store),
         attestation_provider: parent_session.services.attestation_provider.clone(),
@@ -158,17 +155,6 @@ pub(crate) async fn run_codex_thread_interactive(
             return Err(error.into());
         }
     };
-    let thread_config = session.thread_config_snapshot().await;
-    let client_metadata = parent_session.app_server_client_metadata().await;
-    emit_subagent_session_started(
-        &session.services.analytics_events_client,
-        client_metadata,
-        session.session_id(),
-        session.thread_id(),
-        Some(parent_session.thread_id),
-        thread_config,
-        subagent_source,
-    );
     let caller_io = forward_session_io(Arc::new(io), cancel_token);
     startup.release_membership();
     startup_guard.disarm();

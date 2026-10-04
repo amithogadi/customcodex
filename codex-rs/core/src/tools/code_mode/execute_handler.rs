@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
+use super::diagnostics::CodeModeToolCallGuard;
+use super::diagnostics::trace_id;
 use super::handle_runtime_response;
 use super::is_exec_tool_name;
 use super::output::CodeModeToolOutput;
-use super::telemetry::CodeModeToolCallGuard;
-use super::telemetry::trace_id;
 
 type CodeModeNestedTool = (Arc<ToolSpec>, Option<Arc<dyn CoreToolRuntime>>);
 
@@ -40,7 +40,7 @@ impl CodeModeExecuteHandler {
         call_id: String,
         originating_call: Option<crate::tools::context::ToolCallOrigin>,
         code: String,
-        telemetry: &mut CodeModeToolCallGuard,
+        diagnostics: &mut CodeModeToolCallGuard,
     ) -> Result<CodeModeToolOutput, FunctionCallError> {
         let args =
             codex_code_mode::parse_exec_source(&code).map_err(FunctionCallError::RespondToModel)?;
@@ -100,16 +100,7 @@ impl CodeModeExecuteHandler {
             .map_err(FunctionCallError::RespondToModel)?;
         let cell_id = started_cell.cell_id.clone();
         tracing::Span::current().record("cell.id", trace_id(cell_id.as_str()));
-        telemetry.cell_id = Some(cell_id.to_string());
-        exec.session
-            .services
-            .analytics_events_client
-            .track_code_mode_tool_call(codex_analytics::CodeModeToolCallFact::CellStarted {
-                thread_id: exec.session.thread_id.to_string(),
-                turn_id: exec.turn.sub_id.clone(),
-                call_id: call_id.clone(),
-                cell_id: cell_id.to_string(),
-            });
+        diagnostics.cell_id = Some(cell_id.to_string());
         exec.session
             .services
             .executed_tool_calls
@@ -134,7 +125,7 @@ impl CodeModeExecuteHandler {
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         if let Some(code_mode_host_duration) = response.code_mode_host_duration() {
-            telemetry.record_code_mode_host_duration(code_mode_host_duration);
+            diagnostics.record_code_mode_host_duration(code_mode_host_duration);
         }
         // Record the raw runtime boundary. The model-visible custom-tool output
         // is produced by `handle_runtime_response` and later linked through
@@ -148,14 +139,6 @@ impl CodeModeExecuteHandler {
                 .services
                 .code_mode_service
                 .finish_cell_dispatch(&cell_id);
-            exec.session
-                .services
-                .analytics_events_client
-                .track_code_mode_tool_call(codex_analytics::CodeModeToolCallFact::CellClosed {
-                    thread_id: exec.session.thread_id.to_string(),
-                    turn_id: exec.turn.sub_id.clone(),
-                    cell_id: cell_id.to_string(),
-                });
         }
         exec.session.services.elicitations.wait_until_clear().await;
         let wall_time = response
@@ -189,7 +172,7 @@ impl ToolExecutor<ToolInvocation> for CodeModeExecuteHandler {
 }
 
 impl CodeModeExecuteHandler {
-    // Default to interrupted if this future is dropped; telemetry::CodeModeToolCallGuard::finish
+    // Default to interrupted if this future is dropped; diagnostics::CodeModeToolCallGuard::finish
     // overwrites this handler's captured span on explicit success or failure.
     #[tracing::instrument(
         name = "code_mode.handler.execute",
@@ -219,10 +202,9 @@ impl CodeModeExecuteHandler {
             ..
         } = invocation;
 
-        let mut telemetry = CodeModeToolCallGuard::new(
+        let mut diagnostics = CodeModeToolCallGuard::new(
             &session,
             turn.sub_id.clone(),
-            turn.turn_metadata_state.clone(),
             call_id.clone(),
             PUBLIC_TOOL_NAME,
             handler_span,
@@ -235,7 +217,7 @@ impl CodeModeExecuteHandler {
                     call_id,
                     originating_call,
                     input,
-                    &mut telemetry,
+                    &mut diagnostics,
                 )
                 .await
                 .map(boxed_tool_output),
@@ -243,7 +225,7 @@ impl CodeModeExecuteHandler {
                 "{PUBLIC_TOOL_NAME} expects raw JavaScript source text"
             ))),
         };
-        telemetry.finish(
+        diagnostics.finish(
             result
                 .as_ref()
                 .is_ok_and(|output| output.success_for_logging()),

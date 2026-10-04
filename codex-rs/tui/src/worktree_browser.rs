@@ -123,8 +123,10 @@ pub(crate) async fn list(codex_home: PathBuf, cwd: PathBuf) -> anyhow::Result<Ve
         codex_config::ConfigLoadOptions::default(),
     )
     .await?;
-    let settings =
-        codex_worktree::WorktreeSettings::for_cli(&codex_home, host.config_toml.legacy_worktree_settings.as_ref())?;
+    let settings = codex_worktree::WorktreeSettings::for_cli(
+        &codex_home,
+        host.config_toml.legacy_worktree_settings.as_ref(),
+    )?;
     // Closing the popup discards its result; an already-running blocking Git call still finishes.
     tokio::task::spawn_blocking(move || {
         let cwd = codex_git_utils::get_git_repo_root(&cwd).unwrap_or(cwd);
@@ -159,8 +161,10 @@ pub(crate) async fn remove(
         codex_config::ConfigLoadOptions::default(),
     )
     .await?;
-    let settings =
-        codex_worktree::WorktreeSettings::for_cli(&codex_home, host.config_toml.legacy_worktree_settings.as_ref())?;
+    let settings = codex_worktree::WorktreeSettings::for_cli(
+        &codex_home,
+        host.config_toml.legacy_worktree_settings.as_ref(),
+    )?;
     tokio::task::spawn_blocking(move || {
         codex_worktree::WorktreeManager::new(settings).remove(&source_cwd, &root)
     })

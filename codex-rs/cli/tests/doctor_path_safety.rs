@@ -71,7 +71,6 @@ impl Fixture {
             home.join("config.toml"),
             r#"
 cli_auth_credentials_store = "file"
-check_for_update_on_startup = false
 model_provider = "local"
 [analytics]
 enabled = false
@@ -637,7 +636,6 @@ async fn feedback_with_logs_does_not_execute_path_helpers() -> Result<()> {
         .with_codex_home(&fixture.home)
         // The CLI does not accept the standalone app-server's test-only flag.
         // Disable plugins through real config; their safety test joins a full sync.
-        .with_plugin_startup_tasks()
         .with_args(&["-c", "features.plugins=false", "app-server"])
         .with_env_overrides(&[
             ("PATH", Some(path.as_ref())),

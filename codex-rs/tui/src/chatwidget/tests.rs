@@ -27,8 +27,6 @@ pub(super) use crate::token_usage::TokenUsage;
 pub(super) use crate::token_usage::TokenUsageInfo;
 pub(super) use crate::tui::FrameRequester;
 pub(super) use assert_matches::assert_matches;
-pub(super) use codex_app_server_protocol::AddCreditsNudgeCreditType;
-pub(super) use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
 pub(super) use codex_app_server_protocol::AdditionalFileSystemPermissions as AppServerAdditionalFileSystemPermissions;
 pub(super) use codex_app_server_protocol::AdditionalNetworkPermissions as AppServerAdditionalNetworkPermissions;
 pub(super) use codex_app_server_protocol::AdditionalPermissionProfile as AppServerAdditionalPermissionProfile;
@@ -122,12 +120,11 @@ pub(super) use codex_config::RequirementSource;
 pub(super) use codex_config::types::ApprovalsReviewer;
 pub(super) use codex_config::types::Notifications;
 pub(super) use codex_core_plugins::OPENAI_CURATED_MARKETPLACE_NAME;
+pub(super) use codex_diagnostics::RuntimeMetricsSummary;
 pub(super) use codex_features::Feature;
 pub(super) use codex_git_utils::CommitLogEntry;
 pub(super) use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 pub(super) use codex_models_manager::test_support::get_model_offline_for_tests;
-pub(super) use codex_otel::RuntimeMetricsSummary;
-pub(super) use codex_otel::SessionTelemetry;
 pub(super) use codex_protocol::ThreadId;
 pub(super) use codex_protocol::account::PlanType;
 pub(super) use codex_protocol::approvals::GuardianAssessmentAction;
@@ -228,8 +225,6 @@ fn next_goal_draft(
 
 mod app_server;
 mod approval_requests;
-#[path = "tests/backend_banners_tests.rs"]
-mod backend_banners_tests;
 #[path = "tests/bedrock_catalog_tests.rs"]
 mod bedrock_catalog_tests;
 #[path = "tests/collaboration_catalog_tests.rs"]
@@ -300,7 +295,6 @@ mod subagent_activity;
 mod terminal_title;
 #[path = "tests/tool_activity_tests.rs"]
 mod tool_activity_tests;
-mod usage;
 #[path = "tests/worktree_picker_tests.rs"]
 mod worktree_picker;
 
@@ -320,6 +314,3 @@ mod list_spacing_tests;
 
 #[path = "tests/question_notifications_tests.rs"]
 mod question_notifications_tests;
-
-#[path = "tests/security_setup_tests.rs"]
-mod security_setup_tests;

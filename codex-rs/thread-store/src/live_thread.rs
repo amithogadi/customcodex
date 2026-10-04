@@ -6,8 +6,6 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::ThreadHistoryMode;
 use codex_protocol::protocol::ThreadMemoryMode;
 use codex_rollout::RolloutItem;
-use codex_rollout::RolloutPersistenceTelemetry;
-use codex_rollout::measure_and_filter_rollout_items;
 use codex_rollout::persisted_rollout_items;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -40,7 +38,6 @@ pub struct LiveThread {
     history_mode: ThreadHistoryMode,
     thread_store: Arc<dyn ThreadStore>,
     metadata_sync: Arc<Mutex<ThreadMetadataSync>>,
-    persistence_telemetry: RolloutPersistenceTelemetry,
 }
 
 /// Owns persistence acquisition and its live thread while initialization is still fallible.
@@ -144,7 +141,6 @@ impl LiveThread {
             history_mode,
             thread_store,
             metadata_sync: Arc::new(Mutex::new(metadata_sync)),
-            persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
         })
     }
 
@@ -206,7 +202,6 @@ impl LiveThread {
                 history_mode,
                 thread_store,
                 metadata_sync: Arc::new(Mutex::new(metadata_sync)),
-                persistence_telemetry: RolloutPersistenceTelemetry::new(thread_id),
             },
             history,
         ))
@@ -251,23 +246,13 @@ impl LiveThread {
         if raw_items.is_empty() {
             return Ok(Vec::new());
         }
-        let (items, measurement) = if self.persistence_telemetry.is_enabled() {
-            let (items, measurement) =
-                measure_and_filter_rollout_items(raw_items, self.history_mode);
-            (items, Some(measurement))
-        } else {
-            (persisted_rollout_items(raw_items, self.history_mode), None)
-        };
+        let items = persisted_rollout_items(raw_items, self.history_mode);
         self.thread_store
             .append_items(AppendThreadItemsParams {
                 thread_id: self.thread_id,
                 items: raw_items.to_vec(),
             })
             .await?;
-        if let Some(measurement) = measurement.as_ref() {
-            self.persistence_telemetry
-                .record_batch(raw_items, measurement);
-        }
         Ok(items)
     }
 

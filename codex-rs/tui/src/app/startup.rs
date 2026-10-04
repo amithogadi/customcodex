@@ -223,7 +223,6 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
-        feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
         app_server_target: AppServerTarget,
@@ -235,7 +234,6 @@ impl App {
         daemon_startup_warning: Option<String>,
         mut startup_draft: StartupDraftPump,
         managed_worktree: Option<crate::ManagedTuiWorktree>,
-        daemon_cli_executable: Option<AbsolutePathBuf>,
     ) -> Result<AppExitInfo> {
         use tokio_stream::StreamExt;
 
@@ -417,34 +415,17 @@ impl App {
             ModelCatalog::new(available_models.clone())
                 .with_collaboration_modes(bootstrap.collaboration_modes),
         );
-        let feedback_audience = bootstrap.feedback_audience;
         let auth_mode = bootstrap.auth_mode;
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
-        let has_codex_backend_auth = matches!(auth_mode, Some(TelemetryAuthMode::Chatgpt));
         let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
         let initial_plan_type = bootstrap.plan_type;
-        let session_telemetry = SessionTelemetry::new(
-            ThreadId::new(),
-            model.as_str(),
-            model.as_str(),
-            /*account_id*/ None,
-            bootstrap.account_email.clone(),
-            auth_mode,
-            codex_login::default_client::originator().value,
-            config.otel.log_user_prompt,
-            user_agent(),
-            serde_json::from_value(serde_json::json!("cli"))
-                .unwrap_or_else(|err| panic!("cli session source should deserialize: {err}")),
-        );
         if local_settings
             .tui
             .status_line
             .as_ref()
             .is_some_and(|cmd| !cmd.is_empty())
-        {
-            session_telemetry.counter("codex.status_line", /*inc*/ 1, &[]);
-        }
+        {}
 
         let status_line_invalid_items_warned = Arc::new(AtomicBool::new(false));
         let terminal_title_invalid_items_warned = Arc::new(AtomicBool::new(false));
@@ -517,9 +498,7 @@ impl App {
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     requires_openai_auth,
-                    has_codex_backend_auth,
                     model_catalog: model_catalog.clone(),
-                    feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
@@ -528,7 +507,6 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
                         .clone(),
-                    session_telemetry: session_telemetry.clone(),
                 };
                 let mut chat_widget = ChatWidget::new_with_app_event(init);
                 chat_widget.set_queue_submissions_until_session_configured(
@@ -652,9 +630,7 @@ impl App {
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     requires_openai_auth,
-                    has_codex_backend_auth,
                     model_catalog: model_catalog.clone(),
-                    feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
@@ -663,7 +639,6 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
                         .clone(),
-                    session_telemetry: session_telemetry.clone(),
                 };
                 (ChatWidget::new_with_app_event(init), resumed)
             }
@@ -690,11 +665,6 @@ impl App {
                 } else {
                     crate::app_server_session::ForkPermissionMode::InheritSaved
                 };
-                session_telemetry.counter(
-                    "codex.thread.fork",
-                    /*inc*/ 1,
-                    &[("source", "cli_subcommand")],
-                );
                 let forked = match startup_draft
                     .run_until(
                         tui,
@@ -760,9 +730,7 @@ impl App {
                     enhanced_keys_supported,
                     has_chatgpt_account,
                     requires_openai_auth,
-                    has_codex_backend_auth,
                     model_catalog: model_catalog.clone(),
-                    feedback: feedback.clone(),
                     is_first_run,
                     status_account_display: status_account_display.clone(),
                     initial_plan_type,
@@ -771,7 +739,6 @@ impl App {
                     status_line_invalid_items_warned: status_line_invalid_items_warned.clone(),
                     terminal_title_invalid_items_warned: terminal_title_invalid_items_warned
                         .clone(),
-                    session_telemetry: session_telemetry.clone(),
                 };
                 (ChatWidget::new_with_app_event(init), forked)
             }
@@ -826,13 +793,10 @@ Fix the config and retry.\n\
 See the Codex keymap documentation for supported actions and examples."
                 )
             })?;
-        #[cfg(not(debug_assertions))]
-        let upgrade_version = crate::updates::get_upgrade_version(&config);
 
         let mut app = Self {
             feature_write_lock: Arc::default(),
             model_catalog,
-            session_telemetry: session_telemetry.clone(),
             app_event_tx,
             chat_widget,
             workspace_command_runner: Some(workspace_command_runner),
@@ -858,10 +822,7 @@ See the Codex keymap documentation for supported actions and examples."
             turn_tips: Default::default(),
             transcript_view: Default::default(),
             last_rendered_history_tail: None,
-            last_thread_usage_status_cell: None,
-            pending_thread_usage_history_refresh: false,
             overlay: None,
-            retained_analytics: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
@@ -874,8 +835,6 @@ See the Codex keymap documentation for supported actions and examples."
             skill_load_warnings: SkillLoadWarningState::default(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            feedback: feedback.clone(),
-            feedback_audience,
             environment_manager,
             app_server_target,
             pending_right_click_paste: None,
@@ -886,8 +845,6 @@ See the Codex keymap documentation for supported actions and examples."
                     .map(|(_, key)| key.clone()),
                 ..Default::default()
             },
-            daemon_cli_executable,
-            pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState {
                 prompt_after_trust: should_prompt_windows_sandbox_nux_at_startup
@@ -933,7 +890,6 @@ See the Codex keymap documentation for supported actions and examples."
             pending_managed_worktree_attach: None,
             startup_protected_input_boundary: true,
             startup_pending_protected_request: false,
-            account_email_request_id: None,
             rate_limit_hard_stop_generation: 0,
             rate_limit_refresh_state: Default::default(),
             pending_mcp_login_start: None,
@@ -1076,48 +1032,13 @@ See the Codex keymap documentation for supported actions and examples."
         // Kick off a non-blocking rate-limit prefetch so the first `/status`
         // already has data and available reset credits can be surfaced, without
         // delaying the initial frame render.
-        if requires_openai_auth && has_chatgpt_account {
-            crate::security_setup::prefetch(
-                &app.config,
-                &app_server,
-                app.app_event_tx.clone(),
-                app.chat_widget.security_setup_request_id,
-            );
-            let reset_hint_request_id = app.chat_widget.start_rate_limit_reset_startup_check();
-            app.refresh_rate_limits(
-                &app_server,
-                RateLimitRefreshOrigin::StartupPrefetch {
-                    reset_hint_request_id,
-                },
-            );
-        }
 
         let mut listen_for_app_server_events = true;
         let mut reconnect = None;
         let mut waiting_for_initial_session_configured = wait_for_initial_session_configured;
         let mut waiting_for_initial_session_header = true;
 
-        #[cfg(not(debug_assertions))]
-        let pre_loop_exit_reason = if let Some(latest_version) = upgrade_version {
-            let control = Box::pin(app.handle_event(
-                tui,
-                &mut app_server,
-                AppEvent::InsertHistoryCell(Box::new(UpdateAvailableHistoryCell::new(
-                    latest_version,
-                    crate::update_action::get_update_action(),
-                ))),
-            ))
-            .await?;
-            match control {
-                AppRunControl::Continue => None,
-                AppRunControl::Exit(exit_reason) => Some(exit_reason),
-            }
-        } else {
-            None
-        };
-        #[cfg(debug_assertions)]
         let pre_loop_exit_reason: Option<ExitReason> = None;
-
         let exit_reason_result = if let Some(exit_reason) = pre_loop_exit_reason {
             Ok(exit_reason)
         } else {
@@ -1195,10 +1116,6 @@ See the Codex keymap documentation for supported actions and examples."
                             && has_pending_app_events
                         || (!waiting_for_initial_session_configured
                             && app.has_queued_startup_protected_request());
-                let rate_limit_poll_deadline = app
-                    .chat_widget
-                    .rate_limit_refresh_interval()
-                    .and_then(|interval| app.rate_limit_refresh_state.poll_deadline(interval));
                 let control = select! {
                     Some(event) = app_event_rx.recv() => {
                         let is_initial_session_header = matches!(
@@ -1306,17 +1223,6 @@ See the Codex keymap documentation for supported actions and examples."
                                 }
                             }
                         }
-                        AppRunControl::Continue
-                    }
-                    () = async {
-                        match rate_limit_poll_deadline {
-                            Some(deadline) => {
-                                tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-                            }
-                            None => std::future::pending().await,
-                        }
-                    }, if listen_for_app_server_events => {
-                        app.refresh_rate_limits(&app_server, RateLimitRefreshOrigin::Periodic);
                         AppRunControl::Continue
                     }
                     () = async {

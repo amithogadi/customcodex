@@ -27,7 +27,6 @@ use codex_config::LoaderOverrides;
 use codex_config::NoopThreadConfigLoader;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
-use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
@@ -323,7 +322,6 @@ async fn malformed_system_defaults_do_not_block_existing_thread_turn() -> Result
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         embedded_network_policy: Default::default(),
         thread_config_loader: Arc::new(NoopThreadConfigLoader),
-        feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),

@@ -657,7 +657,7 @@ fn validate_cli_overrides_strictly(
     let ignored_path = ignored_toml_value_fields::<ConfigToml>(cli_overrides_layer.clone())
         .into_iter()
         .chain(unknown_tui_toml_value_path(cli_overrides_layer))
-        .next()
+        .find(|path| !crate::retired::is_retired_config_path(path))
         .map(|path| path.join("."))
         .or_else(|| unknown_feature_toml_value_field(cli_overrides_layer));
     if let Some(ignored_path) = ignored_path {

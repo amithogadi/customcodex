@@ -24,10 +24,6 @@ use tempfile::TempDir;
 use test_case::test_case;
 use tokio::time::timeout;
 
-use super::analytics::captured_analytics_events;
-use super::analytics::mount_analytics_capture;
-use super::analytics::wait_for_matching_analytics_event;
-
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(25);
 #[cfg(not(windows))]
@@ -35,7 +31,7 @@ const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 const CURRENT_TIME_AT: i64 = 1_781_717_655;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn clock_tools_emit_control_tool_analytics() -> Result<()> {
+async fn clock_tools_handle_failure_and_cancellation() -> Result<()> {
     let calls = [
         ("curr_time", json!({}), "completed"),
         ("sleep", json!({"duration_ms": 1}), "completed"),
@@ -74,7 +70,6 @@ async fn clock_tools_emit_control_tool_analytics() -> Result<()> {
         .with_provider_config("supports_websockets = false")
         .with_extra_config("[features.current_time_reminder]\nenabled = true\nsleep_tool = true")
         .write(codex_home.path())?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
     let mut app_server = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .with_env_overrides(&[("OPENAI_API_KEY", None)])
@@ -106,59 +101,7 @@ async fn clock_tools_emit_control_tool_analytics() -> Result<()> {
             DEFAULT_READ_TIMEOUT,
         )
         .await?;
-    let turn_event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
-        event["event_type"] == "codex_turn_event" && event["event_params"]["turn_id"] == turn.id
-    })
-    .await?;
     timeout(DEFAULT_READ_TIMEOUT, app_server.shutdown_gracefully()).await??;
-
-    let events = captured_analytics_events(&server).await;
-    let mut control_events = events
-        .iter()
-        .filter(|event| event["event_type"] == "codex_control_tool_call_event")
-        .collect::<Vec<_>>();
-    control_events.sort_by_key(|event| event["event_params"]["item_id"].as_str());
-    assert_eq!(
-        control_events
-            .iter()
-            .map(|event| {
-                let params = &event["event_params"];
-                json!({
-                    "tool": params["tool_name"],
-                    "call": params["item_id"],
-                    "thread": params["thread_id"],
-                    "turn": params["turn_id"],
-                    "status": params["terminal_status"],
-                    "origin": params["originating_response_id"],
-                    "duration": params["execution_duration_ms"].is_u64(),
-                })
-            })
-            .collect::<Vec<_>>(),
-        calls
-            .iter()
-            .enumerate()
-            .map(|(index, (tool, _, status))| json!({
-                "tool": format!("clock.{tool}"),
-                "call": format!("call-{index}"),
-                "thread": thread.id,
-                "turn": turn.id,
-                "status": status,
-                "origin": format!("resp-{index}"),
-                "duration": true,
-            }))
-            .collect::<Vec<_>>()
-    );
-    let control_json = serde_json::to_string(&control_events)?;
-    for private_content in ["PRIVATE_INVALID_DURATION", "It is ", "Sleep completed."] {
-        assert!(!control_json.contains(private_content));
-    }
-    assert_eq!(
-        json!({
-            "total": turn_event["event_params"]["total_tool_call_count"],
-            "dynamic": turn_event["event_params"]["dynamic_tool_call_count"],
-        }),
-        json!({"total": calls.len(), "dynamic": 0})
-    );
     assert_eq!(response_mock.requests().len(), calls.len());
     Ok(())
 }

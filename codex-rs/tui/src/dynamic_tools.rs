@@ -1269,10 +1269,13 @@ async fn background_turn_program(
         }),
     );
     let eligible = provider == "openai"
-        && matches!(
-            account.ok().and_then(|response| response.account),
-            Some(Account::Chatgpt { .. })
-        );
+        && match account.ok().and_then(|response| response.account) {
+            Some(Account::Chatgpt { .. }) => true,
+            // Match interactive turns: an API-key account selects a program
+            // only when enabled, and the catalog below must confirm support.
+            Some(Account::ApiKey {}) => enabled,
+            _ => false,
+        };
     let models = models
         .map(|response| {
             response

@@ -16,15 +16,12 @@ use app_test_support::ChatGptAuthFixture;
 use app_test_support::write_chatgpt_auth;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::AppServerRpcTransport;
 use codex_arg0::Arg0DispatchPaths;
 use codex_config::CloudConfigBundleLoader;
 use codex_config::LoaderOverrides;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
-use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -149,18 +146,13 @@ impl Harness {
             Arc::new(codex_config::NoopThreadConfigLoader),
         );
         let (sender, messages) = mpsc::channel(/*buffer*/ 16);
-        let outgoing = Arc::new(OutgoingMessageSender::new(
-            sender,
-            AnalyticsEventsClient::disabled(),
-        ));
+        let outgoing = Arc::new(OutgoingMessageSender::new(sender));
         let processor = Arc::new(MessageProcessor::new(MessageProcessorArgs {
             outgoing: Arc::clone(&outgoing),
-            analytics_events_client: AnalyticsEventsClient::disabled(),
             arg0_paths: Arg0DispatchPaths::default(),
             config,
             config_manager,
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
-            feedback: CodexFeedback::new(),
             log_db: None,
             state_db: None,
             config_warnings: Vec::new(),
@@ -169,15 +161,6 @@ impl Harness {
             user_verification: Arc::clone(&service),
             installation_id: "11111111-1111-4111-8111-111111111111".into(),
             code_mode_session_provider: None,
-            rpc_transport: match origin {
-                ConnectionOrigin::InProcess => AppServerRpcTransport::InProcess,
-                ConnectionOrigin::Stdio | ConnectionOrigin::RemoteControl => {
-                    AppServerRpcTransport::Stdio
-                }
-                ConnectionOrigin::WebSocket => AppServerRpcTransport::Websocket,
-            },
-            remote_control_handle: None,
-            plugin_startup_tasks: None,
         }));
         Ok(Self {
             processor,
@@ -192,11 +175,7 @@ impl Harness {
                 ConnectionOrigin::WebSocket => AppServerTransport::WebSocket {
                     bind_address: "127.0.0.1:0".parse()?,
                 },
-                // Remote control can share a process whose primary listener is stdio.
-                // Keeping that case tests that authorization uses the connection's origin.
-                ConnectionOrigin::Stdio
-                | ConnectionOrigin::InProcess
-                | ConnectionOrigin::RemoteControl => AppServerTransport::Stdio,
+                ConnectionOrigin::Stdio | ConnectionOrigin::InProcess => AppServerTransport::Stdio,
             },
         })
     }

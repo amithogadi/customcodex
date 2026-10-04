@@ -459,7 +459,6 @@ pub(crate) struct ThreadRequestProcessor {
     pub(super) log_db: Option<LogDbLayer>,
     pub(super) background_tasks: TaskTracker,
     pub(super) skills_watcher: Arc<SkillsWatcher>,
-    pub(super) turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
     pub(super) initial_config_warnings: Arc<Vec<ConfigWarningNotification>>,
 }
 
@@ -498,7 +497,6 @@ impl ThreadRequestProcessor {
         state_db: Option<StateDbHandle>,
         log_db: Option<LogDbLayer>,
         skills_watcher: Arc<SkillsWatcher>,
-        turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
         initial_config_warnings: Vec<ConfigWarningNotification>,
     ) -> Self {
         Self {
@@ -518,7 +516,6 @@ impl ThreadRequestProcessor {
             log_db,
             background_tasks: TaskTracker::new(),
             skills_watcher,
-            turn_cost_worker,
             initial_config_warnings: Arc::new(initial_config_warnings),
         }
     }
@@ -1090,7 +1087,6 @@ impl ThreadRequestProcessor {
             codex_home: self.config.codex_home.to_path_buf(),
             thread_unload_delay: self.config.thread_unload_delay,
             skills_watcher: Arc::clone(&self.skills_watcher),
-            turn_cost_worker: self.turn_cost_worker.clone(),
         }
     }
 
@@ -1221,9 +1217,8 @@ impl ThreadRequestProcessor {
             codex_home: self.config.codex_home.to_path_buf(),
             thread_unload_delay: self.config.thread_unload_delay,
             skills_watcher: Arc::clone(&self.skills_watcher),
-            turn_cost_worker: self.turn_cost_worker.clone(),
         };
-        let request_trace = request_context.request_trace();
+        let request_trace = None;
         let config_manager = self.config_manager.clone();
         let thread_store = Arc::clone(&self.thread_store);
         let initial_config_warnings = Arc::clone(&self.initial_config_warnings);
@@ -1293,22 +1288,13 @@ impl ThreadRequestProcessor {
         }
     }
 
-    async fn request_trace_context(
-        &self,
-        request_id: &ConnectionRequestId,
-    ) -> Option<codex_protocol::protocol::W3cTraceContext> {
-        self.outgoing.request_trace_context(request_id).await
-    }
-
     async fn submit_core_op(
         &self,
         request_id: &ConnectionRequestId,
         thread: &CodexThread,
         op: Op,
     ) -> CodexResult<String> {
-        thread
-            .submit_with_trace(op, self.request_trace_context(request_id).await)
-            .await
+        thread.submit(op).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1506,7 +1492,6 @@ impl ThreadRequestProcessor {
                 history_mode,
                 thread_source,
                 dynamic_tools,
-                metrics_service_name: service_name,
                 parent_trace: request_trace,
                 environments: Some(environments),
                 thread_extension_init,
@@ -1541,12 +1526,6 @@ impl ThreadRequestProcessor {
                 });
             }
         };
-        let session_telemetry = thread.session_telemetry();
-        session_telemetry.record_startup_phase(
-            "thread_start_create_thread",
-            create_thread_started_at.elapsed(),
-            Some("ready"),
-        );
 
         Self::set_app_server_client_info(
             thread.as_ref(),
@@ -1653,11 +1632,6 @@ impl ThreadRequestProcessor {
                 otel.name = "app_server.thread_start.notify_started",
             ))
             .await;
-        session_telemetry.record_startup_phase(
-            "thread_start_total",
-            thread_start_started_at.elapsed(),
-            Some("ready"),
-        );
         Ok(())
     }
 
@@ -2290,7 +2264,7 @@ impl ThreadRequestProcessor {
                 config,
                 thread_history,
                 self.auth_manager.clone(),
-                self.request_trace_context(request_id).await,
+                None,
                 client_mcp_extensions,
             )
             .await
@@ -3988,9 +3962,7 @@ impl ThreadRequestProcessor {
                 thread_history,
                 self.auth_manager.clone(),
                 match target {
-                    ThreadResumeTarget::Client(request_id) => {
-                        self.request_trace_context(request_id).await
-                    }
+                    ThreadResumeTarget::Client(request_id) => None,
                     ThreadResumeTarget::DaemonRecovery(_) => None,
                 },
                 client_mcp_extensions,
@@ -5114,7 +5086,7 @@ impl ThreadRequestProcessor {
         let goals_enabled = config.features.enabled(Feature::Goals);
 
         let fallback_model_provider = config.model_provider_id.clone();
-        let parent_trace = self.request_trace_context(&request_id).await;
+        let parent_trace = None;
         let thread_source = thread_source.map(Into::into);
 
         let mut history_items = if prepared_fork.is_some() {

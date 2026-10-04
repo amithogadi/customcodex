@@ -1,4 +1,4 @@
-use crate::process_telemetry::ProcessTelemetry;
+use crate::process_log::ProcessLogContext;
 use codex_exec_server_protocol::JSONRPCErrorError;
 
 use crate::ExecServerRuntimeOptions;
@@ -14,7 +14,6 @@ use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
-use crate::telemetry::ExecServerTelemetry;
 
 #[derive(Clone)]
 pub(crate) struct ProcessHandler {
@@ -24,11 +23,10 @@ pub(crate) struct ProcessHandler {
 impl ProcessHandler {
     pub(crate) fn new(
         notifications: RpcNotificationSender,
-        telemetry: ExecServerTelemetry,
         runtime_paths: ExecServerRuntimeOptions,
     ) -> Self {
         Self {
-            process: LocalProcess::new(notifications, telemetry, runtime_paths),
+            process: LocalProcess::new(notifications, runtime_paths),
         }
     }
 
@@ -43,7 +41,7 @@ impl ProcessHandler {
     pub(crate) async fn exec(
         &self,
         params: ExecParams,
-        telemetry: ProcessTelemetry,
+        telemetry: ProcessLogContext,
     ) -> Result<ExecResponse, JSONRPCErrorError> {
         self.process.exec(params, telemetry).await
     }

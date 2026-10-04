@@ -1,9 +1,9 @@
 mod delegate;
+mod diagnostics;
 mod execute_handler;
 pub(crate) mod execute_spec;
 mod output;
 mod response_adapter;
-mod telemetry;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
@@ -356,13 +356,13 @@ fn submit_nested_tool(
     // A cell can outlive a turn; the broker records arrival before a dispatching turn is known.
     tracing::event!(
         name: "codex.code_mode.nested_tool_dispatched",
-        target: "codex_otel.trace_safe",
+        target: "codex.trace_safe",
         tracing::Level::INFO,
         event.name = "codex.code_mode.nested_tool_dispatched",
         conversation.id = %thread_id,
         turn_id = turn_id.as_str(),
-        cell.id = telemetry::trace_id(cell_id.as_str()),
-        runtime_tool_call_id = telemetry::trace_id(&runtime_tool_call_id),
+        cell.id = diagnostics::trace_id(cell_id.as_str()),
+        runtime_tool_call_id = diagnostics::trace_id(&runtime_tool_call_id),
         call_id = call_id.as_str(),
     );
     let payload = if is_exec_tool_name(&tool_name) {
@@ -390,15 +390,6 @@ fn submit_nested_tool(
         payload,
         encrypted_function_args: None,
     };
-    session
-        .services
-        .analytics_events_client
-        .track_code_mode_tool_call(codex_analytics::CodeModeToolCallFact::ChildStarted {
-            thread_id: session.thread_id.to_string(),
-            turn_id: step_context.turn.sub_id.clone(),
-            call_id: call.call_id.clone(),
-            cell_id: cell_id.to_string(),
-        });
     let result = tool_runtime.handle_tool_call_with_source(
         step_context,
         call,

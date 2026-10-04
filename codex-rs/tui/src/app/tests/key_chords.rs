@@ -733,85 +733,6 @@ async fn command_center_chords_do_not_capture_search_text() -> Result<()> {
 }
 
 #[tokio::test]
-async fn transcript_fixed_keys_take_precedence_over_pager_chord_prefixes() -> Result<()> {
-    let (mut app, mut tui, mut app_server) = chord_app().await?;
-    app.keymap = RuntimeKeymap::from_config(&serde_json::from_value(serde_json::json!({
-        "global": {"copy": ["ctrl-x ctrl-u"]},
-        "pager": {
-            "scroll_up": ["ctrl-space x", "ctrl-home x", "ctrl-end x"],
-            "close_transcript": ["ctrl-x ctrl-u"]
-        }
-    }))?)
-    .expect("valid pager chords");
-    app.chat_widget.insert_str("draft");
-    for owned in [true, false] {
-        tui.set_owned_screen(owned)?;
-        app.open_transcript_overlay(&mut tui);
-        for code in [KeyCode::Home, KeyCode::End, KeyCode::Char(' ')] {
-            let key = KeyEvent::new(code, KeyModifiers::CONTROL);
-            assert_eq!(app.route_key_chord_event(&mut tui, key), Some(key));
-            assert!(!app.key_chord_matcher.is_pending());
-        }
-        press(&mut app, &mut tui, &mut app_server, ctrl('x')).await?;
-        press(&mut app, &mut tui, &mut app_server, ctrl('u')).await?;
-        assert!(app.overlay.is_none());
-        assert!(!app.transcript_view.is_detailed());
-        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft");
-    }
-    app.transcript_cells = vec![std::sync::Arc::new(
-        crate::history_cell::PlainHistoryCell::new(
-            (0..50).map(|_| "transcript row".into()).collect(),
-        ),
-    )];
-    tui.set_owned_screen(/*owned*/ true)?;
-    let home = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL);
-    for (binding, keys) in [
-        ("ctrl-home", vec![home]),
-        ("ctrl-home ctrl-u", vec![home, ctrl('u')]),
-        ("ctrl-x ctrl-home", vec![ctrl('x'), home]),
-    ] {
-        app.keymap = RuntimeKeymap::from_config(&toml::from_str(&format!(
-            "[pager]\nclose_transcript = '{binding}'\n[global]\nopen_external_editor = '{binding}'"
-        ))?)
-        .expect("valid close binding");
-        app.open_transcript_overlay(&mut tui);
-        app.render_owned_transcript(
-            &mut tui,
-            ratatui::layout::Size::new(/*width*/ 80, /*height*/ 12),
-        )?;
-        app.transcript_view
-            .scroll(&app.transcript_cells, /*rows*/ -10);
-        assert!(app.transcript_view.can_return_to_latest());
-        for key in &keys {
-            press(&mut app, &mut tui, &mut app_server, *key).await?;
-        }
-        assert!(!app.transcript_view.is_detailed());
-        assert_eq!(app.chat_widget.composer_text_with_pending(), "draft");
-        for key in keys {
-            press(&mut app, &mut tui, &mut app_server, key).await?;
-        }
-        assert_eq!(
-            app.chat_widget.external_editor_state(),
-            crate::chatwidget::ExternalEditorState::Requested
-        );
-        app.reset_external_editor_state(&mut tui);
-    }
-    for voice in ["f9", "f9 v"] {
-        app.keymap = RuntimeKeymap::from_config(&toml::from_str(&format!(
-            "[chat]\ntoggle_voice = '{voice}'\n[pager]\nclose_transcript = 'f9'"
-        ))?)
-        .unwrap();
-        app.open_transcript_overlay(&mut tui);
-        press(&mut app, &mut tui, &mut app_server, KeyCode::F(9).into()).await?;
-        assert!(!app.transcript_view.is_detailed());
-        assert!(!app.key_chord_matcher.is_pending());
-    }
-    tui.set_owned_screen(/*owned*/ false)?;
-    app_server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn selection_after_live_commit_uses_the_refreshed_frame() -> Result<()> {
     let (mut app, mut tui, mut app_server) = chord_app().await?;
     let area = ratatui::layout::Rect::new(
@@ -871,27 +792,5 @@ async fn selection_after_live_commit_uses_the_refreshed_frame() -> Result<()> {
     .await?;
     app.close_transcript_overlay(&mut tui);
     app_server.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn key_capture_receives_voice_shortcut_and_chord_prefix() -> Result<()> {
-    let (mut app, mut rx, _op_rx) = super::make_test_app_with_channels().await;
-    let mut app_server = start_config_write_test_app_server(&app).await?;
-    let mut tui = crate::tui::test_support::make_test_tui()?;
-    for config in ["", "[chat]\ntoggle_voice = 'f8 v'"] {
-        app.keymap = RuntimeKeymap::from_config(&toml::from_str(config)?).unwrap();
-        app.chat_widget.open_keymap_capture(
-            "composer".into(),
-            "submit".into(),
-            crate::app_event::KeymapEditIntent::ReplaceAll,
-            crate::app_event::KeymapCaptureMode::SingleKey,
-            &app.keymap,
-        );
-        press(&mut app, &mut tui, &mut app_server, KeyCode::F(8).into()).await?;
-        assert!(
-            matches!(rx.try_recv()?, crate::app_event::AppEvent::KeymapCaptured { key, .. } if key == "f8")
-        );
-    }
     Ok(())
 }

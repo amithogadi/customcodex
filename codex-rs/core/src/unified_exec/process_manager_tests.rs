@@ -146,10 +146,6 @@ fn exec_env_policy_excludes_non_inheritable_and_runtime_variables() {
                 "codex_apply_patch_preserve_line_endings".to_string(),
                 "1".to_string(),
             ),
-            (
-                "codex_plugin_metrics_output".to_string(),
-                "/stale/sidecar".to_string(),
-            ),
             ("KEEP".to_string(), "value".to_string()),
         ]),
         ..Default::default()
@@ -164,7 +160,6 @@ fn exec_env_policy_excludes_non_inheritable_and_runtime_variables() {
                 CODEX_PERMISSION_PROFILE_ENV_VAR.to_string(),
                 CODEX_VERSION_ENV_VAR.to_string(),
                 codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR.to_string(),
-                PLUGIN_METRICS_OUTPUT_ENV_VAR.to_string(),
             ],
             r#set: HashMap::from([("KEEP".to_string(), "value".to_string())]),
             include_only: Vec::new(),
@@ -502,7 +497,6 @@ async fn failed_initial_end_for_unstored_process_uses_fallback_output() {
         &request,
         #[allow(deprecated)]
         turn.cwd.clone().into(),
-        /*plugin_attribution*/ None,
         output_buffer,
         "PRE_DENIAL_MARKER".to_string(),
         "Network access denied".to_string(),
@@ -642,7 +636,6 @@ async fn pruning_does_not_evict_live_process_while_exited_process_is_finalizing(
                 } else {
                     Arc::clone(&live_process)
                 },
-                plugin_metrics_sidecar: None,
                 call_id: format!("call-{process_id}"),
                 process_id,
                 cwd: cwd.clone(),

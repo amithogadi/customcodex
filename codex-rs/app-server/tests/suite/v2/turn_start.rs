@@ -117,10 +117,6 @@ use wiremock::matchers::body_partial_json;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
-use super::analytics::mount_analytics_capture;
-use super::analytics::wait_for_analytics_event;
-use super::analytics::wait_for_matching_analytics_event;
-
 #[cfg(windows)]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 #[cfg(not(windows))]
@@ -358,13 +354,8 @@ async fn turn_start_omits_notification_media_without_changing_model_input() -> R
     Ok(())
 }
 
-#[test_case(None; "analytics_unset")]
-#[test_case(Some(true); "analytics_enabled")]
-#[test_case(Some(false); "analytics_disabled")]
 #[tokio::test]
-async fn tool_call_metadata_stays_out_of_raw_response_item_notifications(
-    analytics_enabled: Option<bool>,
-) -> Result<()> {
+async fn tool_call_metadata_stays_out_of_raw_response_item_notifications() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let arguments = json!({"query": "redaction"});
@@ -410,29 +401,14 @@ async fn tool_call_metadata_stays_out_of_raw_response_item_notifications(
         .mount(&server)
         .await;
     let codex_home = TempDir::new()?;
-    let mut config = MockResponsesConfig::new(&server.uri())
-        .with_provider_name("OpenAI")
+    let config = MockResponsesConfig::new(&server.uri())
         .with_provider_config("supports_websockets = false")
-        .with_root_config(&format!(
-            "chatgpt_base_url = \"{}\"\ncli_auth_credentials_store = \"file\"",
+        .with_extra_config(&format!(
+            "[mcp_servers.codex_apps]\nurl = \"{}/api/codex/ps/mcp\"\ndefault_tools_approval_mode = \"approve\"",
             apps.chatgpt_base_url
         ))
-        .enable_feature(Feature::Apps)
         .enable_feature(Feature::ExecutedToolCallMetadata);
-    if let Some(enabled) = analytics_enabled {
-        config = config.with_extra_config(&format!("[analytics]\nenabled = {enabled}"));
-    }
     config.write(codex_home.path())?;
-    write_chatgpt_auth(
-        codex_home.path(),
-        ChatGptAuthFixture::new("chatgpt-test-token")
-            .account_id("account-123")
-            .chatgpt_account_id("account-123")
-            .chatgpt_user_id("user-123")
-            .email("employee@openai.com"),
-        AuthCredentialsStoreMode::File,
-    )?;
-
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
         .build_initialized()
@@ -538,11 +514,11 @@ async fn tool_call_metadata_stays_out_of_raw_response_item_notifications(
         .find(|item| item["type"] == "function_call_output" && item["call_id"] == "mcp-call")
         .context("persisted MCP output")?;
     assert_eq!(captured["output"], raw_output["output"]);
-    // The custom inference endpoint omits raw metadata, so verify capture in the rollout.
+    // Private MCP result metadata is also excluded from persisted tool observations.
     assert_eq!(
         captured["internal_chat_message_metadata_passthrough"]["executed_tool_calls"][0]
             .get("tool_result_metadata"),
-        (analytics_enabled != Some(false)).then_some(&result_metadata),
+        None,
     );
     Ok(())
 }
@@ -556,7 +532,6 @@ async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
     MockResponsesConfig::new(&server.uri())
         .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
         .write(codex_home.path())?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -604,15 +579,6 @@ async fn turn_start_with_empty_input_runs_model_request() -> Result<()> {
         &completed.turn.items[..],
         [ThreadItem::AgentMessage { text, .. }] if text == "Done"
     ));
-
-    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
-    assert_eq!(
-        (
-            event["event_params"]["turn_id"].as_str(),
-            event["event_params"]["root_turn_id"].as_str(),
-        ),
-        (Some(turn.id.as_str()), Some(turn.id.as_str()))
-    );
 
     let requests = server
         .received_requests()
@@ -1370,7 +1336,7 @@ async fn thread_start_omits_empty_instruction_overrides_from_model_request() -> 
 }
 
 #[tokio::test]
-async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
+async fn turn_start_preserves_metadata_across_provider_retry() -> Result<()> {
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_response_sequence(
         &server,
@@ -1396,7 +1362,6 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
     let config = std::fs::read_to_string(&config_path)?
         .replace("stream_max_retries = 0", "stream_max_retries = 1");
     std::fs::write(config_path, config)?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -1441,388 +1406,15 @@ async fn turn_start_tracks_thread_originator_in_analytics() -> Result<()> {
     )
     .await??;
 
-    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
-    assert_eq!(event["event_params"]["thread_id"], thread.id);
-    assert_eq!(event["event_params"]["session_id"], thread.session_id);
-    assert_eq!(event["event_params"]["turn_id"], turn.id);
-    assert_eq!(event["event_params"]["root_turn_id"], turn.id);
     let request = response_mock.requests()[0].body_json();
     let request_metadata: Value = serde_json::from_str(
         request["client_metadata"]["x-codex-turn-metadata"]
             .as_str()
             .context("expected turn metadata")?,
     )?;
-    assert_eq!(
-        json!({
-            "eventTrigger": event["event_params"]["turn_trigger"],
-            "eventSource": event["event_params"]["codex_turn_source"],
-            "requestTrigger": request_metadata["turn_trigger"],
-            "requestSource": request_metadata["source"],
-        }),
-        json!({
-            "eventTrigger": "user",
-            "eventSource": "composer",
-            "requestTrigger": "user",
-            "requestSource": "composer",
-        })
-    );
-    assert_eq!(
-        event["event_params"]["app_server_client"]["product_client_id"],
-        "codex_work_desktop"
-    );
-    assert_eq!(event["event_params"]["model"], "mock-model");
-    assert_eq!(event["event_params"]["model_provider"], "mock_provider");
-    assert_eq!(event["event_params"]["sandbox_policy"], "read_only");
-    assert_eq!(event["event_params"]["workspace_kind"], "projectless");
-    assert_eq!(event["event_params"]["ephemeral"], false);
-    assert_eq!(event["event_params"]["thread_source"], "user");
-    assert_eq!(event["event_params"]["initialization_mode"], "new");
-    assert_eq!(
-        event["event_params"]["subagent_source"],
-        serde_json::Value::Null
-    );
-    assert_eq!(
-        event["event_params"]["parent_thread_id"],
-        serde_json::Value::Null
-    );
-    assert_eq!(event["event_params"]["num_input_images"], 1);
-    assert_eq!(
-        event["event_params"]["image_preparations"],
-        json!([{
-            "message_role": "user",
-            "item_id": null,
-            "effective_detail": "high",
-            "source_width": 1,
-            "source_height": 1,
-            "prepared_width": 1,
-            "prepared_height": 1,
-        }])
-    );
-    assert_eq!(event["event_params"]["status"], "completed");
-    assert!(event["event_params"]["started_at"].as_u64().is_some());
-    assert!(event["event_params"]["completed_at"].as_u64().is_some());
-    assert!(event["event_params"]["duration_ms"].as_u64().is_some());
-    assert_eq!(event["event_params"]["input_tokens"], 0);
-    assert_eq!(event["event_params"]["cached_input_tokens"], 0);
-    assert_eq!(event["event_params"]["output_tokens"], 0);
-    assert_eq!(event["event_params"]["reasoning_output_tokens"], 0);
-    assert_eq!(event["event_params"]["total_tokens"], 0);
-    let params = &event["event_params"];
-    let timings_are_numbers = [
-        "before_first_sampling_ms",
-        "sampling_ms",
-        "between_sampling_overhead_ms",
-        "tool_blocking_ms",
-        "after_last_sampling_ms",
-    ]
-    .into_iter()
-    .all(|field| params[field].as_u64().is_some());
-    assert_eq!(
-        json!({
-            "timingsAreNumbers": timings_are_numbers,
-            "toolBlockingMs": params["tool_blocking_ms"],
-            "samplingRequestCount": params["sampling_request_count"],
-            "samplingRetryCount": params["sampling_retry_count"],
-            "responseRequestCount": response_mock.requests().len(),
-        }),
-        json!({
-            "timingsAreNumbers": true,
-            "toolBlockingMs": 0,
-            "samplingRequestCount": 2,
-            "samplingRetryCount": 1,
-            "responseRequestCount": 2,
-        })
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_mode_exec_emits_correlated_production_analytics() -> Result<()> {
-    let server = responses::start_mock_server().await;
-    let _responses = responses::mount_sse_sequence(
-        &server,
-        vec![
-            responses::sse(vec![
-                responses::ev_response_created("resp-1"),
-                responses::ev_custom_tool_call("exec-1", "exec", "text('analytics');"),
-                responses::ev_completed("resp-1"),
-            ]),
-            responses::sse(vec![responses::ev_completed("resp-2")]),
-        ],
-    )
-    .await;
-    let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .enable_feature(Feature::CodeModeOnly)
-        .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
-        .write(codex_home.path())?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
-
-    let mut app_server = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_managed_config()
-        .build_initialized()
-        .await?;
-    let params = ThreadStartParams::default();
-    let thread = app_server.start_thread(params).await?;
-    let turn = app_server
-        .start_turn_and_wait_for_completion(TurnStartParams {
-            thread_id: thread.thread.id,
-            input: vec![V2UserInput::Text {
-                text: "run exec".to_string(),
-                text_elements: Vec::new(),
-            }],
-            ..Default::default()
-        })
-        .await?;
-
-    let event = wait_for_analytics_event(
-        &server,
-        DEFAULT_READ_TIMEOUT,
-        "codex_dynamic_tool_call_event",
-    )
-    .await?;
-    assert_eq!(
-        json!({
-            "turnId": event["event_params"]["turn_id"],
-            "rootTurnId": event["event_params"]["root_turn_id"],
-            "tool": event["event_params"]["tool_name"],
-            "origin": event["event_params"]["originating_response_id"],
-            "subsequent": event["event_params"]["subsequent_response_id"],
-            "hasCell": event["event_params"]["cell_id"].as_str().is_some(),
-        }),
-        json!({
-            "turnId": turn.turn.id,
-            "rootTurnId": turn.turn.id,
-            "tool": "exec",
-            "origin": "resp-1",
-            "subsequent": "resp-2",
-            "hasCell": true,
-        })
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()> {
-    let control_tools = [
-        ("call1", "request_user_input", json!({})),
-        (
-            "plan-call",
-            "update_plan",
-            json!({"plan": [{"step": "PRIVATE_PLAN", "status": "in_progress"}]}),
-        ),
-        (
-            "image-call",
-            "view_image",
-            json!({"path": "PRIVATE_IMAGE_PATH.png"}),
-        ),
-        ("get-goal-call", "get_goal", json!({})),
-        (
-            "create-goal-call",
-            "create_goal",
-            json!({"objective": "PRIVATE_GOAL"}),
-        ),
-        (
-            "update-goal-call",
-            "update_goal",
-            json!({"status": "complete"}),
-        ),
-    ];
-    let mut responses = vec![
-        create_request_user_input_sse_response("call1")?,
-        create_final_assistant_message_sse_response("Done")?,
-    ];
-    responses.extend(control_tools.iter().skip(1).map(|(call_id, tool, args)| {
-        let response_id = format!("resp-{call_id}");
-        responses::sse(vec![
-            responses::ev_response_created(&response_id),
-            responses::ev_function_call(call_id, tool, &args.to_string()),
-            responses::ev_completed(&response_id),
-        ])
-    }));
-    responses.push(create_final_assistant_message_sse_response("Done")?);
-    let server = create_mock_responses_server_sequence(responses).await;
-
-    let codex_home = TempDir::new()?;
-    MockResponsesConfig::new(&server.uri())
-        .enable_feature(Feature::Goals)
-        .with_root_config(&format!(
-            "chatgpt_base_url = \"{}\"\ntools.update_plan.enabled = true",
-            server.uri()
-        ))
-        .write(codex_home.path())?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
-
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_managed_config()
-        .build_initialized()
-        .await?;
-
-    let ThreadStartResponse { thread, .. } = mcp
-        .start_thread(ThreadStartParams {
-            model: Some("mock-model".to_string()),
-            ..Default::default()
-        })
-        .await?;
-
-    let TurnStartResponse { turn: first_turn } = mcp
-        .request(|request_id| ClientRequest::TurnStart {
-            request_id,
-            params: TurnStartParams {
-                thread_id: thread.id.clone(),
-                client_user_message_id: None,
-                input: vec![V2UserInput::Text {
-                    text: "ask something".to_string(),
-                    text_elements: Vec::new(),
-                }],
-                collaboration_mode: Some(CollaborationMode {
-                    mode: ModeKind::Plan,
-                    settings: Settings {
-                        model: "mock-model".to_string(),
-                        reasoning_effort: Some(ReasoningEffort::Medium),
-                        developer_instructions: None,
-                    },
-                }),
-                ..Default::default()
-            },
-        })
-        .await?;
-
-    let server_req = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_request_message(),
-    )
-    .await??;
-    let ServerRequest::ToolRequestUserInput { request_id, .. } = server_req else {
-        panic!("expected ToolRequestUserInput request, got: {server_req:?}");
-    };
-    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    mcp.send_response(
-        request_id,
-        json!({
-            "answers": {
-                "confirm_path": { "answers": ["yes"] }
-            }
-        }),
-    )
-    .await?;
-
-    timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
-    .await??;
-
-    let event = wait_for_analytics_event(&server, DEFAULT_READ_TIMEOUT, "codex_turn_event").await?;
-    let params = &event["event_params"];
-    assert_eq!(
-        json!({
-            "turnId": params["turn_id"],
-            "rootTurnId": params["root_turn_id"],
-            "toolBlockingIsPositive": params["tool_blocking_ms"]
-                .as_u64()
-                .is_some_and(|duration| duration > 0),
-            "samplingRequestCount": params["sampling_request_count"],
-            "samplingRetryCount": params["sampling_retry_count"],
-            "totalToolCalls": params["total_tool_call_count"],
-            "dynamicToolCalls": params["dynamic_tool_call_count"],
-            "status": params["status"],
-        }),
-        json!({
-            "turnId": first_turn.id,
-            "rootTurnId": first_turn.id,
-            "toolBlockingIsPositive": true,
-            "samplingRequestCount": 2,
-            "samplingRetryCount": 0,
-            "totalToolCalls": 1,
-            "dynamicToolCalls": 0,
-            "status": "completed",
-        })
-    );
-
-    let second_turn = mcp
-        .start_turn_and_wait_for_completion(TurnStartParams {
-            thread_id: thread.id.clone(),
-            input: vec![V2UserInput::Text {
-                text: "run the other control tools".to_string(),
-                text_elements: Vec::new(),
-            }],
-            collaboration_mode: Some(CollaborationMode {
-                mode: ModeKind::Default,
-                settings: Settings {
-                    model: "mock-model".to_string(),
-                    reasoning_effort: Some(ReasoningEffort::Medium),
-                    developer_instructions: None,
-                },
-            }),
-            ..Default::default()
-        })
-        .await?;
-
-    for (call_id, tool_name, _) in control_tools {
-        let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
-            event["event_type"] == "codex_control_tool_call_event"
-                && event["event_params"]["item_id"] == call_id
-        })
-        .await?;
-        let success = tool_name != "view_image";
-        let turn_id = if call_id == "call1" {
-            &first_turn.id
-        } else {
-            &second_turn.turn.id
-        };
-        assert_eq!(
-            json!({
-                "turnId": event["event_params"]["turn_id"],
-                "rootTurnId": event["event_params"]["root_turn_id"],
-                "tool": event["event_params"]["tool_name"],
-                "success": event["event_params"]["success"],
-                "status": event["event_params"]["terminal_status"],
-                "hasOrigin": event["event_params"]["originating_response_id"]
-                    .as_str()
-                    .is_some(),
-            }),
-            json!({
-                "turnId": turn_id,
-                "rootTurnId": turn_id,
-                "tool": tool_name,
-                "success": success,
-                "status": if success { "completed" } else { "failed" },
-                "hasOrigin": true,
-            })
-        );
-        let serialized = event.to_string();
-        assert!(
-            ![
-                "PRIVATE_PLAN",
-                "PRIVATE_IMAGE_PATH",
-                "PRIVATE_GOAL",
-                "Proceed with the plan?"
-            ]
-            .iter()
-            .any(|private_input| serialized.contains(private_input)),
-            "tool-call analytics must not contain private tool arguments: {serialized}"
-        );
-    }
-
-    let second_turn_event =
-        wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
-            event["event_type"] == "codex_turn_event"
-                && event["event_params"]["turn_id"] == second_turn.turn.id
-        })
-        .await?;
-    assert_eq!(
-        json!({
-            "rootTurnId": second_turn_event["event_params"]["root_turn_id"],
-            "total": second_turn_event["event_params"]["total_tool_call_count"],
-            "dynamic": second_turn_event["event_params"]["dynamic_tool_call_count"],
-        }),
-        json!({"rootTurnId": second_turn.turn.id, "total": 5, "dynamic": 0})
-    );
+    assert_eq!(request_metadata["turn_trigger"], "user");
+    assert_eq!(request_metadata["source"], "composer");
+    assert_eq!(response_mock.requests().len(), 2);
 
     Ok(())
 }
@@ -4365,7 +3957,6 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
             server.uri()
         ))
         .write(codex_home.path())?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -4471,31 +4062,19 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
     );
     assert_eq!(agent_state.message, None);
 
-    let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            let turn_completed: TurnCompletedNotification =
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        let mut parent_completed = false;
+        let mut child_completed = false;
+        while !parent_completed || !child_completed {
+            let completed: TurnCompletedNotification =
                 mcp.read_notification("turn/completed").await?;
-            if turn_completed.thread_id == thread.id && turn_completed.turn.id == turn.turn.id {
-                return Ok::<TurnCompletedNotification, anyhow::Error>(turn_completed);
-            }
+            parent_completed |=
+                completed.thread_id == thread.id && completed.turn.id == turn.turn.id;
+            child_completed |= completed.thread_id == receiver_thread_id;
         }
+        Ok::<(), anyhow::Error>(())
     })
     .await??;
-    assert_eq!(turn_completed.thread_id, thread.id);
-    assert_eq!(turn_completed.turn.id, turn.turn.id);
-
-    let child_turn_event =
-        wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
-            event["event_type"] == "codex_turn_event"
-                && event["event_params"]["thread_id"] == receiver_thread_id
-        })
-        .await?;
-    let child_tool_event =
-        wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
-            event["event_type"] == "codex_control_tool_call_event"
-                && event["event_params"]["item_id"] == CHILD_PLAN_CALL_ID
-        })
-        .await?;
     let child_request = child_turn
         .requests()
         .into_iter()
@@ -4506,20 +4085,7 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         .as_str()
         .context("child request should have a turn id")?;
     assert_ne!(child_turn_id, turn.turn.id);
-    for event in [child_turn_event, child_tool_event] {
-        assert_eq!(
-            json!({
-                "thread_id": event["event_params"]["thread_id"],
-                "turn_id": event["event_params"]["turn_id"],
-                "root_turn_id": event["event_params"]["root_turn_id"],
-            }),
-            json!({
-                "thread_id": receiver_thread_id,
-                "turn_id": child_turn_id,
-                "root_turn_id": turn.turn.id,
-            })
-        );
-    }
+    responses::assert_root_turn(&child_request, Some(turn.turn.id.as_str()))?;
 
     // Reuse this live spawn setup to cover thread/delete's ThreadManager descendant path.
     let _: ThreadDeleteResponse = mcp
@@ -4607,7 +4173,6 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected(
         .with_root_config(&format!("chatgpt_base_url = \"{}\"", server.uri()))
         .write(codex_home.path())?;
     write_models_cache(codex_home.path()).await?;
-    mount_analytics_capture(&server, codex_home.path()).await?;
 
     let mut mcp = TestAppServer::builder()
         .with_codex_home(codex_home.path())
@@ -4841,26 +4406,6 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected(
             }),
         ),
         (
-            "thread/realtime/start",
-            json!({
-                "outputModality": "text",
-                "realtimeStartInstructions": "Replace the child's instructions.",
-            }),
-        ),
-        (
-            "thread/realtime/appendText",
-            json!({"text": "Steer the child through realtime."}),
-        ),
-        (
-            "thread/realtime/appendAudio",
-            json!({"audio": {"data": "AAA=", "sampleRate": 24000, "numChannels": 1}}),
-        ),
-        (
-            "thread/realtime/appendSpeech",
-            json!({"text": "Speak through the child."}),
-        ),
-        ("thread/realtime/stop", json!({})),
-        (
             "thread/goal/set",
             json!({"objective": "Replace the child's goal."}),
         ),
@@ -4883,63 +4428,6 @@ async fn direct_input_to_multi_agent_v2_subagent_is_rejected(
             "{method}",
         );
     }
-
-    let event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
-        event["event_type"] == "codex_collab_agent_tool_call_event"
-            && event["event_params"]["item_id"] == SPAWN_CALL_ID
-    })
-    .await?;
-    assert_eq!(
-        json!({
-            "tool_name": event["event_params"]["tool_name"],
-            "sender_thread_id": event["event_params"]["sender_thread_id"],
-            "receiver_thread_ids": event["event_params"]["receiver_thread_ids"],
-            "agent_state_count": event["event_params"]["agent_state_count"],
-            "terminal_status": event["event_params"]["terminal_status"],
-        }),
-        json!({
-            "tool_name": "spawn_agent",
-            "sender_thread_id": thread.id,
-            "receiver_thread_ids": [child_thread_id],
-            "agent_state_count": 1,
-            "terminal_status": "completed",
-        })
-    );
-    let duration_ms = event["event_params"]["duration_ms"]
-        .as_u64()
-        .context("successful spawn should report its execution duration")?;
-    assert_eq!(event["event_params"]["execution_duration_ms"], duration_ms);
-    assert!(!event.to_string().contains(CHILD_PROMPT));
-
-    let failed_event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
-        event["event_type"] == "codex_collab_agent_tool_call_event"
-            && event["event_params"]["item_id"] == FAILED_SPAWN_CALL_ID
-    })
-    .await?;
-    assert_eq!(
-        json!({
-            "tool_name": failed_event["event_params"]["tool_name"],
-            "receiver_thread_count": failed_event["event_params"]["receiver_thread_count"],
-            "receiver_thread_ids": failed_event["event_params"]["receiver_thread_ids"],
-            "terminal_status": failed_event["event_params"]["terminal_status"],
-            "failure_kind": failed_event["event_params"]["failure_kind"],
-        }),
-        json!({
-            "tool_name": "spawn_agent",
-            "receiver_thread_count": 0,
-            "receiver_thread_ids": [],
-            "terminal_status": "failed",
-            "failure_kind": "tool_error",
-        })
-    );
-    assert!(!failed_event.to_string().contains(CHILD_PROMPT));
-
-    let turn_event = wait_for_matching_analytics_event(&server, DEFAULT_READ_TIMEOUT, |event| {
-        event["event_type"] == "codex_turn_event" && event["event_params"]["thread_id"] == thread.id
-    })
-    .await?;
-    assert_eq!(turn_event["event_params"]["subagent_tool_call_count"], 2);
-    assert_eq!(turn_event["event_params"]["total_tool_call_count"], 2);
 
     Ok(())
 }

@@ -9,7 +9,7 @@ use pretty_assertions::assert_eq;
 #[tokio::test]
 async fn user_verification_cancel_only_signals_matching_native_request_contexts() {
     let (tx, _rx) = mpsc::channel(/*buffer*/ 1);
-    let outgoing = OutgoingMessageSender::new(tx, AnalyticsEventsClient::disabled());
+    let outgoing = OutgoingMessageSender::new(tx);
     for method in [
         "userVerification/status",
         "userVerification/enroll",
@@ -22,12 +22,7 @@ async fn user_verification_cancel_only_signals_matching_native_request_contexts(
             connection_id: ConnectionId(1),
             request_id: RequestId::Integer(7),
         };
-        let context = RequestContext::new(
-            target.clone(),
-            method,
-            Span::none(),
-            /*parent_trace*/ None,
-        );
+        let context = RequestContext::new(target.clone(), method, Span::none());
         let cancellation = context.cancellation.clone();
         outgoing.register_request_context(context).await;
         for wrong_target in [
@@ -65,7 +60,7 @@ async fn user_verification_cancel_only_signals_matching_native_request_contexts(
 async fn user_verification_cancel_remains_effective_until_proof_enqueue_and_cleans_up() {
     for close_receiver in [false, true] {
         let (tx, mut rx) = mpsc::channel(/*buffer*/ 1);
-        let outgoing = OutgoingMessageSender::new(tx, AnalyticsEventsClient::disabled());
+        let outgoing = OutgoingMessageSender::new(tx);
         let target = ConnectionRequestId {
             connection_id: ConnectionId(1),
             request_id: RequestId::String("verify".into()),
@@ -73,12 +68,7 @@ async fn user_verification_cancel_remains_effective_until_proof_enqueue_and_clea
         outgoing
             .send_response(target.clone(), UserVerificationDeleteResponse {})
             .await;
-        let context = RequestContext::new(
-            target.clone(),
-            "userVerification/verify",
-            Span::none(),
-            /*parent_trace*/ None,
-        );
+        let context = RequestContext::new(target.clone(), "userVerification/verify", Span::none());
         let cancellation = context.cancellation.clone();
         outgoing.register_request_context(context).await;
         let response = UserVerificationVerifyResponse {

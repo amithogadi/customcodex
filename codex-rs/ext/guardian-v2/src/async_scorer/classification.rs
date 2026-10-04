@@ -6,9 +6,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::time::SystemTime;
 
-use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::GuardianV2Event;
-use codex_analytics::GuardianV2EventKind;
 use codex_core::CodexThread;
 use codex_core::GuardianAuthorizationVersion;
 use codex_core::GuardianRootSnapshot;
@@ -20,7 +17,6 @@ use codex_core::context::GuardianReviewEvidenceFragment;
 use codex_core::context::GuardianReviewEvidenceRecord;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionEventSink;
-use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionWarning;
 use codex_extension_api::McpToolContext;
 use codex_extension_api::ResponseItem;
@@ -41,16 +37,12 @@ use super::authorization::ScoreAuthorization;
 use super::config::GuardianV2Config;
 use super::conversation::ConversationRequest;
 use super::conversation::Reservation;
-use super::metrics::record_classification;
-use super::metrics::record_classification_risk;
-use super::metrics::sampler_failure_reason;
 use super::sampler::LunaSampler;
 use super::sampler::LunaSamplerError;
 use super::sampler::LunaSamplingRequest;
 use super::score::GuardianV2ScoreProgress;
 use super::transcript::CollectedTranscript;
 use super::transcript::ContextInput;
-use super::truncation::ClassificationTruncations;
 use super::trusted_skills::TrustedSkillInvocations;
 use super::trusted_tools::trusted_tool_context;
 use codex_guardian_context::ComposedContext;
@@ -59,12 +51,9 @@ pub(super) struct Classification {
     pub(super) reservation: Option<Reservation>,
     pub(super) classification_started_at: Instant,
     pub(super) sampler: Arc<LunaSampler>,
-    pub(super) decisions_sampler: Option<Arc<super::decisions::DecisionsSampler>>,
     pub(super) guardian_config: GuardianV2Config,
     pub(super) score_progress: Arc<GuardianV2ScoreProgress>,
     pub(super) parent_model: Option<Arc<ModelInfo>>,
-    pub(super) metrics: Option<Arc<dyn ExtensionMetrics>>,
-    pub(super) analytics: Option<Arc<AnalyticsEventsClient>>,
     pub(super) sampled_at: SystemTime,
     pub(super) tool_call_index: usize,
     pub(super) event_sink: Arc<dyn ExtensionEventSink>,
@@ -109,14 +98,11 @@ impl Classification {
     pub(super) async fn run(self) {
         let Self {
             reservation,
-            classification_started_at,
+            classification_started_at: _,
             sampler,
-            decisions_sampler,
             guardian_config,
             score_progress,
             parent_model,
-            metrics,
-            analytics,
             sampled_at,
             tool_call_index,
             event_sink,
@@ -146,7 +132,6 @@ impl Classification {
         let generation = reservation
             .as_ref()
             .map(|reservation| reservation.generation.clone());
-        let mut truncations = ClassificationTruncations::default();
         let trusted_tool_context = match mcp_tool.as_ref() {
             Some(tool) => {
                 trusted_tool_context(tool.tool_info(), tool.source(), &manager, &config).await
@@ -205,7 +190,6 @@ impl Classification {
                     action: &review.action,
                     rationale: review.rationale.as_deref(),
                 });
-                truncations.extend(rendered.truncations);
                 codex_guardian_context::PreviousReview {
                     id: review.delivery_id.clone(),
                     fragment: GuardianReviewEvidenceFragment::new(rendered.body).render(),
@@ -244,13 +228,6 @@ impl Classification {
             Ok(transcript) => transcript,
             Err(error) => {
                 score_progress.fail_closed(sampled_at);
-                record_classification(
-                    metrics.as_deref(),
-                    context_mode,
-                    classification_started_at.elapsed(),
-                    "failure",
-                    Some("context_build_error"),
-                );
                 event_sink.emit_warning(ExtensionWarning {
                     thread_id,
                     turn_id: Some(turn_id),
@@ -261,15 +238,6 @@ impl Classification {
         };
         drop(history);
         drop(node_repl_images);
-        if let ClassificationContext::Snapshot(context) = &mut transcript {
-            truncations.extend(std::mem::take(&mut context.truncations));
-            super::metrics::record_section_costs(metrics.as_deref(), context.section_costs());
-        }
-        let mut decisions_task = None;
-        let mut responses_duration = None;
-        let mut failure_reason = "invalid_output";
-        let mut classification_risk = None;
-        let mut classification_finished_at = None;
         let result: Result<ClassificationOutcome, String> = async {
             let review_model = if config.guardian_policy_config.is_none() {
                 let review_model_id = review_model_override.as_deref().unwrap_or_else(|| {
@@ -308,24 +276,9 @@ impl Classification {
                 parent_turn_id: turn_id.clone(),
                 root_turn_id,
             };
-            let mut sampling_started = Instant::now();
             let result = match transcript {
                 ClassificationContext::Snapshot(context) => {
                     sampling.input = context.into_messages();
-                    if let Some(decisions_sampler) = decisions_sampler.as_ref() {
-                        decisions_task =
-                            Some(decisions_sampler.spawn(&sampling, sampler.max_input_tokens()));
-                    } else if config
-                        .features
-                        .enabled(codex_features::Feature::GuardianV2DecisionsComparison)
-                    {
-                        super::metrics::record_decisions_comparison_outcome(
-                            metrics.as_deref(),
-                            "skipped",
-                            "not_initialized",
-                        );
-                    }
-                    sampling_started = Instant::now();
                     sampler.sample(sampling).await
                 }
 
@@ -334,16 +287,6 @@ impl Classification {
                     reservation,
                 } => {
                     // The retained prefix is owned by the conversation backend, not this snapshot.
-                    if config
-                        .features
-                        .enabled(codex_features::Feature::GuardianV2DecisionsComparison)
-                    {
-                        super::metrics::record_decisions_comparison_outcome(
-                            metrics.as_deref(),
-                            "skipped",
-                            "unsupported_evidence",
-                        );
-                    }
                     let (ready, score) = tokio::sync::oneshot::channel();
                     reservation.submit(ConversationRequest {
                         evidence,
@@ -353,29 +296,24 @@ impl Classification {
                         ready,
                         authorization: score_authorization.clone(),
                         thread: Arc::clone(&thread),
-                        metrics: metrics.clone(),
                     });
                     score.await.unwrap_or(Err(LunaSamplerError::Superseded))
                 }
             };
-            responses_duration = Some(sampling_started.elapsed());
             let output = match result {
                 Ok(output) => output,
                 Err(LunaSamplerError::Superseded) => {
                     return Ok(ClassificationOutcome::Superseded);
                 }
                 Err(error) => {
-                    failure_reason = sampler_failure_reason(&error);
                     return Err(error.to_string());
                 }
             };
-            let (action_risk, risk_level) = match output.as_str() {
+            let (action_risk, _risk_level) = match output.as_str() {
                 "high" => (1.0, "high"),
                 "low" => (0.0, "low"),
                 _ => return Err("invalid Guardian V2 classification".to_owned()),
             };
-            classification_risk = Some(risk_level);
-            failure_reason = "action_deserialization_error";
             let score = SecurityRiskScore {
                 scores: BTreeMap::from([("action_risk".to_owned(), action_risk)]),
                 call_id: Some(call_id.clone()),
@@ -407,8 +345,6 @@ impl Classification {
             if !accepted {
                 return Ok(ClassificationOutcome::Superseded);
             }
-            classification_finished_at = Some(Instant::now());
-            record_classification_risk(metrics.as_deref(), output.as_str());
             if guardian_config.persist_scores
                 && !config.ephemeral
                 && let Err(error) = thread
@@ -429,83 +365,23 @@ impl Classification {
         if result.is_err() {
             score_progress.fail_closed(sampled_at);
         }
-        let duration = classification_finished_at
-            .map(|finished_at: Instant| finished_at.duration_since(classification_started_at))
-            .unwrap_or_else(|| classification_started_at.elapsed());
-        let outcome = match &result {
-            Ok(ClassificationOutcome::Scored) => "success",
-            Ok(ClassificationOutcome::Superseded) => "superseded",
-            Err(_) => "failure",
-        };
-        record_classification(
-            metrics.as_deref(),
-            context_mode,
-            duration,
-            outcome,
-            result.is_err().then_some(failure_reason),
+        tracing::debug!(
+            %thread_id,
+            %turn_id,
+            %call_id,
+            outcome = match &result {
+                Ok(ClassificationOutcome::Scored) => "success",
+                Ok(ClassificationOutcome::Superseded) => "superseded",
+                Err(_) => "failure",
+            },
+            "Guardian V2 classification finished"
         );
-        if let Some(analytics) = analytics {
-            analytics.track_guardian_v2_event(GuardianV2Event {
-                thread_id: thread_id.clone(),
-                turn_id: turn_id.clone(),
-                item_id: Some(call_id),
-                model: parent_model.as_ref().map(|model| model.slug.clone()),
-                occurred_at_ms: codex_analytics::now_unix_millis(),
-                kind: GuardianV2EventKind::Classification {
-                    guardian_context_mode: context_mode.as_str(),
-                    outcome,
-                    risk_level: classification_risk,
-                    duration_ms: u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
-                },
-            });
-        }
-        if matches!(result, Ok(ClassificationOutcome::Scored)) {
-            truncations.emit(metrics.as_deref());
-        }
-        if matches!(result, Ok(ClassificationOutcome::Superseded))
-            && let Some(task) = decisions_task.take()
-        {
-            drop(task);
-            super::metrics::record_decisions_comparison_outcome(
-                metrics.as_deref(),
-                "skipped",
-                "superseded",
-            );
-        }
-        // Only compare against a score accepted by the authoritative publication path.
-        let baseline_risk = if matches!(result, Ok(ClassificationOutcome::Scored)) {
-            classification_risk
-        } else {
-            None
-        };
         if let Err(error) = result {
             event_sink.emit_warning(ExtensionWarning {
                 thread_id,
                 turn_id: Some(turn_id),
                 message: format!("Guardian V2 risk scoring failed: {error}"),
             });
-        }
-        if let Some(decisions_task) = decisions_task {
-            super::metrics::record_decisions_comparison(
-                decisions_task.finish().await,
-                baseline_risk.zip(responses_duration),
-                metrics.as_deref(),
-            );
-        } else if config
-            .features
-            .enabled(codex_features::Feature::GuardianV2DecisionsComparison)
-            && let Some(risk) = baseline_risk
-            && let Some(metrics) = metrics.as_deref()
-        {
-            metrics.counter(
-                "codex.guardian_v2.decisions_comparison.comparison",
-                /*inc*/ 1,
-                &[
-                    ("comparison", "unavailable"),
-                    ("responses", risk),
-                    ("decisions", "unavailable"),
-                ],
-            );
         }
     }
 }

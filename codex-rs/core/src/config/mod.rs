@@ -29,8 +29,6 @@ use codex_config::config_toml::CircuitBreakAction;
 use codex_config::config_toml::ConfigToml;
 use codex_config::config_toml::DEFAULT_PROJECT_DOC_MAX_BYTES;
 use codex_config::config_toml::ProjectConfig;
-use codex_config::config_toml::RealtimeAudioConfig;
-use codex_config::config_toml::RealtimeConfig;
 use codex_config::config_toml::ThreadStoreToml;
 use codex_config::config_toml::validate_model_providers;
 use codex_config::loader::load_config_layers_state;
@@ -166,10 +164,8 @@ use toml_edit::DocumentMut;
 mod auth_keyring;
 pub mod edit;
 mod managed_features;
-mod metrics;
 mod network_config;
 mod network_proxy_spec;
-mod otel;
 mod permission_path;
 mod permission_profile_catalog;
 mod permission_profile_selection;
@@ -194,7 +190,6 @@ pub use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_sandboxing::compatibility_sandbox_policy_for_permission_profile;
 pub use codex_sandboxing::system_bwrap_warning;
 pub use managed_features::ManagedFeatures;
-pub(crate) use metrics::emit_session_start_metrics;
 pub use network_config::EnvironmentNetworkConfigError;
 pub use network_config::NetworkConfigInputs;
 pub use network_config::PreparedNetworkConfig;
@@ -1032,41 +1027,9 @@ pub struct Config {
     /// Whether Codex-owned clients should respect host system proxy settings.
     pub respect_system_proxy: bool,
 
-    /// Optional product SKU forwarded to the host-owned apps MCP server.
-    pub apps_mcp_product_sku: Option<String>,
-
     /// Bounded, product-owned metadata attached to every Responses API request.
     pub responses_api_metadata: BTreeMap<String, String>,
 
-    /// Machine-local realtime audio device preferences used by realtime voice.
-    pub realtime_audio: RealtimeAudioConfig,
-
-    /// Experimental / do not use. Overrides only the realtime conversation
-    /// websocket transport base URL (the `Op::RealtimeConversation`
-    /// `/v1/realtime`
-    /// connection) without changing normal provider HTTP requests.
-    pub experimental_realtime_ws_base_url: Option<String>,
-    /// Experimental / do not use. Overrides only the WebRTC realtime call
-    /// creation base URL.
-    pub experimental_realtime_webrtc_call_base_url: Option<String>,
-    /// Experimental / do not use. Selects the realtime websocket model/snapshot
-    /// used for the `Op::RealtimeConversation` connection.
-    pub experimental_realtime_ws_model: Option<String>,
-    /// Experimental / do not use. Realtime websocket session selection.
-    /// `version` controls v1/v2 and `type` controls conversational/transcription.
-    pub realtime: RealtimeConfig,
-    /// Experimental / do not use. Overrides only the realtime conversation
-    /// websocket transport instructions (the `Op::RealtimeConversation`
-    /// `/ws` session.update instructions) without changing normal prompts.
-    pub experimental_realtime_ws_backend_prompt: Option<String>,
-    /// Experimental / do not use. Replaces the synthesized realtime startup
-    /// context appended to websocket session instructions. An empty string
-    /// disables startup context injection entirely.
-    pub experimental_realtime_ws_startup_context: Option<String>,
-    /// Experimental / do not use. Replaces the built-in realtime start
-    /// instructions inserted into developer messages when realtime becomes
-    /// active.
-    pub experimental_realtime_start_instructions: Option<String>,
     /// Experimental / do not use. Selects the thread persistence backend.
     pub experimental_thread_store: ThreadStoreConfig,
     /// When set, restricts ChatGPT login to one or more workspace identifiers.
@@ -1137,29 +1100,13 @@ pub struct Config {
     /// Collection of various notices we show the user
     pub notices: Notice,
 
-    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
-    /// Set to `false` only if your Codex updates are centrally managed.
-    /// Defaults to `true`.
-    pub check_for_update_on_startup: bool,
-
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
 
-    /// When `false`, disables analytics across Codex product surfaces in this machine.
-    /// Voluntarily left as Optional because the default value might depend on the client.
-    pub analytics_enabled: Option<bool>,
-
-    /// When `false`, disables feedback collection across Codex product surfaces.
-    /// Defaults to `true`.
-    pub feedback_enabled: bool,
-
     /// Configured discoverable tools for tool suggestions.
     pub tool_suggest: ToolSuggestConfig,
-
-    /// OTEL configuration (exporter type, endpoint, headers, etc.).
-    pub otel: codex_config::types::OtelConfig,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -1728,12 +1675,7 @@ impl Config {
     pub fn plugins_config_input(&self) -> PluginsConfigInput {
         PluginsConfigInput::new(
             self.config_layer_stack.clone(),
-            self.model_provider_id.clone(),
             self.features.enabled(Feature::Plugins),
-            self.features.enabled(Feature::RemotePlugin),
-            self.chatgpt_base_url.clone(),
-            self.http_client_factory(),
-            self.apps_mcp_product_sku.clone(),
         )
     }
 
@@ -1829,8 +1771,6 @@ impl Config {
         }
 
         McpConfig {
-            chatgpt_base_url: self.chatgpt_base_url.clone(),
-            apps_mcp_product_sku: self.apps_mcp_product_sku.clone(),
             requires_read_only_mcp_tools: false,
             codex_home: self.codex_home.to_path_buf(),
             mcp_enterprise_managed_auth: self.mcp_enterprise_managed_auth.clone(),
@@ -1858,7 +1798,6 @@ impl Config {
             server_permission_profiles: HashMap::new(),
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             use_legacy_landlock: self.features.use_legacy_landlock(),
-            apps_enabled: self.features.enabled(Feature::Apps),
             prefix_mcp_tool_names: self.prefix_mcp_tool_names(),
             non_prefixed_mcp_tool_servers: if self
                 .features
@@ -1871,11 +1810,6 @@ impl Config {
                 Vec::new()
             },
             protocol_mode: self.mcp_protocol_mode(),
-            host_owned_apps_protocol_mode: if self.features.enabled(Feature::CodexAppsMcp20260728) {
-                McpProtocolMode::V20260728
-            } else {
-                McpProtocolMode::Legacy
-            },
             client_elicitation_capability: if self.features.enabled(Feature::AuthElicitation) {
                 ElicitationCapability::new()
                     .with_form(FormElicitationCapability::new())
@@ -1904,14 +1838,6 @@ impl Config {
         } else {
             McpProtocolMode::Legacy
         }
-    }
-
-    pub fn workspace_routing_context(&self) -> codex_model_provider::WorkspaceRoutingContext {
-        codex_model_provider::WorkspaceRoutingContext::new(self.chatgpt_base_url.clone())
-            .with_session(codex_login::WorkspaceRoutingSession {
-                cwd: self.cwd.to_path_buf(),
-                config_layer_stack: self.config_layer_stack.clone(),
-            })
     }
 
     pub async fn rebuild_with_session_layers(
@@ -3305,9 +3231,7 @@ impl Config {
             model_catalog_json: _,
             model_provider: _,
             model_providers: _,
-            check_for_update_on_startup: _,
             allow_login_shell: _,
-            feedback: _,
             approval_policy: mut constrained_approval_policy,
             approvals_reviewer: mut constrained_approvals_reviewer,
             auto_review_required_models: _,
@@ -3316,7 +3240,6 @@ impl Config {
             web_search_mode: mut constrained_web_search_mode,
             allow_managed_hooks_only: _,
             allow_appshots: _,
-            allow_remote_control: _,
             computer_use: _,
             feature_requirements,
             managed_hooks: _,
@@ -4083,7 +4006,6 @@ impl Config {
 
         let review_model = override_review_model.or(cfg.review_model);
 
-        let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
         let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
 
         let log_dir = cfg
@@ -4284,7 +4206,6 @@ impl Config {
             profile_workspace_roots,
         )
         .map_err(std::io::Error::from)?;
-        let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             prefer_mxc,
             model,
@@ -4435,33 +4356,7 @@ impl Config {
                 .chatgpt_base_url
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
             respect_system_proxy,
-            apps_mcp_product_sku: cfg.apps_mcp_product_sku.clone(),
             responses_api_metadata: cfg.responses_api_metadata.unwrap_or_default(),
-            realtime_audio: cfg
-                .audio
-                .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {
-                    microphone: audio.microphone,
-                    microphone_channel: audio.microphone_channel,
-                    speaker: audio.speaker,
-                }),
-            experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
-            experimental_realtime_webrtc_call_base_url: cfg
-                .experimental_realtime_webrtc_call_base_url,
-            experimental_realtime_ws_model: cfg.experimental_realtime_ws_model,
-            realtime: cfg
-                .realtime
-                .map_or_else(RealtimeConfig::default, |realtime| {
-                    let defaults = RealtimeConfig::default();
-                    RealtimeConfig {
-                        version: realtime.version.unwrap_or(defaults.version),
-                        session_type: realtime.session_type.unwrap_or(defaults.session_type),
-                        transport: realtime.transport.unwrap_or(defaults.transport),
-                        voice: realtime.voice,
-                    }
-                }),
-            experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
-            experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
-            experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
             experimental_thread_store: thread_store_config(cfg.experimental_thread_store),
             forced_chatgpt_workspace_id,
             forced_login_method,
@@ -4487,19 +4382,12 @@ impl Config {
                 .unwrap_or(false),
             active_project,
             notices,
-            check_for_update_on_startup,
             disable_paste_burst: cfg
                 .tui
                 .as_ref()
                 .and_then(|tui| tui.disable_paste_burst)
                 .or(cfg.disable_paste_burst)
                 .unwrap_or(false),
-            analytics_enabled: cfg.analytics.as_ref().and_then(|a| a.enabled),
-            feedback_enabled: cfg
-                .feedback
-                .as_ref()
-                .and_then(|feedback| feedback.enabled)
-                .unwrap_or(true),
             tool_suggest,
             tui_notifications: cfg
                 .tui
@@ -4578,7 +4466,6 @@ impl Config {
                 .as_ref()
                 .map(|t| t.keymap.clone())
                 .unwrap_or_default(),
-            otel,
         };
         Ok(config)
         })

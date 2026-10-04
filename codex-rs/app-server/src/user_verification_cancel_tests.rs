@@ -29,8 +29,8 @@ fn assert_cancelled(message: OutgoingMessage) {
 #[tokio::test]
 async fn user_verification_cancel_rpc_stops_native_work_and_allows_another_operation() -> Result<()>
 {
-    let mut h = Harness::new(ConnectionOrigin::Stdio, || true).await?;
-    h.initialize("Codex Desktop", /*opt_in*/ true).await;
+    let mut h = Harness::new(ConnectionOrigin::InProcess, || true).await?;
+    h.initialize("codex-tui", /*opt_in*/ true).await;
     h.start_verify().await?;
     h.send(
         /*id*/ 2,
@@ -67,8 +67,8 @@ async fn user_verification_cancel_rpc_stops_native_work_and_allows_another_opera
 
 #[tokio::test]
 async fn user_verification_cancel_is_registered_before_native_dispatch() -> Result<()> {
-    let mut h = Harness::new(ConnectionOrigin::Stdio, || true).await?;
-    h.initialize("Codex Desktop", /*opt_in*/ true).await;
+    let mut h = Harness::new(ConnectionOrigin::InProcess, || true).await?;
+    h.initialize("codex-tui", /*opt_in*/ true).await;
     h.send(
         /*id*/ 1,
         "userVerification/verify",
@@ -90,8 +90,8 @@ async fn user_verification_cancel_is_registered_before_native_dispatch() -> Resu
 
 #[tokio::test]
 async fn user_verification_cancel_rpc_cannot_target_another_connection_or_id_type() -> Result<()> {
-    let mut h = Harness::new(ConnectionOrigin::Stdio, || true).await?;
-    h.initialize("Codex Desktop", /*opt_in*/ true).await;
+    let mut h = Harness::new(ConnectionOrigin::InProcess, || true).await?;
+    h.initialize("codex-tui", /*opt_in*/ true).await;
     h.start_verify().await?;
     h.send(
         /*id*/ 2,
@@ -139,8 +139,8 @@ async fn user_verification_cancel_rpc_cannot_target_another_connection_or_id_typ
 
 #[tokio::test]
 async fn user_verification_cancel_keeps_the_worker_slot_until_native_exit() -> Result<()> {
-    let mut h = Harness::new(ConnectionOrigin::Stdio, || true).await?;
-    h.initialize("Codex Desktop", /*opt_in*/ true).await;
+    let mut h = Harness::new(ConnectionOrigin::InProcess, || true).await?;
+    h.initialize("codex-tui", /*opt_in*/ true).await;
     h.provider
         .ignore_cancellation
         .store(/*val*/ true, Ordering::Release);

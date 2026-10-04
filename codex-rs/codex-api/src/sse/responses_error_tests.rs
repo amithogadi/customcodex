@@ -40,7 +40,6 @@ async fn flex_failure_with_retry_header_ends_stream_immediately() {
                 bytes: Box::pin(bytes),
             },
             Duration::from_secs(60),
-            /*telemetry*/ None,
             /*turn_state*/ None,
         );
         let error = loop {

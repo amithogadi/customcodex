@@ -6,7 +6,6 @@ use crate::config::ConstraintResult;
 use codex_config::ConfigRequirements;
 use codex_models_manager::ModelsManagerConfig;
 use codex_models_manager::manager::ModelsManager;
-use codex_otel::SessionTelemetry;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::Personality;
@@ -165,13 +164,6 @@ impl ResolvedStepSettings {
             .requirements
             .approvals_reviewer
             .can_set(&self.approvals_reviewer())
-    }
-
-    pub(super) fn telemetry(&self, base: &SessionTelemetry) -> SessionTelemetry {
-        base.clone().with_model(
-            self.selected.collaboration_mode.model(),
-            &self.model_info.slug,
-        )
     }
 }
 

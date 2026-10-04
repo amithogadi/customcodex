@@ -99,21 +99,11 @@ impl RpcServerRequestSender {
             inner: Arc::clone(&self.inner),
             request_id: request_id.clone(),
         };
-        let trace = codex_otel::current_span_w3c_trace_context().map(|mut trace| {
-            if trace
-                .tracestate
-                .as_ref()
-                .is_some_and(|tracestate| tracestate.len() > MAX_SERVER_REQUEST_TRACESTATE_LEN)
-            {
-                trace.tracestate = None;
-            }
-            trace
-        });
         let request = RpcServerOutboundMessage::Request(JSONRPCRequest {
             id: request_id,
             method: method.to_string(),
             params: Some(params),
-            trace,
+            trace: None,
         });
 
         let response = timeout(call_timeout, async {

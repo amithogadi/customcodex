@@ -52,13 +52,11 @@ use tokio_util::sync::CancellationToken;
 use crate::McpConfig;
 use crate::binding::McpBinding;
 use crate::binding::PreparedMcpCall;
-use crate::client_tool_catalog::CodexAppsToolSnapshot;
 use crate::connection_manager::BindingCatalogRevision;
 use crate::connection_manager::McpConnectionSet;
 use crate::elicitation::ElicitationLifecycle;
 use crate::elicitation::ElicitationRequestRouter;
 use crate::elicitation::ElicitationReviewerHandle;
-use crate::event_stream::McpEventStreamOpener;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::resource_client::McpResourceServerCacheKey;
 use crate::resource_origin::ResourceOrigins;
@@ -102,17 +100,10 @@ pub struct McpRuntimeInput {
 /// their exact connections and configuration for as long as they are needed.
 pub struct McpRuntime {
     current: ArcSwap<PublishedMcpRuntime>,
-    event_stream_cancellation: Mutex<EventStreamCancellation>,
     reconnect_pending: AtomicBool,
     resource_cache_generation: AtomicU64,
     elicitation_router: ElicitationRequestRouter,
     resource_origins: Mutex<ResourceOrigins>,
-}
-
-struct EventStreamCancellation {
-    event_server_available: bool,
-    cancel_event_streams_on_server_removal: watch::Sender<()>,
-    retained_subscription_cancellation: Option<watch::Sender<()>>,
 }
 
 struct PublishedMcpRuntime {
@@ -126,25 +117,6 @@ struct PublishedMcpRuntime {
     environment_selections: Arc<[TurnEnvironmentSelection]>,
     ready_environments: HashMap<String, Arc<Environment>>,
     cached_binding: Mutex<Option<CachedMcpBinding>>,
-}
-
-fn ensure_host_owned_apps_registration(
-    current: &PublishedMcpRuntime,
-    server: &str,
-) -> anyhow::Result<()> {
-    if !current
-        .config
-        .as_ref()
-        .and_then(|config| config.mcp_server_catalog.server(server))
-        .is_some_and(|registration| {
-            registration
-                .source()
-                .is_host_owned_apps(server, registration.config())
-        })
-    {
-        anyhow::bail!("MCP server '{server}' is not registered by the hosted runtime");
-    }
-    Ok(())
 }
 
 impl PublishedMcpRuntime {
@@ -237,11 +209,6 @@ impl McpRuntime {
                 ready_environments: HashMap::new(),
                 cached_binding: Mutex::new(None),
             }),
-            event_stream_cancellation: Mutex::new(EventStreamCancellation {
-                event_server_available: false,
-                cancel_event_streams_on_server_removal: watch::channel(()).0,
-                retained_subscription_cancellation: None,
-            }),
             reconnect_pending: AtomicBool::new(false),
             resource_cache_generation: AtomicU64::new(0),
             elicitation_router: ElicitationRequestRouter::default(),
@@ -323,12 +290,6 @@ impl McpRuntime {
         reconnect.claimed = false;
     }
 
-    /// Starts fresh connections and returns their complete, refreshed Apps catalog.
-    pub async fn replace_fresh(&self, input: McpRuntimeInput) -> anyhow::Result<Vec<ToolInfo>> {
-        self.publish(input, /*previous*/ None).await;
-        self.latest_hard_refresh_codex_apps_tools_cache().await
-    }
-
     async fn publish(&self, input: McpRuntimeInput, previous: Option<&McpConnectionSet>) {
         let (publish, publication_gate) = McpPublicationGate::pending();
         let config = Arc::clone(&input.config);
@@ -353,19 +314,6 @@ impl McpRuntime {
             )
             .await,
         );
-        let hosted_event_server_retained = connections.contains_server(CODEX_APPS_MCP_SERVER_NAME)
-            && config
-                .mcp_server_catalog
-                .server(CODEX_APPS_MCP_SERVER_NAME)
-                .is_some_and(|registration| {
-                    registration
-                        .source()
-                        .is_host_owned_apps(CODEX_APPS_MCP_SERVER_NAME, registration.config())
-                });
-        let mut cancellation = self
-            .event_stream_cancellation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.current.store(Arc::new(PublishedMcpRuntime {
             connections,
             config: Some(config),
@@ -379,15 +327,6 @@ impl McpRuntime {
             cached_binding: Mutex::new(None),
         }));
         let _ = publish.send(true);
-        cancellation.event_server_available = hosted_event_server_retained;
-        if !hosted_event_server_retained {
-            cancellation
-                .cancel_event_streams_on_server_removal
-                .send_replace(());
-            if let Some(retained) = &cancellation.retained_subscription_cancellation {
-                retained.send_replace(());
-            }
-        }
     }
 
     /// Ensures the next refresh creates fresh connections for every configured server.
@@ -613,27 +552,6 @@ impl McpRuntime {
             .await
     }
 
-    pub async fn latest_hard_refresh_codex_apps_tools_cache(
-        &self,
-    ) -> anyhow::Result<Vec<ToolInfo>> {
-        self.latest_connections()
-            .refresh_codex_apps_tools_for_discovery()
-            .await
-    }
-
-    /// Refreshes the published Apps client and returns its exact inventory and MCP eligibility.
-    pub async fn refresh_codex_apps_tools(&self) -> anyhow::Result<CodexAppsToolSnapshot> {
-        let current = self.current.load_full();
-        let config = current
-            .config
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("MCP runtime is not configured"))?;
-        current
-            .connections
-            .refresh_codex_apps_client_catalog(config)
-            .await
-    }
-
     /// Lists the latest known tools for non-model discovery surfaces.
     ///
     /// Unlike [`Self::current_binding`], this may return cached tools while their
@@ -711,70 +629,6 @@ impl McpRuntime {
 
     pub(crate) fn latest_connections(&self) -> Arc<McpConnectionSet> {
         Arc::clone(&self.current.load().connections)
-    }
-
-    pub(crate) fn latest_host_owned_codex_apps_connections(
-        &self,
-    ) -> anyhow::Result<Arc<McpConnectionSet>> {
-        let current = self.current.load();
-        ensure_host_owned_apps_registration(&current, CODEX_APPS_MCP_SERVER_NAME)?;
-        Ok(Arc::clone(&current.connections))
-    }
-
-    pub(crate) fn latest_connections_for_event_server(
-        &self,
-        server: &str,
-    ) -> anyhow::Result<(Arc<McpConnectionSet>, watch::Receiver<()>)> {
-        let cancellation = self
-            .event_stream_cancellation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cancel_event_streams_on_server_removal = cancellation
-            .cancel_event_streams_on_server_removal
-            .subscribe();
-        let current = self.current.load();
-        if server == CODEX_APPS_MCP_SERVER_NAME {
-            ensure_host_owned_apps_registration(&current, server)?;
-        }
-        Ok((
-            Arc::clone(&current.connections),
-            cancel_event_streams_on_server_removal,
-        ))
-    }
-
-    pub(crate) fn event_stream_opener(&self) -> anyhow::Result<McpEventStreamOpener> {
-        let cancellation = self
-            .event_stream_cancellation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let connection = self
-            .current
-            .load()
-            .connections
-            .event_stream_connection
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("Event subscriptions are unavailable for this task"))?;
-        let cancel_event_streams_on_server_removal = cancellation
-            .retained_subscription_cancellation
-            .as_ref()
-            .unwrap_or(&cancellation.cancel_event_streams_on_server_removal)
-            .clone();
-        Ok(McpEventStreamOpener {
-            connection,
-            cancellation_receiver: cancel_event_streams_on_server_removal.subscribe(),
-            cancel_event_streams_on_server_removal,
-        })
-    }
-
-    pub(crate) fn forward_event_server_removals_to(&self, retained: watch::Sender<()>) {
-        let mut cancellation = self
-            .event_stream_cancellation
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !cancellation.event_server_available {
-            retained.send_replace(());
-        }
-        cancellation.retained_subscription_cancellation = Some(retained);
     }
 
     pub async fn shutdown(&self) {
@@ -930,12 +784,6 @@ impl McpRuntimeContext {
     }
 }
 
-pub(crate) fn emit_duration(metric: &str, duration: Duration, tags: &[(&str, &str)]) {
-    if let Some(metrics) = codex_otel::global() {
-        let _ = metrics.record_duration(metric, duration, tags);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -999,27 +847,18 @@ mod tests {
     #[tokio::test]
     async fn cached_bindings_follow_the_clients_catalog_revision() -> anyhow::Result<()> {
         let codex_home = tempfile::tempdir()?;
-        let cache_context = ConnectorRuntimeManager::<ToolInfo>::default().context(
-            codex_home.path().to_path_buf(),
-            ConnectorRuntimeContextKey::personal(
-                /*account_id*/ None, /*chatgpt_user_id*/ None,
-            ),
-        );
-        let connections =
-            crate::connection_manager::tests::create_test_manager_with_ready_apps_client(
-                cache_context,
-                "search",
-                /*list_started*/ None,
-                /*release_list*/ None,
-            )
-            .await?;
-        // Complete the fixture's shared startup future before testing stable reuse.
-        connections.list_all_tools().await;
+        let tool = crate::connection_manager::tests::create_test_tool("docs", "search");
+        let client =
+            crate::connection_manager::tests::create_ready_async_managed_client(vec![tool.clone()])
+                .await;
+        let catalog = Arc::clone(&client.client().await?.tool_catalog);
+        let mut connections = McpConnectionSet::empty(/*prefix_mcp_tool_names*/ true);
+        connections.insert_test_client("docs", client);
+        let connections = Arc::new(connections);
         let mut config = crate::mcp::tests::test_mcp_config(codex_home.path().to_path_buf());
-        config.server_permission_profiles.insert(
-            CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            PermissionProfile::default(),
-        );
+        config
+            .server_permission_profiles
+            .insert("docs".to_string(), PermissionProfile::default());
         let published = Arc::new(PublishedMcpRuntime {
             connections: Arc::clone(&connections),
             config: Some(Arc::new(config)),
@@ -1048,7 +887,9 @@ mod tests {
         .expect("cached initial binding");
         assert!(Arc::ptr_eq(&before, &repeated));
 
-        connections.refresh_codex_apps_tools_for_discovery().await?;
+        catalog
+            .refresh(|| async { Ok((vec![tool], ())) }, |_, ()| ())
+            .await?;
 
         let refreshed = McpRuntime::binding_from_published_runtime(
             Arc::clone(&published),
@@ -1059,7 +900,7 @@ mod tests {
         .expect("refreshed binding");
         assert!(!Arc::ptr_eq(&before, &refreshed));
         let call = refreshed
-            .prepare_call(CODEX_APPS_MCP_SERVER_NAME, "search")
+            .prepare_call("docs", "search")
             .expect("refreshed call");
         let error = call
             .call_with_preparation(/*requested_timeout*/ None, || async {

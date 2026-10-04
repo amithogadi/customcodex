@@ -4,11 +4,9 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ToolStartInput;
 use codex_protocol::security_risk::SecurityRiskScore;
 
@@ -18,7 +16,6 @@ use super::wrapper_lag::WrapperLag;
 #[derive(Default)]
 pub(super) struct GuardianV2ScoreProgress {
     state: Mutex<ScoreState>,
-    pub(super) metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
 #[derive(Default)]
@@ -45,9 +42,8 @@ pub(super) struct CachedScore {
 }
 
 impl GuardianV2ScoreProgress {
-    pub(super) fn new(metrics: Option<Arc<dyn ExtensionMetrics>>) -> Self {
+    pub(super) fn new() -> Self {
         Self {
-            metrics,
             ..Default::default()
         }
     }

@@ -1,6 +1,34 @@
-use codex_analytics::InvocationType;
-use codex_analytics::SkillInvocation;
-use codex_analytics::SkillInvocationLocation;
+use codex_protocol::protocol::SkillScope;
+use serde::Serialize;
+use std::path::PathBuf;
+#[derive(Clone, Debug)]
+pub struct SkillInvocation {
+    pub skill_name: String,
+    pub location: SkillInvocationLocation,
+    pub plugin_id: Option<String>,
+    pub remote_plugin_id: Option<String>,
+    pub invocation_type: InvocationType,
+}
+
+#[derive(Clone, Debug)]
+pub enum SkillInvocationLocation {
+    Host {
+        path: PathBuf,
+        scope: SkillScope,
+    },
+    Resource {
+        id: String,
+        skill_id: Option<String>,
+        scope: Option<SkillScope>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub enum InvocationType {
+    Explicit,
+    Implicit,
+}
+
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_extension_api::ExtensionData;
 use codex_skills::ImplicitSkillAccess;
@@ -69,7 +97,7 @@ pub fn detect_implicit_skill_invocation(
                     location: SkillInvocationLocation::Resource {
                         id: entry.main_prompt.as_str().to_owned(),
                         skill_id: entry.canonical_skill_id.clone(),
-                        scope: entry.analytics_scope,
+                        scope: entry.scope,
                     },
                     plugin_id: entry.plugin_id.clone(),
                     remote_plugin_id: None,

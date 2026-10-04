@@ -50,7 +50,6 @@ use crate::noise_relay::NoiseHarnessConnectionArgs;
 use crate::noise_relay::noise_harness_connection_from_websocket_with_readiness;
 use crate::noise_relay::noise_relay_websocket_config;
 use crate::relay::harness_connection_from_websocket;
-use crate::trace_context::current_rendezvous_headers;
 
 const MAX_STDIO_STDERR_LOG_LINE_LEN: u64 = 8 * 1024;
 const ENVIRONMENT_CLIENT_NAME: &str = "codex-environment";
@@ -657,7 +656,7 @@ impl ExecServerClient {
                 url: diagnostic_url.clone(),
                 source,
             })?;
-        request.headers_mut().extend(current_rendezvous_headers());
+        request.headers_mut().extend(http::HeaderMap::new());
         let (stream, _) = timeout(
             connect_timeout,
             WebSocketConnector::new_with_tls_mode(

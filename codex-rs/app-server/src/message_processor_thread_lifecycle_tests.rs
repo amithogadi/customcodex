@@ -2,8 +2,8 @@
 
 use super::ConnectionSessionState;
 use super::MessageProcessor;
-use super::message_processor_tracing_tests::build_test_processor;
-use super::message_processor_tracing_tests::read_response_from;
+use super::message_processor_test_support::build_test_processor;
+use super::message_processor_test_support::read_response_from;
 use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::OutgoingEnvelope;
 use crate::outgoing_message::OutgoingMessage;

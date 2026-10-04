@@ -1,4 +1,4 @@
-use codex_analytics::TurnProfile;
+use crate::turn_timing::TurnProfile;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;

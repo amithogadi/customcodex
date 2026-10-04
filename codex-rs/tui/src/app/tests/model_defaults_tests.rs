@@ -132,7 +132,6 @@ async fn model_default_saves_report_server_outcomes_and_target_server_profile() 
             loader_overrides,
             /*strict_config*/ false,
             codex_config::CloudConfigBundleLoader::default(),
-            codex_feedback::CodexFeedback::new(),
             /*log_db*/ None,
             /*state_db*/ None,
             Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),

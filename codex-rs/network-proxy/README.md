@@ -188,10 +188,10 @@ the decider can auto-allow network requests originating from that command.
 **Important:** Explicit deny rules still win. The decider only gets a chance to override
 `not_allowed` (allowlist misses), not `denied` or `not_allowed_local`.
 
-## OTEL Audit Events (embedded/managed)
+## Local audit events (embedded/managed)
 
 When `codex-network-proxy` is embedded in managed Codex runtime, policy decisions emit structured
-OTEL-compatible events with `target=codex_otel.network_proxy`.
+local tracing events with `target=codex.network_proxy`. The proxy does not export them to a remote telemetry service.
 
 Event name:
 
@@ -257,11 +257,11 @@ what it can reasonably guarantee.
   - the HTTP proxy listener clamps non-loopback binds unless explicitly enabled via
     `dangerously_allow_non_loopback_proxy`
 - when unix socket proxying is enabled, all proxy listeners are forced to loopback to avoid turning the
-    proxy into a remote bridge into local daemons.
+  proxy into a remote bridge into local daemons.
 - `dangerously_allow_all_unix_sockets = true` bypasses the unix socket allowlist entirely (still
   macOS-only and absolute-path-only). Use only in tightly controlled environments.
 - `enabled` is enforced at runtime; when false the proxy no-ops and does not bind listeners.
-Limitations:
+  Limitations:
 
 - DNS rebinding is hard to fully prevent without pinning the resolved IP(s) all the way down to the
   transport layer. If your threat model includes hostile DNS, enforce network egress at a lower

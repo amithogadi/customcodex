@@ -15,8 +15,6 @@ use crate::managed_install::ExecutableIdentity;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-#[cfg(any(unix, windows))]
-use codex_app_server_transport::REMOTE_CONTROL_DISABLED_ENV_VAR;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::fs;
@@ -40,7 +38,6 @@ pub(crate) struct PidBackend {
     codex_bin: PathBuf,
     pid_file: PathBuf,
     lock_file: PathBuf,
-    command_kind: PidCommandKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,13 +79,6 @@ enum PidFileState {
     Running(PidRecord),
 }
 
-#[derive(Debug, Clone)]
-#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
-enum PidCommandKind {
-    AppServer { remote_control_enabled: bool },
-    UpdateLoop { restore_release: Option<String> },
-}
-
 impl PidBackend {
     pub(crate) async fn running_executable_identity(&self) -> Result<Option<ExecutableIdentity>> {
         match self.read_pid_file_state().await? {
@@ -99,31 +89,13 @@ impl PidBackend {
         }
     }
 
-    pub(crate) fn new(codex_bin: PathBuf, pid_file: PathBuf, remote_control_enabled: bool) -> Self {
+    pub(crate) fn new(codex_bin: PathBuf, pid_file: PathBuf) -> Self {
         let lock_file = pid_file.with_extension("pid.lock");
         Self {
             feature_overrides: BTreeMap::new(),
             codex_bin,
             pid_file,
             lock_file,
-            command_kind: PidCommandKind::AppServer {
-                remote_control_enabled,
-            },
-        }
-    }
-
-    pub(crate) fn new_update_loop(
-        codex_bin: PathBuf,
-        pid_file: PathBuf,
-        restore_release: Option<String>,
-    ) -> Self {
-        let lock_file = pid_file.with_extension("pid.lock");
-        Self {
-            feature_overrides: BTreeMap::new(),
-            codex_bin,
-            pid_file,
-            lock_file,
-            command_kind: PidCommandKind::UpdateLoop { restore_release },
         }
     }
 
@@ -186,26 +158,16 @@ impl PidBackend {
                 if process.start_time()? != record.process_start_time {
                     continue;
                 }
-                match self.command_kind {
-                    PidCommandKind::AppServer { .. } => {
-                        let codex_home = self
-                            .pid_file
-                            .parent()
-                            .and_then(Path::parent)
-                            .context("daemon pid path has no Codex home")?;
-                        let socket_path =
-                            codex_app_server_transport::app_server_control_socket_path(codex_home)?;
-                        if let Err(err) =
-                            crate::client::request_shutdown(socket_path.as_path(), pid).await
-                        {
-                            tracing::warn!(%pid, %err, "managed app-server shutdown request failed; waiting for force deadline");
-                        }
-                    }
-                    PidCommandKind::UpdateLoop { .. } => {
-                        fs::write(self.pid_file.with_extension("shutdown"), pid.to_string())
-                            .await
-                            .context("failed to request updater shutdown")?;
-                    }
+                let codex_home = self
+                    .pid_file
+                    .parent()
+                    .and_then(Path::parent)
+                    .context("daemon pid path has no Codex home")?;
+                let socket_path =
+                    codex_app_server_transport::app_server_control_socket_path(codex_home)?;
+                if let Err(err) = crate::client::request_shutdown(socket_path.as_path(), pid).await
+                {
+                    tracing::warn!(%pid, %err, "managed app-server shutdown request failed; waiting for force deadline");
                 }
                 process
             };
@@ -381,69 +343,20 @@ impl PidBackend {
 
     #[cfg(any(unix, windows))]
     fn command_args(&self) -> Vec<Cow<'_, str>> {
-        let mut args = match &self.command_kind {
-            PidCommandKind::AppServer {
-                remote_control_enabled: true,
-            } => vec![
-                "app-server".into(),
-                "--remote-control".into(),
-                "--listen".into(),
-                "unix://".into(),
-            ],
-            PidCommandKind::AppServer {
-                remote_control_enabled: false,
-            } => vec!["app-server".into(), "--listen".into(), "unix://".into()],
-            PidCommandKind::UpdateLoop { restore_release } => {
-                let mut args = vec![
-                    "app-server".into(),
-                    "daemon".into(),
-                    "pid-update-loop".into(),
-                ];
-                if let Some(release) = restore_release {
-                    args.extend(["--restore-release".into(), release.as_str().into()]);
-                }
-                args
-            }
-        };
-        if matches!(self.command_kind, PidCommandKind::AppServer { .. }) {
-            // Match first-party clients' default while preserving explicit analytics opt-outs.
-            args.push("--analytics-default-enabled".into());
-            for (name, enabled) in &self.feature_overrides {
-                args.extend(["-c".into(), format!("features.{name}={enabled}").into()]);
-            }
+        let mut args = vec!["app-server".into(), "--listen".into(), "unix://".into()];
+        for (name, enabled) in &self.feature_overrides {
+            args.extend(["-c".into(), format!("features.{name}={enabled}").into()]);
         }
         args
     }
 
-    #[cfg(any(unix, windows))]
-    fn command_env(&self) -> Option<(&'static str, &'static str)> {
-        match self.command_kind {
-            PidCommandKind::AppServer {
-                remote_control_enabled: false,
-            } => Some((REMOTE_CONTROL_DISABLED_ENV_VAR, "1")),
-            PidCommandKind::AppServer {
-                remote_control_enabled: true,
-            }
-            | PidCommandKind::UpdateLoop { .. } => None,
-        }
-    }
-
     fn terminate_process(&self, pid: u32) -> Result<()> {
-        match self.command_kind {
-            PidCommandKind::AppServer { .. } => terminate_process(pid),
-            #[cfg(unix)]
-            PidCommandKind::UpdateLoop { .. } => terminate_process_group(pid),
-            #[cfg(not(unix))]
-            PidCommandKind::UpdateLoop { .. } => terminate_process(pid),
-        }
+        terminate_process(pid)
     }
 
     #[cfg(not(windows))]
     fn force_terminate_process(&self, pid: u32) -> Result<()> {
-        match self.command_kind {
-            PidCommandKind::AppServer { .. } => force_terminate_process(pid),
-            PidCommandKind::UpdateLoop { .. } => force_terminate_process_group(pid),
-        }
+        force_terminate_process(pid)
     }
 
     async fn record_is_active(&self, record: &PidRecord) -> Result<bool> {
@@ -540,36 +453,6 @@ fn force_terminate_process(pid: u32) -> Result<()> {
     Err(err).with_context(|| format!("failed to force terminate pid-managed app server {pid}"))
 }
 
-#[cfg(unix)]
-fn terminate_process_group(pid: u32) -> Result<()> {
-    let raw_pid = libc::pid_t::try_from(pid)
-        .with_context(|| format!("pid-managed updater pid {pid} is out of range"))?;
-    let result = unsafe { libc::kill(-raw_pid, libc::SIGTERM) };
-    if result == 0 {
-        return Ok(());
-    }
-    let err = std::io::Error::last_os_error();
-    if err.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
-    }
-    Err(err).with_context(|| format!("failed to terminate pid-managed updater group {pid}"))
-}
-
-#[cfg(unix)]
-fn force_terminate_process_group(pid: u32) -> Result<()> {
-    let raw_pid = libc::pid_t::try_from(pid)
-        .with_context(|| format!("pid-managed updater pid {pid} is out of range"))?;
-    let result = unsafe { libc::kill(-raw_pid, libc::SIGKILL) };
-    if result == 0 {
-        return Ok(());
-    }
-    let err = std::io::Error::last_os_error();
-    if err.raw_os_error() == Some(libc::ESRCH) {
-        return Ok(());
-    }
-    Err(err).with_context(|| format!("failed to force terminate pid-managed updater group {pid}"))
-}
-
 #[cfg(not(any(unix, windows)))]
 fn terminate_process(_pid: u32) -> Result<()> {
     bail!("pid-managed app-server shutdown is unsupported on this platform")
@@ -578,11 +461,6 @@ fn terminate_process(_pid: u32) -> Result<()> {
 #[cfg(not(any(unix, windows)))]
 fn force_terminate_process(_pid: u32) -> Result<()> {
     bail!("pid-managed app-server shutdown is unsupported on this platform")
-}
-
-#[cfg(not(any(unix, windows)))]
-fn force_terminate_process_group(_pid: u32) -> Result<()> {
-    bail!("pid-managed updater shutdown is unsupported on this platform")
 }
 
 #[cfg(unix)]
@@ -799,10 +677,6 @@ fn force_terminate_process(pid: u32) -> Result<()> {
 
 #[cfg(windows)]
 use force_terminate_process as terminate_process;
-
-#[cfg(windows)]
-#[path = "pid_windows.rs"]
-mod windows;
 
 #[cfg(any(unix, windows))]
 #[path = "pid_start.rs"]

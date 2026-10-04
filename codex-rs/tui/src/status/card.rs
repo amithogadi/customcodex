@@ -45,13 +45,10 @@ use super::rate_limits::compose_rate_limit_data_many;
 use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use super::remote_connection::RemoteConnectionStatus;
-use super::thread_usage::StatusThreadUsage;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_lines;
 use std::sync::Arc;
 use std::sync::RwLock;
-
-const CHATGPT_USAGE_URL: &str = "https://chatgpt.com/settings/usage";
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -91,10 +88,6 @@ impl StatusHistoryHandle {
             .to_string()
     }
 
-    pub(crate) fn reserve_thread_usage_label_width(&self) {
-        self.card.thread_usage.reserve_label_width();
-    }
-
     pub(crate) fn finish_rate_limit_refresh(
         &self,
         rate_limits: &[RateLimitSnapshotDisplay],
@@ -114,13 +107,6 @@ impl StatusHistoryHandle {
         state.rate_limits = rate_limits;
         state.refreshing_rate_limits = false;
     }
-
-    pub(crate) fn set_thread_usage(
-        &self,
-        estimate: Option<codex_app_server_protocol::ThreadUsage>,
-    ) {
-        self.card.thread_usage.set_estimate(estimate);
-    }
 }
 
 #[derive(Debug)]
@@ -133,14 +119,12 @@ struct StatusHistoryCell {
     collaboration_mode: Option<String>,
     model_provider: Option<String>,
     remote_connection: Option<RemoteConnectionStatus>,
-    show_chatgpt_usage_link: bool,
     account: Option<StatusAccountDisplay>,
     thread_name: Option<String>,
     session_id: Option<String>,
     forked_from: Option<String>,
     token_usage: StatusTokenUsageData,
     rate_limit_state: Arc<RwLock<StatusRateLimitState>>,
-    thread_usage: StatusThreadUsage,
 }
 
 #[cfg(test)]
@@ -350,7 +334,6 @@ impl StatusHistoryCell {
             &approval,
             workspace_root_suffix.as_deref(),
         );
-        let show_chatgpt_usage_link = requires_openai_auth;
         let account = compose_account_display(account_display);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
@@ -381,7 +364,6 @@ impl StatusHistoryCell {
             refreshing_rate_limits,
         }));
         let agents_summary = Arc::new(RwLock::new(agents_summary));
-        let thread_usage = StatusThreadUsage::default();
 
         Self {
             model_name,
@@ -391,7 +373,6 @@ impl StatusHistoryCell {
             collaboration_mode: collaboration_mode.map(ToString::to_string),
             model_provider,
             remote_connection: remote_connection.cloned(),
-            show_chatgpt_usage_link,
             account,
             thread_name,
             session_id,
@@ -399,7 +380,6 @@ impl StatusHistoryCell {
             token_usage,
             agents_summary,
             rate_limit_state,
-            thread_usage,
         }
     }
 
@@ -791,7 +771,6 @@ impl StatusHistoryCell {
             push_label(&mut labels, &mut seen, "Context window");
         }
         self.collect_rate_limit_labels(&rate_limit_state, &mut seen, &mut labels);
-        self.thread_usage.push_labels(&mut labels, &mut seen);
 
         let formatter = FieldFormatter::from_labels(labels.iter().map(String::as_str));
         let value_width = formatter.value_width(available_width);
@@ -863,11 +842,6 @@ impl StatusHistoryCell {
         }
 
         lines.extend(self.rate_limit_lines(&rate_limit_state, available_width, &formatter));
-        let thread_usage_lines = self.thread_usage.lines(&formatter, value_width);
-        if !thread_usage_lines.is_empty() {
-            lines.push(Line::from(Vec::<Span<'static>>::new()));
-            lines.extend(thread_usage_lines);
-        }
 
         // Leave room for the two-column title mark even in a tiny terminal.
         let indent = if available_width >= FieldFormatter::INDENT.len() + 2 {
@@ -883,26 +857,6 @@ impl StatusHistoryCell {
         );
         rendered.push(Line::default());
         // Providers such as Bedrock manage limits and billing elsewhere.
-        if self.show_chatgpt_usage_link {
-            rendered.extend(word_wrap_lines(
-                [
-                    Line::from(vec![
-                        "Visit ".fg(accent_color()),
-                        CHATGPT_USAGE_URL.fg(accent_color()).underlined(),
-                        " for up-to-date".fg(accent_color()),
-                    ]),
-                    "information on rate limits and credits"
-                        .fg(accent_color())
-                        .into(),
-                ],
-                RtOptions::new(available_width)
-                    .initial_indent(indent.into())
-                    .subsequent_indent(indent.into())
-                    .word_separator(textwrap::WordSeparator::AsciiSpace)
-                    .word_splitter(textwrap::WordSplitter::NoHyphenation),
-            ));
-            rendered.push(Line::default());
-        }
         // Keep every value, including long paths and IDs, aligned beneath its first line.
         // At widths too small for the label column, use the outer indent instead.
         let continuation = if value_width > 0 {
@@ -947,25 +901,7 @@ impl HistoryCell for Arc<StatusHistoryCell> {
         &self,
         width: u16,
     ) -> Vec<crate::terminal_hyperlinks::HyperlinkLine> {
-        let mut lines =
-            crate::terminal_hyperlinks::plain_hyperlink_lines(self.display_lines(width));
-        for line in &mut lines {
-            let visible = line
-                .line
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>();
-            if let Some(start_byte) = visible.find(CHATGPT_USAGE_URL) {
-                let start = display_width(&visible[..start_byte]);
-                line.hyperlinks
-                    .push(crate::terminal_hyperlinks::TerminalHyperlink::web(
-                        start..start + display_width(CHATGPT_USAGE_URL),
-                        CHATGPT_USAGE_URL.to_string(),
-                    ));
-            }
-        }
-        lines
+        crate::terminal_hyperlinks::plain_hyperlink_lines(self.display_lines(width))
     }
 
     fn transcript_hyperlink_lines(

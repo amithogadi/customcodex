@@ -1,7 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::bail;
-use app_test_support::DISABLE_PLUGIN_STARTUP_TASKS_ARG;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use base64::Engine;
@@ -501,14 +500,12 @@ pub(super) async fn spawn_websocket_server_with_args(
     let mut cmd = Command::new(program);
     cmd.arg("--listen")
         .arg(listen_url)
-        .arg(DISABLE_PLUGIN_STARTUP_TASKS_ARG)
         .args(extra_args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .env("CODEX_HOME", codex_home)
-        .env("RUST_LOG", "warn")
-        .env("OTEL_METRIC_EXPORT_INTERVAL", "200");
+        .env("RUST_LOG", "warn");
 
     let mut process = cmd
         .kill_on_drop(true)
@@ -639,7 +636,6 @@ async fn run_websocket_server_to_completion_with_args(
     let mut cmd = Command::new(program);
     cmd.arg("--listen")
         .arg(listen_url)
-        .arg(DISABLE_PLUGIN_STARTUP_TASKS_ARG)
         .args(extra_args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())

@@ -11,7 +11,6 @@ use std::sync::Weak;
 
 use codex_context_fragments::RenderedFragment;
 use codex_core::CodexThread;
-use codex_extension_api::ExtensionMetrics;
 use codex_guardian_reviewer::ConversationState;
 use codex_history::ResponseItemEnvelope;
 use codex_protocol::models::ResponseItem;
@@ -51,7 +50,6 @@ pub(super) struct ConversationRequest {
     pub(super) authorization: ScoreAuthorization,
     pub(super) thread: Arc<CodexThread>,
     pub(super) ready: oneshot::Sender<Result<String, LunaSamplerError>>,
-    pub(super) metrics: Option<Arc<dyn ExtensionMetrics>>,
 }
 
 // Authorization covers model settings; local config changes replace the backend.
@@ -164,26 +162,13 @@ async fn run(
             let _ = request.ready.send(Err(LunaSamplerError::InputTooLarge));
             continue;
         };
-        super::metrics::record_section_costs(
-            request.metrics.as_deref(),
-            prepared.section_costs.iter().copied(),
-        );
-        super::metrics::record_request_tokens(
-            request.metrics.as_deref(),
-            prepared.existing_context_tokens,
-            prepared.input_tokens,
-        );
         drop(request.evidence);
         let cursor = prepared.cursor;
-        let pending_truncations = std::mem::take(&mut prepared.truncations);
         let history = sampler.sample_retained(prepared, request.ready).await;
         if let Some(history) = history
             && generation.strong_count() > 0
             && request.authorization.is_current(&request.thread).await
         {
-            let mut truncations = super::truncation::ClassificationTruncations::default();
-            truncations.extend(pending_truncations);
-            truncations.emit(request.metrics.as_deref());
             state.complete_review(cursor);
             state.commit_snapshot(history);
             committed = Some((key, state));

@@ -82,14 +82,12 @@ impl App {
         let frame_requester = tui.frame_requester();
         let animations_enabled = self.local_settings.tui.animations;
         let tx = self.app_event_tx.clone();
-        let pet_http_client = self.chat_widget.pet_http_client.clone();
         std::mem::drop(tokio::spawn(async move {
             let result = crate::pets::load_pet_with_assets(
                 pet_id.clone(),
                 codex_home,
                 frame_requester,
                 animations_enabled,
-                &pet_http_client,
             )
             .await
             .map(Some)

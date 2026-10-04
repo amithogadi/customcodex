@@ -160,19 +160,6 @@ async fn usage_notice_yields_to_interactions_and_blocking_banners() {
     app.chat_widget
         .on_rate_limit_snapshot(Some(quota(/*used_percent*/ 92)));
     assert_eq!(app.chat_widget.usage_notice(/*width*/ 78), notice_line);
-    app.chat_widget.update_backend_banner(
-        &serde_json::from_value(serde_json::json!({
-            "rateLimits": quota(/*used_percent*/ 92),
-            "rateLimitUpsell": {
-                "banner_type": "selected_model_limit", "title": "Usage limit reached",
-                "description": "Choose another model.", "ctas": [],
-            },
-        }))
-        .unwrap(),
-    );
-    assert_eq!(app.chat_widget.usage_notice(/*width*/ 80), None);
-    app.chat_widget.clear_backend_banner();
-    assert_eq!(app.chat_widget.usage_notice(/*width*/ 78), notice_line);
 }
 
 #[tokio::test]

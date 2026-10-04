@@ -83,14 +83,12 @@ pub(crate) struct TurnRequestProcessor {
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
-    analytics_events_client: AnalyticsEventsClient,
     config: Arc<Config>,
     config_manager: ConfigManager,
     pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
     thread_state_manager: ThreadStateManager,
     thread_watch_manager: ThreadWatchManager,
     skills_watcher: Arc<SkillsWatcher>,
-    turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
 }
 
 fn map_additional_context(
@@ -145,14 +143,12 @@ impl TurnRequestProcessor {
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
-        analytics_events_client: AnalyticsEventsClient,
         config: Arc<Config>,
         config_manager: ConfigManager,
         pending_thread_unloads: Arc<Mutex<HashSet<ThreadId>>>,
         thread_state_manager: ThreadStateManager,
         thread_watch_manager: ThreadWatchManager,
         skills_watcher: Arc<SkillsWatcher>,
-        turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
     ) -> Self {
         let agent_runner = AgentRunner::new(Arc::downgrade(&thread_manager));
         Self {
@@ -160,14 +156,12 @@ impl TurnRequestProcessor {
             auth_manager,
             thread_manager,
             outgoing,
-            analytics_events_client,
             config,
             config_manager,
             pending_thread_unloads,
             thread_state_manager,
             thread_watch_manager,
             skills_watcher,
-            turn_cost_worker,
         }
     }
 
@@ -269,71 +263,8 @@ impl TurnRequestProcessor {
         params: TurnInterruptParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let result = self.turn_interrupt_inner(request_id, params).await;
-        if let Err(error) = &result {
-            self.track_error_response(request_id, error, /*error_type*/ None);
-        }
+        if let Err(error) = &result {}
         result.map(|response| response.map(Into::into))
-    }
-
-    pub(crate) async fn thread_realtime_start(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRealtimeStartParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_start_inner(request_id, params)
-            .await
-            .map(|response| response.map(Into::into))
-    }
-
-    pub(crate) async fn thread_realtime_append_audio(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRealtimeAppendAudioParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_append_audio_inner(request_id, params)
-            .await
-            .map(|response| response.map(Into::into))
-    }
-
-    pub(crate) async fn thread_realtime_append_text(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRealtimeAppendTextParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_append_text_inner(request_id, params)
-            .await
-            .map(|response| response.map(Into::into))
-    }
-
-    pub(crate) async fn thread_realtime_append_speech(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRealtimeAppendSpeechParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_append_speech_inner(request_id, params)
-            .await
-            .map(|response| response.map(Into::into))
-    }
-
-    pub(crate) async fn thread_realtime_stop(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRealtimeStopParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.thread_realtime_stop_inner(request_id, params)
-            .await
-            .map(|response| response.map(Into::into))
-    }
-
-    pub(crate) async fn thread_realtime_list_voices(
-        &self,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        Ok(Some(
-            ThreadRealtimeListVoicesResponse {
-                voices: RealtimeVoicesList::builtin(),
-            }
-            .into(),
-        ))
     }
 
     pub(crate) async fn review_start(
@@ -355,20 +286,6 @@ impl TurnRequestProcessor {
         self.review_start_inner(request_id, params)
             .await
             .map(|()| None)
-    }
-
-    fn track_error_response(
-        &self,
-        request_id: &ConnectionRequestId,
-        error: &JSONRPCErrorError,
-        error_type: Option<AnalyticsJsonRpcError>,
-    ) {
-        self.analytics_events_client.track_error_response(
-            request_id.connection_id.0,
-            request_id.request_id.clone(),
-            error.clone(),
-            error_type,
-        );
     }
 
     async fn load_thread(
@@ -395,9 +312,7 @@ impl TurnRequestProcessor {
     ) -> Result<(), JSONRPCErrorError> {
         ensure_direct_input_allowed(thread)
             .await
-            .inspect_err(|error| {
-                self.track_error_response(request_id, error, /*error_type*/ None);
-            })
+            .inspect_err(|error| {})
     }
 
     fn normalize_collaboration_mode(
@@ -481,22 +396,13 @@ impl TurnRequestProcessor {
         Ok((review_request, hint, target_prompt))
     }
 
-    async fn request_trace_context(
-        &self,
-        request_id: &ConnectionRequestId,
-    ) -> Option<codex_protocol::protocol::W3cTraceContext> {
-        self.outgoing.request_trace_context(request_id).await
-    }
-
     async fn submit_core_op(
         &self,
         request_id: &ConnectionRequestId,
         thread: &CodexThread,
         op: Op,
     ) -> CodexResult<String> {
-        thread
-            .submit_with_trace(op, self.request_trace_context(request_id).await)
-            .await
+        thread.submit(op).await
     }
 
     pub(super) fn input_too_large_error(actual_chars: usize) -> JSONRPCErrorError {
@@ -526,12 +432,10 @@ impl TurnRequestProcessor {
         app_server_client_name: Option<String>,
         app_server_client_version: Option<String>,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
-        let (thread_id, thread) =
-            self.load_thread(&params.thread_id)
-                .await
-                .inspect_err(|error| {
-                    self.track_error_response(&request_id, error, /*error_type*/ None);
-                })?;
+        let (thread_id, thread) = self
+            .load_thread(&params.thread_id)
+            .await
+            .inspect_err(|error| {})?;
         self.ensure_direct_input_allowed(&request_id, thread.as_ref())
             .await?;
         self.config_manager
@@ -570,11 +474,6 @@ impl TurnRequestProcessor {
                 });
         if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
             let error = Self::input_too_large_error(actual_chars);
-            self.track_error_response(
-                &request_id,
-                &error,
-                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
-            );
             return Err(error);
         }
         Self::set_app_server_client_info(
@@ -583,9 +482,7 @@ impl TurnRequestProcessor {
             app_server_client_version,
         )
         .await
-        .inspect_err(|error| {
-            self.track_error_response(&request_id, error, /*error_type*/ None);
-        })?;
+        .inspect_err(|error| {})?;
         let runtime_workspace_roots = params
             .runtime_workspace_roots
             .map(resolve_runtime_workspace_roots);
@@ -660,13 +557,11 @@ impl TurnRequestProcessor {
                         ..Default::default()
                     })
                     .with_additional_context(additional_context)
-                    .with_responses_metadata(params.responsesapi_client_metadata)
-                    .with_trace(self.request_trace_context(&request_id).await),
+                    .with_responses_metadata(params.responsesapi_client_metadata),
             )
             .await
             .map_err(|err| {
                 let error = internal_error(format!("failed to submit turn input: {err}"));
-                self.track_error_response(&request_id, &error, /*error_type*/ None);
                 error
             })?;
         let (turn_id, started) = match submission {
@@ -678,7 +573,6 @@ impl TurnRequestProcessor {
                 } else {
                     internal_error(format!("failed to submit turn input: {reason:?}"))
                 };
-                self.track_error_response(&request_id, &error, /*error_type*/ None);
                 return Err(error);
             }
         };
@@ -1030,9 +924,7 @@ impl TurnRequestProcessor {
         let (_, thread) = self
             .load_thread(&params.thread_id)
             .await
-            .inspect_err(|error| {
-                self.track_error_response(request_id, error, /*error_type*/ None);
-            })?;
+            .inspect_err(|error| {})?;
         self.ensure_direct_input_allowed(request_id, thread.as_ref())
             .await?;
         self.config_manager
@@ -1047,11 +939,6 @@ impl TurnRequestProcessor {
             .record_request_turn_id(request_id, &params.expected_turn_id)
             .await;
         if let Err(error) = Self::validate_v2_input_limit(&params.input) {
-            self.track_error_response(
-                request_id,
-                &error,
-                Some(AnalyticsJsonRpcError::Input(InputError::TooLarge)),
-            );
             return Err(error);
         }
 
@@ -1075,40 +962,30 @@ impl TurnRequestProcessor {
             .await
             .map_err(|err| {
                 let error = internal_error(format!("failed to steer turn: {err}"));
-                self.track_error_response(request_id, &error, /*error_type*/ None);
                 error
             })?;
         let turn_id = match submission {
             SteerSubmission::Steered { turn_id } => turn_id,
             SteerSubmission::NotSubmitted { reason } => {
-                let (message, data, error_type) = match reason {
+                let (message, data) = match reason {
                     NotSubmittedReason::ServerDraining => {
                         return Err(crate::error_code::server_draining_error());
                     }
-                    NotSubmittedReason::NoActiveTurn | NotSubmittedReason::NotIdle => (
-                        "no active turn to steer".to_string(),
-                        None,
-                        Some(AnalyticsJsonRpcError::TurnSteer(
-                            TurnSteerRequestError::NoActiveTurn,
-                        )),
-                    ),
+                    NotSubmittedReason::NoActiveTurn | NotSubmittedReason::NotIdle => {
+                        ("no active turn to steer".to_string(), None)
+                    }
                     NotSubmittedReason::ExpectedTurnMismatch { expected, actual } => (
                         format!("expected active turn id `{expected}` but found `{actual}`"),
                         None,
-                        Some(AnalyticsJsonRpcError::TurnSteer(
-                            TurnSteerRequestError::ExpectedTurnMismatch,
-                        )),
                     ),
                     NotSubmittedReason::ActiveTurnNotSteerable { turn_kind } => {
-                        let (message, turn_steer_error) = match turn_kind {
-                            codex_protocol::protocol::NonSteerableTurnKind::Review => (
-                                "cannot steer a review turn".to_string(),
-                                TurnSteerRequestError::NonSteerableReview,
-                            ),
-                            codex_protocol::protocol::NonSteerableTurnKind::Compact => (
-                                "cannot steer a compact turn".to_string(),
-                                TurnSteerRequestError::NonSteerableCompact,
-                            ),
+                        let message = match turn_kind {
+                            codex_protocol::protocol::NonSteerableTurnKind::Review => {
+                                "cannot steer a review turn".to_string()
+                            }
+                            codex_protocol::protocol::NonSteerableTurnKind::Compact => {
+                                "cannot steer a compact turn".to_string()
+                            }
                         };
                         let error = TurnError {
                             misalignment: None,
@@ -1128,262 +1005,25 @@ impl TurnRequestProcessor {
                                 None
                             }
                         };
-                        (
-                            message,
-                            data,
-                            Some(AnalyticsJsonRpcError::TurnSteer(turn_steer_error)),
-                        )
+                        (message, data)
                     }
-                    NotSubmittedReason::EmptyInput => (
-                        "input must not be empty".to_string(),
-                        None,
-                        Some(AnalyticsJsonRpcError::Input(InputError::Empty)),
-                    ),
+                    NotSubmittedReason::EmptyInput => ("input must not be empty".to_string(), None),
                     NotSubmittedReason::ActiveTurnOutputSchemaMismatch => (
                         "active turn uses a different output schema".to_string(),
-                        None,
                         None,
                     ),
                     NotSubmittedReason::PendingTriggerTurn
                     | NotSubmittedReason::PlanMode
-                    | NotSubmittedReason::Superseded => (
-                        "no active turn to steer".to_string(),
-                        None,
-                        Some(AnalyticsJsonRpcError::TurnSteer(
-                            TurnSteerRequestError::NoActiveTurn,
-                        )),
-                    ),
+                    | NotSubmittedReason::Superseded => {
+                        ("no active turn to steer".to_string(), None)
+                    }
                 };
                 let mut error = invalid_request(message);
                 error.data = data;
-                self.track_error_response(request_id, &error, error_type);
                 return Err(error);
             }
         };
         Ok(TurnSteerResponse { turn_id })
-    }
-
-    async fn prepare_realtime_conversation_thread(
-        &self,
-        request_id: &ConnectionRequestId,
-        thread_id: &str,
-    ) -> Result<Option<(ThreadId, Arc<CodexThread>)>, JSONRPCErrorError> {
-        let (thread_id, thread) = self.load_thread(thread_id).await?;
-        self.ensure_direct_input_allowed(request_id, thread.as_ref())
-            .await?;
-
-        match self
-            .ensure_conversation_listener(
-                thread_id,
-                request_id.connection_id,
-                /*raw_events_enabled*/ false,
-            )
-            .await
-        {
-            Ok(EnsureConversationListenerResult::Attached) => {}
-            Ok(EnsureConversationListenerResult::ConnectionClosed) => {
-                return Ok(None);
-            }
-            Err(error) => return Err(error),
-        }
-
-        Ok(Some((thread_id, thread)))
-    }
-
-    async fn thread_realtime_start_inner(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRealtimeStartParams,
-    ) -> Result<Option<ThreadRealtimeStartResponse>, JSONRPCErrorError> {
-        let attaches_existing_call = matches!(
-            &params.transport,
-            Some(ThreadRealtimeStartTransport::ExistingCall { .. })
-        );
-        if attaches_existing_call {
-            let unsupported_option = if params.include_startup_context == Some(true) {
-                Some("includeStartupContext")
-            } else if params.prompt.is_some() {
-                Some("prompt")
-            } else if params
-                .initial_items
-                .as_ref()
-                .is_some_and(|items| !items.is_empty())
-            {
-                Some("initialItems")
-            } else if params.model.is_some() {
-                Some("model")
-            } else if params.voice.is_some() {
-                Some("voice")
-            } else if params.delegation_ack_filler.is_some() {
-                Some("delegationAckFiller")
-            } else {
-                None
-            };
-            if let Some(option) = unsupported_option {
-                return Err(invalid_request(format!(
-                    "existingCall transport does not support {option}"
-                )));
-            }
-        }
-        let Some((_, thread)) = self
-            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
-            .await?
-        else {
-            return Ok(None);
-        };
-        self.submit_core_op(
-            request_id,
-            thread.as_ref(),
-            Op::RealtimeConversationStart(ConversationStartParams {
-                client_managed_handoffs: params.client_managed_handoffs.unwrap_or(false),
-                delegation_ack_filler: params.delegation_ack_filler,
-                flush_transcript_tail_on_session_end: params
-                    .flush_transcript_tail_on_session_end
-                    .unwrap_or(false),
-                codex_responses_as_items: params.codex_responses_as_items.unwrap_or(false),
-                codex_response_item_prefix: params.codex_response_item_prefix,
-                codex_response_handoff_mode: params.codex_response_handoff_mode.unwrap_or_default(),
-                backend_reasoning_status: params.backend_reasoning_status,
-                codex_response_handoff_channel_prefixes: params
-                    .codex_response_handoff_channel_prefixes,
-                model: params.model,
-                output_modality: params.output_modality,
-                include_startup_context: params
-                    .include_startup_context
-                    .unwrap_or(!attaches_existing_call),
-                initial_items: params
-                    .initial_items
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|item| ConversationTextParams {
-                        text: item.text,
-                        role: item.role,
-                    })
-                    .collect(),
-                realtime_start_instructions: params.realtime_start_instructions,
-                realtime_end_instructions: params.realtime_end_instructions,
-                prompt: params.prompt,
-                realtime_session_id: params.realtime_session_id,
-                transport: params.transport.map(|transport| match transport {
-                    ThreadRealtimeStartTransport::Websocket => {
-                        ConversationStartTransport::Websocket
-                    }
-                    ThreadRealtimeStartTransport::Webrtc { sdp } => {
-                        ConversationStartTransport::Webrtc { sdp }
-                    }
-                    ThreadRealtimeStartTransport::ExistingCall { call_id } => {
-                        ConversationStartTransport::ExistingCall {
-                            call_id,
-                            sideband_base_url: None,
-                        }
-                    }
-                }),
-                version: params.version,
-                voice: params.voice,
-            }),
-        )
-        .await
-        .map_err(|err| internal_error(format!("failed to start realtime conversation: {err}")))?;
-        Ok(Some(ThreadRealtimeStartResponse::default()))
-    }
-
-    async fn thread_realtime_append_audio_inner(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRealtimeAppendAudioParams,
-    ) -> Result<Option<ThreadRealtimeAppendAudioResponse>, JSONRPCErrorError> {
-        let Some((_, thread)) = self
-            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
-            .await?
-        else {
-            return Ok(None);
-        };
-        self.submit_core_op(
-            request_id,
-            thread.as_ref(),
-            Op::RealtimeConversationAudio(ConversationAudioParams {
-                frame: params.audio.into(),
-            }),
-        )
-        .await
-        .map_err(|err| {
-            internal_error(format!(
-                "failed to append realtime conversation audio: {err}"
-            ))
-        })?;
-        Ok(Some(ThreadRealtimeAppendAudioResponse::default()))
-    }
-
-    async fn thread_realtime_append_text_inner(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRealtimeAppendTextParams,
-    ) -> Result<Option<ThreadRealtimeAppendTextResponse>, JSONRPCErrorError> {
-        let Some((_, thread)) = self
-            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
-            .await?
-        else {
-            return Ok(None);
-        };
-        self.submit_core_op(
-            request_id,
-            thread.as_ref(),
-            Op::RealtimeConversationText(ConversationTextParams {
-                text: params.text,
-                role: params.role,
-            }),
-        )
-        .await
-        .map_err(|err| {
-            internal_error(format!(
-                "failed to append realtime conversation text: {err}"
-            ))
-        })?;
-        Ok(Some(ThreadRealtimeAppendTextResponse::default()))
-    }
-
-    async fn thread_realtime_append_speech_inner(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRealtimeAppendSpeechParams,
-    ) -> Result<Option<ThreadRealtimeAppendSpeechResponse>, JSONRPCErrorError> {
-        let Some((_, thread)) = self
-            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
-            .await?
-        else {
-            return Ok(None);
-        };
-        self.submit_core_op(
-            request_id,
-            thread.as_ref(),
-            Op::RealtimeConversationSpeech(ConversationSpeechParams { text: params.text }),
-        )
-        .await
-        .map_err(|err| {
-            internal_error(format!(
-                "failed to append realtime conversation speech: {err}"
-            ))
-        })?;
-        Ok(Some(ThreadRealtimeAppendSpeechResponse::default()))
-    }
-
-    async fn thread_realtime_stop_inner(
-        &self,
-        request_id: &ConnectionRequestId,
-        params: ThreadRealtimeStopParams,
-    ) -> Result<Option<ThreadRealtimeStopResponse>, JSONRPCErrorError> {
-        let Some((_, thread)) = self
-            .prepare_realtime_conversation_thread(request_id, &params.thread_id)
-            .await?
-        else {
-            return Ok(None);
-        };
-        self.submit_core_op(request_id, thread.as_ref(), Op::RealtimeConversationClose)
-            .await
-            .map_err(|err| {
-                internal_error(format!("failed to stop realtime conversation: {err}"))
-            })?;
-        Ok(Some(ThreadRealtimeStopResponse::default()))
     }
 
     fn build_review_turn(turn_id: String, display_text: &str) -> Turn {
@@ -1483,7 +1123,7 @@ impl TurnRequestProcessor {
                 AgentInvocation {
                     config,
                     prompt: prompt.to_string(),
-                    parent_trace: self.request_trace_context(request_id).await,
+                    parent_trace: None,
                 },
             )
             .await
@@ -1670,7 +1310,6 @@ impl TurnRequestProcessor {
             codex_home: self.config.codex_home.to_path_buf(),
             thread_unload_delay: self.config.thread_unload_delay,
             skills_watcher: Arc::clone(&self.skills_watcher),
-            turn_cost_worker: self.turn_cost_worker.clone(),
         }
     }
 

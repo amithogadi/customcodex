@@ -37,16 +37,7 @@ use crate::state::ActiveTurn;
 use crate::state::RunningTask;
 use crate::state::TaskKind;
 use crate::state::TurnState;
-use codex_analytics::TurnProfileFact;
-use codex_analytics::TurnTokenUsageFact;
 use codex_context_fragments::RenderedFragment;
-use codex_otel::SessionTelemetry;
-use codex_otel::TURN_E2E_DURATION_METRIC;
-use codex_otel::TURN_MEMORY_METRIC;
-use codex_otel::TURN_NETWORK_PROXY_METRIC;
-use codex_otel::TURN_TOOL_CALL_METRIC;
-use codex_otel::TURN_UNIFIED_EXEC_RUNNING_PROCESSES_METRIC;
-use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
@@ -69,7 +60,6 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 pub(crate) const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TASK_COMPACT_METRIC: &str = "codex.task.compact";
 static ACTIVE_TURNS: Gauge = Gauge::new("core.turns.active");
 
 pub(crate) type SessionTaskResult = CodexResult<Option<String>>;
@@ -117,58 +107,6 @@ pub(crate) fn interrupted_turn_history_marker(
     }
 }
 
-fn emit_turn_network_proxy_metric(
-    session_telemetry: &SessionTelemetry,
-    network_proxy_active: bool,
-    tmp_mem: (&str, &str),
-) {
-    let active = if network_proxy_active {
-        "true"
-    } else {
-        "false"
-    };
-    session_telemetry.counter(
-        TURN_NETWORK_PROXY_METRIC,
-        /*inc*/ 1,
-        &[("active", active), tmp_mem],
-    );
-}
-
-fn emit_turn_memory_metric(
-    session_telemetry: &SessionTelemetry,
-    feature_enabled: bool,
-    config_enabled: bool,
-    has_citations: bool,
-) {
-    let read_allowed = feature_enabled && config_enabled;
-    session_telemetry.counter(
-        TURN_MEMORY_METRIC,
-        /*inc*/ 1,
-        &[
-            ("read_allowed", bool_tag(read_allowed)),
-            ("feature_enabled", bool_tag(feature_enabled)),
-            ("config_use_memories", bool_tag(config_enabled)),
-            ("has_citations", bool_tag(has_citations)),
-        ],
-    );
-}
-
-pub(crate) fn emit_compact_metric(
-    session_telemetry: &SessionTelemetry,
-    compact_type: &'static str,
-    manual: bool,
-) {
-    session_telemetry.counter(
-        TASK_COMPACT_METRIC,
-        /*inc*/ 1,
-        &[("type", compact_type), ("manual", bool_tag(manual))],
-    );
-}
-
-fn bool_tag(value: bool) -> &'static str {
-    if value { "true" } else { "false" }
-}
-
 /// Async task that drives a [`Session`] turn.
 ///
 /// Implementations encapsulate a specific Codex workflow (regular chat,
@@ -179,7 +117,7 @@ fn bool_tag(value: bool) -> &'static str {
 /// release resources in [`SessionTask::abort`].
 pub(crate) trait SessionTask: Send + Sync + 'static {
     /// Describes the type of work the task performs so the session can
-    /// surface it in telemetry and UI.
+    /// surface it in local diagnostics and UI.
     fn kind(&self) -> TaskKind;
 
     /// Returns the tracing name for a spawned task span.
@@ -362,7 +300,6 @@ impl Session {
             codex.turn.token_usage.reasoning_output_tokens = field::Empty,
             codex.turn.token_usage.total_tokens = field::Empty,
         );
-        let storage_originator = AuthStorageOriginator::from_client_name(&turn_context.originator);
         let task_future = async move {
             let ctx_for_finish = Arc::clone(&ctx);
             let task_result = task_for_run
@@ -401,11 +338,7 @@ impl Session {
             done_clone.notify_waiters();
         }
         .instrument(task_span);
-        let handle = tokio::spawn(storage_originator.scope(task_future));
-        let timer = turn_context
-            .session_telemetry
-            .start_timer(TURN_E2E_DURATION_METRIC, &[])
-            .ok();
+        let handle = tokio::spawn(task_future);
         let running_task = RunningTask {
             done,
             handle: AbortOnDropHandle::new(handle),
@@ -415,7 +348,6 @@ impl Session {
             turn_context: Arc::clone(&turn_context),
             _agent_execution_guard: agent_execution_guard,
             _diagnostics_guard: ACTIVE_TURNS.track(),
-            _timer: timer,
         };
         turn.task = Some(running_task);
     }
@@ -634,7 +566,6 @@ impl Session {
                     err.details(),
                 )
                 .await;
-                self.track_turn_codex_error(turn_context.as_ref(), &err);
                 self.send_event(
                     turn_context.as_ref(),
                     EventMsg::Error(err.to_error_event(/*message_prefix*/ None)),
@@ -662,20 +593,6 @@ impl Session {
             .input_queue
             .take_pending_input_for_turn_state(turn_state.as_ref())
             .await;
-        let (
-            turn_had_memory_citation,
-            turn_tool_calls,
-            token_usage_at_turn_start,
-            token_usage_by_model,
-        ) = {
-            let mut ts = turn_state.lock().await;
-            (
-                ts.has_memory_citation,
-                ts.tool_calls,
-                ts.token_usage_at_turn_start.clone(),
-                std::mem::take(&mut ts.token_usage_by_model),
-            )
-        };
         run_hooks_and_record_inputs(
             self,
             &turn_context,
@@ -684,121 +601,63 @@ impl Session {
             PersistContext::Standard,
         )
         .await;
-        let turn_telemetry = &turn_context.session_telemetry;
-        // Emit token usage metrics.
-        {
-            // TODO(jif): drop this
-            let tmp_mem = (
-                "tmp_mem_enabled",
-                if self.enabled(Feature::MemoryTool) {
-                    "true"
-                } else {
-                    "false"
-                },
-            );
-            let network_proxy = self.services.network_proxy.load_full();
-            let network_proxy_active = match network_proxy.as_ref() {
-                Some(started_network_proxy) => {
-                    match started_network_proxy.proxy().current_cfg().await {
-                        Ok(config) => config.enabled,
-                        Err(err) => {
-                            warn!(
-                                "failed to read managed network proxy state for turn metrics: {err:#}"
-                            );
-                            false
-                        }
-                    }
-                }
-                None => false,
-            };
-            emit_turn_network_proxy_metric(turn_telemetry, network_proxy_active, tmp_mem);
-            turn_telemetry.histogram(
-                TURN_TOOL_CALL_METRIC,
-                i64::try_from(turn_tool_calls).unwrap_or(i64::MAX),
-                &[tmp_mem],
-            );
-            let total_token_usage = self.total_token_usage().await.unwrap_or_default();
-            let turn_token_usage = TokenUsage {
-                input_tokens: (total_token_usage.input_tokens
-                    - token_usage_at_turn_start.input_tokens)
-                    .max(0),
-                cached_input_tokens: (total_token_usage.cached_input_tokens
-                    - token_usage_at_turn_start.cached_input_tokens)
-                    .max(0),
-                cache_write_input_tokens: (total_token_usage.cache_write_input_tokens
-                    - token_usage_at_turn_start.cache_write_input_tokens)
-                    .max(0),
-                output_tokens: (total_token_usage.output_tokens
-                    - token_usage_at_turn_start.output_tokens)
-                    .max(0),
-                reasoning_output_tokens: (total_token_usage.reasoning_output_tokens
-                    - token_usage_at_turn_start.reasoning_output_tokens)
-                    .max(0),
-                total_tokens: (total_token_usage.total_tokens
-                    - token_usage_at_turn_start.total_tokens)
-                    .max(0),
-                codex_rollout_budget_units: None,
-            };
-            let current_span = Span::current();
-            current_span.record(
-                "codex.turn.token_usage.input_tokens",
-                turn_token_usage.input_tokens,
-            );
-            current_span.record(
-                "codex.turn.token_usage.cached_input_tokens",
-                turn_token_usage.cached_input(),
-            );
-            current_span.record(
-                "codex.turn.token_usage.cache_write_input_tokens",
-                turn_token_usage.cache_write_input_tokens,
-            );
-            current_span.record(
-                "codex.turn.token_usage.non_cached_input_tokens",
-                turn_token_usage.non_cached_input(),
-            );
-            current_span.record(
-                "codex.turn.token_usage.output_tokens",
-                turn_token_usage.output_tokens,
-            );
-            current_span.record(
-                "codex.turn.token_usage.reasoning_output_tokens",
-                turn_token_usage.reasoning_output_tokens,
-            );
-            current_span.record(
-                "codex.turn.token_usage.total_tokens",
-                turn_token_usage.total_tokens,
-            );
-            self.services
-                .analytics_events_client
-                .track_turn_token_usage(TurnTokenUsageFact {
-                    turn_id: turn_context.sub_id.clone(),
-                    thread_id: self.thread_id.to_string(),
-                    token_usage: turn_token_usage,
-                });
-            token_usage_by_model.emit(turn_telemetry, tmp_mem);
-        }
-        emit_turn_memory_metric(
-            turn_telemetry,
-            turn_context.config.features.enabled(Feature::MemoryTool),
-            turn_context.config.memories.use_memories,
-            turn_had_memory_citation,
+        // Preserve per-turn token totals in the local task span.
+        let token_usage_at_turn_start = turn_state.lock().await.token_usage_at_turn_start.clone();
+        let total_token_usage = self.total_token_usage().await.unwrap_or_default();
+        let turn_token_usage = TokenUsage {
+            input_tokens: (total_token_usage.input_tokens - token_usage_at_turn_start.input_tokens)
+                .max(0),
+            cached_input_tokens: (total_token_usage.cached_input_tokens
+                - token_usage_at_turn_start.cached_input_tokens)
+                .max(0),
+            cache_write_input_tokens: (total_token_usage.cache_write_input_tokens
+                - token_usage_at_turn_start.cache_write_input_tokens)
+                .max(0),
+            output_tokens: (total_token_usage.output_tokens
+                - token_usage_at_turn_start.output_tokens)
+                .max(0),
+            reasoning_output_tokens: (total_token_usage.reasoning_output_tokens
+                - token_usage_at_turn_start.reasoning_output_tokens)
+                .max(0),
+            total_tokens: (total_token_usage.total_tokens - token_usage_at_turn_start.total_tokens)
+                .max(0),
+            codex_rollout_budget_units: None,
+        };
+        let current_span = Span::current();
+        current_span.record(
+            "codex.turn.token_usage.input_tokens",
+            turn_token_usage.input_tokens,
         );
-        turn_telemetry.counter(
-            TURN_UNIFIED_EXEC_RUNNING_PROCESSES_METRIC,
-            i64::try_from(self.list_background_terminals().await.len()).unwrap_or(i64::MAX),
-            &[],
+        current_span.record(
+            "codex.turn.token_usage.cached_input_tokens",
+            turn_token_usage.cached_input(),
         );
+        current_span.record(
+            "codex.turn.token_usage.cache_write_input_tokens",
+            turn_token_usage.cache_write_input_tokens,
+        );
+        current_span.record(
+            "codex.turn.token_usage.non_cached_input_tokens",
+            turn_token_usage.non_cached_input(),
+        );
+        current_span.record(
+            "codex.turn.token_usage.output_tokens",
+            turn_token_usage.output_tokens,
+        );
+        current_span.record(
+            "codex.turn.token_usage.reasoning_output_tokens",
+            turn_token_usage.reasoning_output_tokens,
+        );
+        current_span.record(
+            "codex.turn.token_usage.total_tokens",
+            turn_token_usage.total_tokens,
+        );
+
         let started_at = turn_context.turn_timing_state.started_at_unix_secs().await;
-        let (completed_at, duration_ms, profile) = turn_context
+        let (completed_at, duration_ms, _profile) = turn_context
             .turn_timing_state
             .complete_profile_and_duration_ms()
             .await;
-        self.services
-            .analytics_events_client
-            .track_turn_profile(TurnProfileFact {
-                turn_id: turn_context.sub_id.clone(),
-                profile,
-            });
         let idle_cause = if matches!(
             abort_reason.as_ref(),
             Some(TurnAbortReason::Interrupted | TurnAbortReason::BudgetLimited)
@@ -985,17 +844,11 @@ impl Session {
             .turn_timing_state
             .started_at_unix_secs()
             .await;
-        let (completed_at, duration_ms, profile) = task
+        let (completed_at, duration_ms, _profile) = task
             .turn_context
             .turn_timing_state
             .complete_profile_and_duration_ms()
             .await;
-        self.services
-            .analytics_events_client
-            .track_turn_profile(TurnProfileFact {
-                turn_id: task.turn_context.sub_id.clone(),
-                profile,
-            });
         self.emit_turn_abort_lifecycle(reason.clone(), task.turn_context.extension_data.as_ref())
             .await;
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
@@ -1014,7 +867,3 @@ impl Session {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;

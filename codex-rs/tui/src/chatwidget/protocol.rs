@@ -20,7 +20,7 @@ impl ChatWidget {
         {
             return;
         }
-        let was_replaying_turn_completion = self.thread_usage.replaying_turn_completion;
+        let was_replaying_turn_completion = self.replaying_turn_completion;
         if replay_kind.is_some()
             || matches!(
                 &notification,
@@ -29,7 +29,7 @@ impl ChatWidget {
         {
             self.empty_state_animation.borrow_mut().dismiss();
         }
-        self.thread_usage.replaying_turn_completion = replay_kind.is_some();
+        self.replaying_turn_completion = replay_kind.is_some();
         let from_replay = replay_kind.is_some();
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
@@ -323,16 +323,8 @@ impl ChatWidget {
                     self.on_shutdown_complete();
                 }
             }
-            ServerNotification::ThreadRealtimeSdp(notification) => {
-                if !from_replay {
-                    self.on_realtime_conversation_sdp(notification.sdp);
-                }
-            }
-            ServerNotification::ThreadRealtimeStarted(_) => {
-                if !from_replay {
-                    self.on_realtime_conversation_started();
-                }
-            }
+            ServerNotification::ThreadRealtimeSdp(notification) => if !from_replay {},
+            ServerNotification::ThreadRealtimeStarted(_) => if !from_replay {},
             ServerNotification::ThreadRealtimeTranscriptDelta(notification) => {
                 if !from_replay {
                     self.on_realtime_transcript_delta(notification.role, notification.delta);
@@ -371,13 +363,10 @@ impl ChatWidget {
             | ServerNotification::CommandExecOutputDelta(_)
             | ServerNotification::ProcessOutputDelta(_)
             | ServerNotification::ProcessExited(_)
-            | ServerNotification::McpServerEventStream(_)
             | ServerNotification::FileChangePatchUpdated(_)
             | ServerNotification::McpToolCallProgress(_)
-            | ServerNotification::AppListUpdated(_)
             | ServerNotification::EnvironmentConnected(_)
             | ServerNotification::EnvironmentDisconnected(_)
-            | ServerNotification::RemoteControlStatusChanged(_)
             | ServerNotification::ExternalAgentConfigImportProgress(_)
             | ServerNotification::ExternalAgentConfigImportCompleted(_)
             | ServerNotification::FsChanged(_)
@@ -410,7 +399,7 @@ impl ChatWidget {
                 self.status_state.current_status.details_max_lines,
             );
         }
-        self.thread_usage.replaying_turn_completion = was_replaying_turn_completion;
+        self.replaying_turn_completion = was_replaying_turn_completion;
     }
 
     pub(super) fn handle_turn_completed_notification(
@@ -423,8 +412,8 @@ impl ChatWidget {
         // client can submit the same text and it still needs its own user cell.
         self.last_rendered_user_message_display = None;
         let mut question_drafts = None;
-        let was_replaying_turn_completion = self.thread_usage.replaying_turn_completion;
-        self.thread_usage.replaying_turn_completion = replay_kind.is_some();
+        let was_replaying_turn_completion = self.replaying_turn_completion;
+        self.replaying_turn_completion = replay_kind.is_some();
         match notification.turn.status {
             TurnStatus::Completed => {
                 let last_agent_message =
@@ -465,9 +454,7 @@ impl ChatWidget {
                 }
                 if replay_kind.is_none()
                     && let Some((item, _, _)) = &last_agent_message
-                {
-                    self.speak_completed_realtime_delegation(&notification.turn.id, item);
-                }
+                {}
                 if replay_kind.is_none() {
                     question_drafts = self.take_question_drafts();
                 }
@@ -535,7 +522,7 @@ impl ChatWidget {
         if replay_kind.is_none() {
             self.finish_realtime_turn(&notification.turn.id);
         }
-        self.thread_usage.replaying_turn_completion = was_replaying_turn_completion;
+        self.replaying_turn_completion = was_replaying_turn_completion;
     }
 
     fn handle_item_started_notification(

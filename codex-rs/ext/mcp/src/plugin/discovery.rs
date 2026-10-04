@@ -1,4 +1,3 @@
-use codex_connectors::parse_plugin_app_config;
 use codex_core_plugins::manifest::UriPluginManifest;
 use codex_core_plugins::manifest::parse_plugin_manifest_uri;
 use codex_exec_server::CapabilityRootDiscovery;
@@ -91,46 +90,11 @@ pub(super) fn metadata_from_discovery(
             })
             .unwrap_or_default(),
     };
-    let connector_ids = manifest
-        .paths
-        .apps
-        .as_ref()
-        .and_then(|path| {
-            plugin_files
-                .apps_config
-                .as_ref()
-                .filter(|file| file.path == *path)
-                .or_else(|| {
-                    tracing::warn!(
-                        selected_root = selected_root.id,
-                        path = %path,
-                        "exec-server capability bundle omitted declared connector config"
-                    );
-                    None
-                })
-        })
-        .and_then(|file| match parse_plugin_app_config(&file.contents) {
-            Ok(declarations) => Some(declarations),
-            Err(error) => {
-                tracing::warn!(
-                    selected_root = selected_root.id,
-                    path = %file.path,
-                    %error,
-                    "failed to parse exec-server-discovered connector config"
-                );
-                None
-            }
-        })
-        .unwrap_or_default()
-        .into_iter()
-        .map(|declaration| declaration.connector_id.0)
-        .collect();
-
     SelectedPluginContribution {
         plugin_display_name: manifest.display_name().to_string(),
         source_environment_id: environment_id.clone(),
         servers,
-        connector_ids,
+        connector_ids: Vec::new(),
     }
 }
 

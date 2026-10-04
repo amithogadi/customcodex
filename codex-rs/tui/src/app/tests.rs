@@ -7,8 +7,6 @@ mod mcp_login_tests;
 
 #[path = "tests/math_interruption_tests.rs"]
 mod math_interruption_tests;
-#[path = "tests/security_setup_tests.rs"]
-mod security_setup_tests;
 
 #[path = "tests/advanced_reasoning_tests.rs"]
 mod advanced_reasoning_tests;
@@ -16,12 +14,6 @@ mod advanced_reasoning_tests;
 mod agents_navigation_tests;
 #[path = "tests/approvals_reviewer_error_tests.rs"]
 mod approvals_reviewer_error_tests;
-#[path = "tests/backend_banner_fallback_tests.rs"]
-mod backend_banner_fallback_tests;
-#[path = "tests/backend_banner_recovery_tests.rs"]
-mod backend_banner_recovery_tests;
-#[path = "tests/backend_banner_startup_tests.rs"]
-mod backend_banner_startup_tests;
 #[path = "tests/background_exit_tests.rs"]
 mod background_exit_tests;
 #[path = "tests/background_task_defaults_tests.rs"]
@@ -30,8 +22,6 @@ mod background_task_defaults_tests;
 mod browsing_pagination_tests;
 #[path = "tests/buffered_replay.rs"]
 mod buffered_replay;
-#[path = "tests/connector_policy.rs"]
-mod connector_policy;
 #[path = "tests/disconnect_tests.rs"]
 mod disconnect;
 #[path = "tests/external_writer_fork_tests.rs"]
@@ -46,8 +36,6 @@ mod home_cleanup_tests;
 mod key_chords;
 #[path = "tests/local_command_scroll_tests.rs"]
 mod local_command_scroll_tests;
-#[path = "tests/luna_reserve_recovery_tests.rs"]
-mod luna_reserve_recovery_tests;
 #[path = "tests/mcp_startup.rs"]
 mod mcp_startup;
 #[path = "tests/misalignment_policy_tests.rs"]
@@ -71,13 +59,6 @@ mod history_hydration_tests;
 #[path = "tests/permission_shortcuts_tests.rs"]
 mod permission_shortcuts_tests;
 mod plugin_catalog;
-mod rate_limits;
-#[path = "tests/realtime_handoff_e2e.rs"]
-mod realtime_handoff_e2e;
-#[path = "tests/realtime_requests.rs"]
-mod realtime_requests;
-#[path = "tests/realtime_start.rs"]
-mod realtime_start;
 #[path = "tests/reasoning_resume_tests.rs"]
 mod reasoning_resume_tests;
 #[path = "tests/recap_generation_tests.rs"]
@@ -94,8 +75,6 @@ mod startup_frame_tests;
 mod startup_warnings_tests;
 #[path = "tests/stream_animation_tests.rs"]
 mod stream_animation_tests;
-#[path = "tests/thread_usage.rs"]
-mod thread_usage;
 #[path = "tests/transcript_composer.rs"]
 mod transcript_composer;
 #[path = "tests/transcript_selection.rs"]
@@ -197,7 +176,6 @@ use codex_app_server_protocol::WarningNotification;
 use codex_history::RolloutItem;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
 use codex_models_manager::test_support::get_model_offline_for_tests;
-use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -763,9 +741,7 @@ fn set_test_initial_prompt(app: &mut App, initial_prompt: String) {
         ),
         enhanced_keys_supported: false,
         has_chatgpt_account: false,
-        has_codex_backend_auth: false,
         model_catalog: app.model_catalog.clone(),
-        feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: false,
         status_account_display: None,
         initial_plan_type: None,
@@ -773,7 +749,6 @@ fn set_test_initial_prompt(app: &mut App, initial_prompt: String) {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
         terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
-        session_telemetry: app.session_telemetry.clone(),
     });
 }
 
@@ -4484,7 +4459,7 @@ async fn inactive_thread_permissions_approval_preserves_file_system_permissions(
 }
 
 #[tokio::test]
-async fn inactive_thread_url_elicitation_routes_to_app_link() {
+async fn inactive_thread_url_elicitation_routes_to_generic_mcp_approval() {
     let app = make_test_app().await;
     let thread_id = ThreadId::new();
     let request = ServerRequest::McpServerElicitationRequest {
@@ -4502,24 +4477,25 @@ async fn inactive_thread_url_elicitation_routes_to_app_link() {
         },
     };
 
-    let Some(ThreadInteractiveRequest::AppLink(params)) = app
+    let Some(ThreadInteractiveRequest::Approval(ApprovalRequest::McpElicitation(params))) = app
         .interactive_request_for_thread_request(thread_id, &request)
         .await
         .expect("valid localized paths")
     else {
-        panic!("expected app link request");
+        panic!("expected generic MCP approval request");
     };
-
-    assert_eq!(params.title, "Action required");
-    assert_eq!(params.description, Some("Server: payments".to_string()));
-    assert_eq!(params.url, "https://payments.example/checkout/123");
-    assert_eq!(
-        params.elicitation_target,
-        Some(crate::bottom_pane::AppLinkElicitationTarget {
-            thread_id,
-            server_name: "payments".to_string(),
-            request_id: AppServerRequestId::Integer(9),
-        })
+    assert_eq!(params.thread_id, thread_id);
+    assert_eq!(params.server_name, "payments");
+    assert_eq!(params.request_id, AppServerRequestId::Integer(9));
+    assert!(
+        params
+            .message
+            .contains("Review the payment details to continue.")
+    );
+    assert!(
+        params
+            .message
+            .contains("https://payments.example/checkout/123")
     );
 }
 
@@ -6120,12 +6096,10 @@ async fn make_test_app() -> Box<App> {
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
-    let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     Box::new(App {
         feature_write_lock: Arc::default(),
         model_catalog: chat_widget.model_catalog(),
-        session_telemetry,
         app_event_tx,
         chat_widget,
         workspace_command_runner: None,
@@ -6147,10 +6121,7 @@ async fn make_test_app() -> Box<App> {
         turn_tips: Default::default(),
         transcript_view: Default::default(),
         last_rendered_history_tail: None,
-        last_thread_usage_status_cell: None,
-        pending_thread_usage_history_refresh: false,
         overlay: None,
-        retained_analytics: None,
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
         transcript_reflow: TranscriptReflowState::default(),
@@ -6166,8 +6137,6 @@ async fn make_test_app() -> Box<App> {
         skill_load_warnings: SkillLoadWarningState::default(),
         backtrack: BacktrackState::default(),
         backtrack_render_pending: false,
-        feedback: codex_feedback::CodexFeedback::new(),
-        feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         app_server_target: crate::AppServerTarget::Embedded,
         reconnect: Default::default(),
@@ -6179,8 +6148,6 @@ async fn make_test_app() -> Box<App> {
             wsl: false,
             vscode: crate::tui::VscodeDetection::Other,
         },
-        daemon_cli_executable: None,
-        pending_update_action: None,
         pending_shutdown_exit_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
         thread_event_channels: HashMap::new(),
@@ -6217,7 +6184,6 @@ async fn make_test_app() -> Box<App> {
         pending_managed_worktree_attach: None,
         startup_protected_input_boundary: false,
         startup_pending_protected_request: false,
-        account_email_request_id: None,
         rate_limit_hard_stop_generation: 0,
         rate_limit_refresh_state: Default::default(),
         pending_mcp_login_start: None,
@@ -6239,13 +6205,11 @@ pub(super) async fn make_test_app_with_channels() -> (
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
-    let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     (
         Box::new(App {
             feature_write_lock: Arc::default(),
             model_catalog: chat_widget.model_catalog(),
-            session_telemetry,
             app_event_tx,
             chat_widget,
             workspace_command_runner: None,
@@ -6267,10 +6231,7 @@ pub(super) async fn make_test_app_with_channels() -> (
             turn_tips: Default::default(),
             transcript_view: Default::default(),
             last_rendered_history_tail: None,
-            last_thread_usage_status_cell: None,
-            pending_thread_usage_history_refresh: false,
             overlay: None,
-            retained_analytics: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             transcript_reflow: TranscriptReflowState::default(),
@@ -6286,8 +6247,6 @@ pub(super) async fn make_test_app_with_channels() -> (
             skill_load_warnings: SkillLoadWarningState::default(),
             backtrack: BacktrackState::default(),
             backtrack_render_pending: false,
-            feedback: codex_feedback::CodexFeedback::new(),
-            feedback_audience: FeedbackAudience::External,
             environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
             app_server_target: crate::AppServerTarget::Embedded,
             reconnect: Default::default(),
@@ -6299,8 +6258,6 @@ pub(super) async fn make_test_app_with_channels() -> (
                 wsl: false,
                 vscode: crate::tui::VscodeDetection::Other,
             },
-            daemon_cli_executable: None,
-            pending_update_action: None,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
@@ -6337,7 +6294,6 @@ pub(super) async fn make_test_app_with_channels() -> (
             pending_managed_worktree_attach: None,
             startup_protected_input_boundary: false,
             startup_pending_protected_request: false,
-            account_email_request_id: None,
             rate_limit_hard_stop_generation: 0,
             rate_limit_refresh_state: Default::default(),
             pending_mcp_login_start: None,
@@ -7346,178 +7302,6 @@ fn request_user_input_request(thread_id: ThreadId, turn_id: &str, item_id: &str)
     }
 }
 
-#[tokio::test]
-async fn feedback_submission_stages_logs_cleans_up_and_emits_error_history_cell() -> Result<()> {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD;
-    use std::io::Write;
-    use tracing_subscriber::fmt::writer::MakeWriter;
-
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let (server, requests, proxy) =
-        session_lifecycle_requests::start_recording_remote_app_server(&app.config).await?;
-    let diagnostic = "SQLITE LOG WRITE FAILURE: disk full\n";
-    let expected_logs = format!("{}{diagnostic}", "x".repeat(1024 * 1024 - diagnostic.len()));
-    let mut writer = app.feedback.make_writer().make_writer();
-    writer.write_all(&vec![b'x'; 1024 * 1024])?;
-    writer.write_all(diagnostic.as_bytes())?;
-    for (include_logs, staging_fails) in [(true, false), (false, false), (true, true)] {
-        let home = tempdir()?;
-        let tmp = home.path().join("tmp");
-        if staging_fails {
-            std::fs::write(&tmp, "not a directory")?;
-        }
-        let mut params = background_requests::build_feedback_upload_params(
-            /*origin_thread_id*/ None,
-            Some(PathBuf::from("existing-rollout.jsonl")),
-            FeedbackCategory::Bug,
-            /*reason*/ None,
-            /*turn_id*/ None,
-            include_logs,
-        );
-        // Reject before network upload, after the client has staged its diagnostics.
-        params.thread_id = Some("invalid-thread-id".into());
-        let error = feedback_upload::fetch_feedback_upload(
-            server.request_handle(),
-            Some(AppServerPath::from_app_server(
-                home.path().display().to_string(),
-            )),
-            params,
-            app.feedback.clone(),
-        )
-        .await
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("invalid thread id"));
-        let recorded = std::mem::take(&mut *requests.lock().unwrap());
-        let upload = recorded
-            .iter()
-            .find(|r| r.method == "feedback/upload")
-            .unwrap();
-        let upload: FeedbackUploadParams = serde_json::from_value(upload.params.clone().unwrap())?;
-        if include_logs && !staging_fails {
-            let write = recorded
-                .iter()
-                .find(|r| r.method == "fs/writeFile")
-                .unwrap();
-            let write = write.params.as_ref().unwrap();
-            assert_eq!(
-                STANDARD.decode(write["dataBase64"].as_str().unwrap())?,
-                expected_logs.as_bytes()
-            );
-            assert_eq!(
-                upload.extra_log_files,
-                Some(vec![
-                    PathBuf::from("existing-rollout.jsonl"),
-                    PathBuf::from(write["path"].as_str().unwrap())
-                ])
-            );
-            assert_eq!(std::fs::read_dir(&tmp)?.count(), 0);
-        } else if staging_fails {
-            assert_eq!(
-                upload.extra_log_files,
-                Some(vec![PathBuf::from("existing-rollout.jsonl")])
-            );
-            assert!(
-                upload
-                    .reason
-                    .unwrap()
-                    .contains("TUI client logs were omitted")
-            );
-        } else {
-            assert_eq!(recorded.len(), 1);
-            assert_eq!(upload.extra_log_files, None);
-            assert!(!tmp.exists());
-        }
-    }
-    server.shutdown().await?;
-    proxy.await??;
-
-    app.handle_feedback_submitted(
-        /*origin_thread_id*/ None,
-        FeedbackCategory::Bug,
-        /*include_logs*/ true,
-        Err("boom".to_string()),
-    )
-    .await;
-
-    let cell = match app_event_rx.try_recv() {
-        Ok(AppEvent::InsertHistoryCell(cell)) => cell,
-        other => panic!("expected feedback error history cell, saw {other:?}"),
-    };
-    assert_eq!(
-        lines_to_single_string(&cell.display_lines(/*width*/ 120)),
-        "■ Failed to upload feedback: boom"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn feedback_submission_for_inactive_thread_replays_into_origin_thread() {
-    let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-    let origin_thread_id = ThreadId::new();
-    let active_thread_id = ThreadId::new();
-    let origin_session = test_thread_session(origin_thread_id, test_path_buf("/tmp/origin"));
-    let active_session = test_thread_session(active_thread_id, test_path_buf("/tmp/active"));
-    app.thread_event_channels.insert(
-        origin_thread_id,
-        ThreadEventChannel::new_with_session(
-            THREAD_EVENT_CHANNEL_CAPACITY,
-            origin_session.clone(),
-            Vec::new(),
-        ),
-    );
-    app.thread_event_channels.insert(
-        active_thread_id,
-        ThreadEventChannel::new_with_session(
-            THREAD_EVENT_CHANNEL_CAPACITY,
-            active_session.clone(),
-            Vec::new(),
-        ),
-    );
-    app.activate_thread_channel(active_thread_id).await;
-    app.chat_widget.handle_thread_session(active_session);
-    while app_event_rx.try_recv().is_ok() {}
-
-    app.handle_feedback_submitted(
-        Some(origin_thread_id),
-        FeedbackCategory::Bug,
-        /*include_logs*/ true,
-        Ok("uploaded-thread".to_string()),
-    )
-    .await;
-
-    assert_matches!(
-        app_event_rx.try_recv(),
-        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-    );
-
-    let snapshot = {
-        let channel = app
-            .thread_event_channels
-            .get(&origin_thread_id)
-            .expect("origin thread channel should exist");
-        let store = channel.store.lock().await;
-        assert!(matches!(
-            store.buffer.back(),
-            Some(ThreadBufferedEvent::FeedbackSubmission(_))
-        ));
-        store.snapshot()
-    };
-
-    app.replay_thread_snapshot(snapshot, /*resume_restored_queue*/ false);
-
-    let mut rendered_cells = Vec::new();
-    while let Ok(event) = app_event_rx.try_recv() {
-        if let AppEvent::InsertHistoryCell(cell) = event {
-            rendered_cells.push(lines_to_single_string(&cell.display_lines(/*width*/ 120)));
-        }
-    }
-    assert!(rendered_cells.iter().any(|cell| {
-        cell.contains("• Feedback uploaded. Please open an issue using the following URL:")
-            && cell.contains("uploaded-thread")
-    }));
-}
-
 fn next_history_message(events: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> String {
     let cell = std::iter::from_fn(|| events.try_recv().ok())
         .find_map(|event| match event {
@@ -7550,23 +7334,6 @@ fn lines_to_single_string(lines: &[Line<'_>]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info =
-        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
-    SessionTelemetry::new(
-        ThreadId::new(),
-        model,
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        /*account_email*/ None,
-        /*auth_mode*/ None,
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        crate::test_support::session_source_cli(),
-    )
 }
 
 #[test]
@@ -8899,9 +8666,7 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         initial_user_message: None,
         enhanced_keys_supported: app.enhanced_keys_supported,
         has_chatgpt_account: app.chat_widget.has_chatgpt_account(),
-        has_codex_backend_auth: app.chat_widget.has_codex_backend_auth(),
         model_catalog: app.model_catalog.clone(),
-        feedback: app.feedback.clone(),
         is_first_run: false,
         status_account_display: app.chat_widget.status_account_display().cloned(),
         initial_plan_type: app.chat_widget.current_plan_type(),
@@ -8909,7 +8674,6 @@ async fn replace_chat_widget_reseeds_collab_agent_metadata_for_replay() {
         startup_tooltip_override: None,
         status_line_invalid_items_warned: app.status_line_invalid_items_warned.clone(),
         terminal_title_invalid_items_warned: app.terminal_title_invalid_items_warned.clone(),
-        session_telemetry: app.session_telemetry.clone(),
     });
     app.replace_chat_widget(replacement);
 

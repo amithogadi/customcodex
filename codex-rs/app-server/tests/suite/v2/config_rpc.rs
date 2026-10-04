@@ -11,11 +11,6 @@ use codex_app_server_protocol::ApprovalsReviewer;
 use codex_app_server_protocol::AppsConfig;
 use codex_app_server_protocol::AppsDefaultConfig;
 use codex_app_server_protocol::AskForApproval;
-use codex_app_server_protocol::BrowserUseAccessApprovalLifetime;
-use codex_app_server_protocol::BrowserUseConfig;
-use codex_app_server_protocol::BrowserUseOriginPolicy;
-use codex_app_server_protocol::BrowserUseOriginPolicyConfig;
-use codex_app_server_protocol::BrowserUseRequirements;
 use codex_app_server_protocol::CliAuthCredentialsStoreMode;
 use codex_app_server_protocol::ComputerUseConfig;
 use codex_app_server_protocol::ComputerUseMacosConfig;
@@ -165,13 +160,11 @@ chatgpt_base_url = "https://managed.example/backend-api/"
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_requirements_read_includes_remote_control_and_managed_hooks() -> Result<()> {
+async fn config_requirements_read_includes_managed_hooks() -> Result<()> {
     let codex_home = TempDir::new()?;
     std::fs::write(
         codex_home.path().join("requirements.toml"),
-        r#"allow_remote_control = false
-
-[hooks]
+        r#"[hooks]
 
 [[hooks.SessionStart]]
 
@@ -201,7 +194,6 @@ statusMessage = "Scanning file"
     let requirements = response
         .requirements
         .expect("managed requirements should be returned");
-    assert_eq!(requirements.allow_remote_control, Some(false));
     assert_eq!(
         requirements
             .hooks
@@ -1144,51 +1136,6 @@ omit_tools_from = []
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_read_includes_desktop_settings() -> Result<()> {
-    let codex_home = TempDir::new()?;
-    write_config(
-        &codex_home,
-        r#"
-[desktop]
-appearanceTheme = "dark"
-selected-avatar-id = "codex"
-
-[desktop.workspace]
-collapsed = true
-width = 320
-"#,
-    )?;
-
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(codex_home.path())
-        .without_auto_env()
-        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
-        .await?;
-
-    let request_id = mcp
-        .send_config_read_request(ConfigReadParams {
-            include_layers: false,
-            cwd: None,
-        })
-        .await?;
-    let ConfigReadResponse { config, .. } =
-        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
-
-    let desktop = config.desktop.expect("desktop settings present");
-    assert_eq!(desktop.get("appearanceTheme"), Some(&json!("dark")));
-    assert_eq!(desktop.get("selected-avatar-id"), Some(&json!("codex")));
-    assert_eq!(
-        desktop.get("workspace"),
-        Some(&json!({
-            "collapsed": true,
-            "width": 320,
-        }))
-    );
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_includes_project_layers_for_cwd() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(&codex_home, r#"model = "gpt-user""#)?;
@@ -1902,45 +1849,6 @@ auth = ["bearer"]
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_value_write_updates_desktop_settings() -> Result<()> {
-    let temp_dir = TempDir::new()?;
-    let codex_home = temp_dir.path().canonicalize()?;
-    write_config(&temp_dir, "")?;
-
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(&codex_home)
-        .without_auto_env()
-        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
-        .await?;
-
-    let write_id = mcp
-        .send_config_value_write_request(ConfigValueWriteParams {
-            file_path: None,
-            key_path: "desktop.appearanceTheme".to_string(),
-            value: json!("dark"),
-            merge_strategy: MergeStrategy::Replace,
-            expected_version: None,
-        })
-        .await?;
-    let write: ConfigWriteResponse =
-        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(write_id)).await??;
-    assert_eq!(write.status, WriteStatus::Ok);
-
-    let read_id = mcp
-        .send_config_read_request(ConfigReadParams {
-            include_layers: false,
-            cwd: None,
-        })
-        .await?;
-    let read: ConfigReadResponse =
-        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
-    let desktop = read.config.desktop.expect("desktop settings present");
-    assert_eq!(desktop.get("appearanceTheme"), Some(&json!("dark")));
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_read_after_pipelined_write_sees_written_value() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let codex_home = temp_dir.path().canonicalize()?;
@@ -2359,65 +2267,6 @@ model = "gpt-5.3-spark"
         Some("gpt-5.3-spark")
     );
     assert_eq!(config.get("items"), None);
-
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_batch_write_updates_multiple_desktop_settings() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let codex_home = tmp_dir.path().canonicalize()?;
-    write_config(&tmp_dir, "")?;
-
-    let mut mcp = TestAppServer::builder()
-        .with_codex_home(&codex_home)
-        .without_auto_env()
-        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
-        .await?;
-
-    let batch_id = mcp
-        .send_config_batch_write_request(ConfigBatchWriteParams {
-            file_path: Some(codex_home.join("config.toml").display().to_string()),
-            edits: vec![
-                ConfigEdit {
-                    key_path: "desktop.selected-avatar-id".to_string(),
-                    value: json!("codex"),
-                    merge_strategy: MergeStrategy::Replace,
-                },
-                ConfigEdit {
-                    key_path: "desktop.workspace".to_string(),
-                    value: json!({
-                        "collapsed": true,
-                        "width": 320,
-                    }),
-                    merge_strategy: MergeStrategy::Replace,
-                },
-            ],
-            expected_version: None,
-            reload_user_config: false,
-        })
-        .await?;
-    let batch_write: ConfigWriteResponse =
-        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(batch_id)).await??;
-    assert_eq!(batch_write.status, WriteStatus::Ok);
-
-    let read_id = mcp
-        .send_config_read_request(ConfigReadParams {
-            include_layers: false,
-            cwd: None,
-        })
-        .await?;
-    let read: ConfigReadResponse =
-        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
-    let desktop = read.config.desktop.expect("desktop settings present");
-    assert_eq!(desktop.get("selected-avatar-id"), Some(&json!("codex")));
-    assert_eq!(
-        desktop.get("workspace"),
-        Some(&json!({
-            "collapsed": true,
-            "width": 320,
-        }))
-    );
 
     Ok(())
 }

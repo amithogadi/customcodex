@@ -5,13 +5,6 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
-    "AddCreditsNudgeCreditType": {
-      "enum": [
-        "credits",
-        "usage_limit"
-      ],
-      "type": "string"
-    },
     "AdditionalContextEntry": {
       "properties": {
         "kind": {
@@ -86,83 +79,6 @@
         "guardian_subagent"
       ],
       "type": "string"
-    },
-    "AppsInstalledParams": {
-      "description": "Read the committed installed connector runtime snapshot.",
-      "properties": {
-        "forceRefresh": {
-          "description": "When true and Apps are permitted, refresh and publish the hosted connector runtime tool snapshot first.",
-          "type": "boolean"
-        },
-        "threadId": {
-          "description": "Optional loaded thread id used to evaluate effective app configuration.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "AppsListParams": {
-      "description": "EXPERIMENTAL - list available apps/connectors.",
-      "properties": {
-        "cursor": {
-          "description": "Opaque pagination cursor returned by a previous call.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "forceRefetch": {
-          "description": "When true, bypass app caches and fetch the latest data from sources.",
-          "type": "boolean"
-        },
-        "limit": {
-          "description": "Optional page size; defaults to a reasonable server-side value.",
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "threadId": {
-          "description": "Optional thread id used to evaluate app feature gating from that thread's config.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "AppsReadParams": {
-      "description": "EXPERIMENTAL - read metadata for specific apps/connectors.",
-      "properties": {
-        "appIds": {
-          "description": "App ids to read. The server accepts at most 100 ids and deduplicates repeated ids while preserving their first-request order.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "includeTools": {
-          "description": "When true, include display-only public tool summaries in the returned metadata.",
-          "type": "boolean"
-        },
-        "threadId": {
-          "description": "Optional loaded thread id used to evaluate effective app configuration.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "appIds"
-      ],
-      "type": "object"
     },
     "AskForApproval": {
       "oneOf": [
@@ -294,14 +210,6 @@
         "version"
       ],
       "type": "object"
-    },
-    "CodexResponseHandoffMode": {
-      "enum": [
-        "thinking",
-        "commentary",
-        "bemTags"
-      ],
-      "type": "string"
     },
     "CollaborationMode": {
       "description": "Collaboration mode for a Codex session.",
@@ -618,25 +526,6 @@
       ],
       "type": "object"
     },
-    "ConsumeAccountRateLimitResetCreditParams": {
-      "properties": {
-        "creditId": {
-          "description": "Opaque reset-credit identifier to redeem. When omitted, the backend selects the next available credit.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "idempotencyKey": {
-          "description": "Identifies one logical reset attempt. A UUID is recommended; reuse the same value when retrying that attempt.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "idempotencyKey"
-      ],
-      "type": "object"
-    },
     "ContentItem": {
       "oneOf": [
         {
@@ -752,14 +641,6 @@
           "type": "object"
         }
       ]
-    },
-    "ConversationTextRole": {
-      "enum": [
-        "user",
-        "developer",
-        "assistant"
-      ],
-      "type": "string"
     },
     "CyberAccessProgram": {
       "description": "Requested cyber treatment for an OpenAI model turn. Authorization and model-tier restrictions remain server-owned.",
@@ -1168,50 +1049,6 @@
       ],
       "type": "string"
     },
-    "FeedbackUploadParams": {
-      "properties": {
-        "classification": {
-          "type": "string"
-        },
-        "extraLogFiles": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "includeLogs": {
-          "type": "boolean"
-        },
-        "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "tags": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": [
-            "object",
-            "null"
-          ]
-        },
-        "threadId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "classification"
-      ],
-      "type": "object"
-    },
     "FsCopyParams": {
       "description": "Copy a file or directory tree on the host filesystem.",
       "properties": {
@@ -1568,32 +1405,6 @@
       },
       "type": "object"
     },
-    "GetAccountRateLimitsParams": {
-      "description": "Usage-read capabilities of the requesting client, never inferred from its experiment arm.",
-      "properties": {
-        "excludeResetCreditDetails": {
-          "description": "Skip the separate reset-credit detail lookup for background usage polls. The usage response still includes the available count; omitted/false preserves detailed reads.",
-          "type": "boolean"
-        },
-        "supportsLunaReserve": {
-          "description": "The client supports automatic Luna Reserve fallback. For eligible ChatGPT CLI users, allow the backend to record experiment exposure after ordinary usage is blocked.",
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "GetAccountTokenUsageParams": {
-      "properties": {
-        "threadId": {
-          "description": "When present, read estimated usage for this thread instead of account-wide token activity.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "HookMigration": {
       "properties": {
         "name": {
@@ -1836,89 +1647,6 @@
           "type": "object"
         },
         {
-          "properties": {
-            "appBrand": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/LoginAppBrand"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null
-            },
-            "codexStreamlinedLogin": {
-              "type": "boolean"
-            },
-            "type": {
-              "enum": [
-                "chatgpt"
-              ],
-              "title": "ChatgptLoginAccountParamsType",
-              "type": "string"
-            },
-            "useHostedLoginSuccessPage": {
-              "type": "boolean"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "ChatgptLoginAccountParams",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "chatgptDeviceCode"
-              ],
-              "title": "ChatgptDeviceCodeLoginAccountParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "ChatgptDeviceCodeLoginAccountParams",
-          "type": "object"
-        },
-        {
-          "description": "[UNSTABLE] FOR OPENAI INTERNAL USE ONLY - DO NOT USE. The access token must contain the same scopes that Codex-managed ChatGPT auth tokens have.",
-          "properties": {
-            "accessToken": {
-              "description": "Access token (JWT) supplied by the client. This token is used for backend API requests and email extraction.",
-              "type": "string"
-            },
-            "chatgptAccountId": {
-              "description": "Workspace/account identifier supplied by the client.",
-              "type": "string"
-            },
-            "chatgptPlanType": {
-              "description": "Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "chatgptAuthTokens"
-              ],
-              "title": "ChatgptAuthTokensLoginAccountParamsType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "accessToken",
-            "chatgptAccountId",
-            "type"
-          ],
-          "title": "ChatgptAuthTokensLoginAccountParams",
-          "type": "object"
-        },
-        {
           "description": "[UNSTABLE] Managed Amazon Bedrock login is experimental.",
           "properties": {
             "apiKey": {
@@ -1980,13 +1708,6 @@
         }
       ]
     },
-    "LoginAppBrand": {
-      "enum": [
-        "codex",
-        "chatgpt"
-      ],
-      "type": "string"
-    },
     "MarketplaceAddParams": {
       "properties": {
         "refName": {
@@ -2022,17 +1743,6 @@
       "required": [
         "marketplaceName"
       ],
-      "type": "object"
-    },
-    "MarketplaceUpgradeParams": {
-      "properties": {
-        "marketplaceName": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
       "type": "object"
     },
     "McpResourceReadParams": {
@@ -2509,178 +2219,6 @@
       ],
       "type": "object"
     },
-    "PluginReconcileParams": {
-      "properties": {
-        "reason": {
-          "description": "Optional client-provided reason recorded with the reconciliation attempt.",
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "PluginSearchScope": {
-      "enum": [
-        "global",
-        "workspace",
-        "personal"
-      ],
-      "type": "string"
-    },
-    "PluginShareCheckoutParams": {
-      "properties": {
-        "remotePluginId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "remotePluginId"
-      ],
-      "type": "object"
-    },
-    "PluginShareDeleteParams": {
-      "properties": {
-        "remotePluginId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "remotePluginId"
-      ],
-      "type": "object"
-    },
-    "PluginShareDiscoverability": {
-      "enum": [
-        "LISTED",
-        "UNLISTED",
-        "PRIVATE"
-      ],
-      "type": "string"
-    },
-    "PluginShareListParams": {
-      "type": "object"
-    },
-    "PluginSharePrincipalType": {
-      "enum": [
-        "user",
-        "group",
-        "workspace"
-      ],
-      "type": "string"
-    },
-    "PluginShareSaveParams": {
-      "properties": {
-        "discoverability": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PluginShareDiscoverability"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pluginPath": {
-          "$ref": "#/definitions/AbsolutePathBuf"
-        },
-        "remotePluginId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "shareTargets": {
-          "items": {
-            "$ref": "#/definitions/PluginShareTarget"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "pluginPath"
-      ],
-      "type": "object"
-    },
-    "PluginShareTarget": {
-      "properties": {
-        "principalId": {
-          "type": "string"
-        },
-        "principalType": {
-          "$ref": "#/definitions/PluginSharePrincipalType"
-        },
-        "role": {
-          "$ref": "#/definitions/PluginShareTargetRole"
-        }
-      },
-      "required": [
-        "principalId",
-        "principalType",
-        "role"
-      ],
-      "type": "object"
-    },
-    "PluginShareTargetRole": {
-      "enum": [
-        "reader",
-        "editor"
-      ],
-      "type": "string"
-    },
-    "PluginShareUpdateDiscoverability": {
-      "enum": [
-        "UNLISTED",
-        "PRIVATE",
-        "LISTED"
-      ],
-      "type": "string"
-    },
-    "PluginShareUpdateTargetsParams": {
-      "properties": {
-        "discoverability": {
-          "$ref": "#/definitions/PluginShareUpdateDiscoverability"
-        },
-        "remotePluginId": {
-          "type": "string"
-        },
-        "shareTargets": {
-          "items": {
-            "$ref": "#/definitions/PluginShareTarget"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "discoverability",
-        "remotePluginId",
-        "shareTargets"
-      ],
-      "type": "object"
-    },
-    "PluginSkillReadParams": {
-      "properties": {
-        "remoteMarketplaceName": {
-          "type": "string"
-        },
-        "remotePluginId": {
-          "type": "string"
-        },
-        "skillName": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "remoteMarketplaceName",
-        "remotePluginId",
-        "skillName"
-      ],
-      "type": "object"
-    },
     "PluginUninstallParams": {
       "properties": {
         "pluginId": {
@@ -2747,45 +2285,6 @@
       "enum": [
         "position",
         "recencyAt"
-      ],
-      "type": "string"
-    },
-    "RealtimeConversationVersion": {
-      "enum": [
-        "v1",
-        "v2",
-        "v3"
-      ],
-      "type": "string"
-    },
-    "RealtimeOutputModality": {
-      "enum": [
-        "text",
-        "audio"
-      ],
-      "type": "string"
-    },
-    "RealtimeVoice": {
-      "enum": [
-        "alloy",
-        "arbor",
-        "ash",
-        "ballad",
-        "breeze",
-        "cedar",
-        "coral",
-        "cove",
-        "echo",
-        "ember",
-        "juniper",
-        "maple",
-        "marin",
-        "sage",
-        "shimmer",
-        "sol",
-        "spruce",
-        "vale",
-        "verse"
       ],
       "type": "string"
     },
@@ -2881,22 +2380,6 @@
           "type": "string"
         }
       ]
-    },
-    "RemoteControlDisableParams": {
-      "properties": {
-        "ephemeral": {
-          "type": "boolean"
-        }
-      },
-      "type": "object"
-    },
-    "RemoteControlEnableParams": {
-      "properties": {
-        "ephemeral": {
-          "type": "boolean"
-        }
-      },
-      "type": "object"
     },
     "RequestId": {
       "anyOf": [
@@ -4039,17 +3522,6 @@
       ],
       "type": "object"
     },
-    "SendAddCreditsNudgeEmailParams": {
-      "properties": {
-        "creditType": {
-          "$ref": "#/definitions/AddCreditsNudgeCreditType"
-        }
-      },
-      "required": [
-        "creditType"
-      ],
-      "type": "object"
-    },
     "SessionMigration": {
       "properties": {
         "cwd": {
@@ -4893,123 +4365,6 @@
         "threadId"
       ],
       "type": "object"
-    },
-    "ThreadRealtimeAudioChunk": {
-      "description": "EXPERIMENTAL - thread realtime audio chunk.",
-      "properties": {
-        "data": {
-          "type": "string"
-        },
-        "itemId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "numChannels": {
-          "format": "uint16",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "sampleRate": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "samplesPerChannel": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "data",
-        "numChannels",
-        "sampleRate"
-      ],
-      "type": "object"
-    },
-    "ThreadRealtimeInitialItem": {
-      "description": "EXPERIMENTAL - role-bearing text item included when a realtime V3 session starts.",
-      "properties": {
-        "role": {
-          "$ref": "#/definitions/ConversationTextRole"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "role",
-        "text"
-      ],
-      "type": "object"
-    },
-    "ThreadRealtimeStartTransport": {
-      "description": "EXPERIMENTAL - transport used by thread realtime.",
-      "oneOf": [
-        {
-          "properties": {
-            "type": {
-              "enum": [
-                "websocket"
-              ],
-              "title": "WebsocketThreadRealtimeStartTransportType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "WebsocketThreadRealtimeStartTransport",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "sdp": {
-              "description": "SDP offer generated by a WebRTC RTCPeerConnection after configuring audio and the realtime events data channel.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "webrtc"
-              ],
-              "title": "WebrtcThreadRealtimeStartTransportType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "sdp",
-            "type"
-          ],
-          "title": "WebrtcThreadRealtimeStartTransport",
-          "type": "object"
-        },
-        {
-          "properties": {
-            "callId": {
-              "description": "Identifier of a realtime call already created and negotiated by the client.",
-              "type": "string"
-            },
-            "type": {
-              "enum": [
-                "existingCall"
-              ],
-              "title": "ExistingCallThreadRealtimeStartTransportType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "callId",
-            "type"
-          ],
-          "title": "ExistingCallThreadRealtimeStartTransport",
-          "type": "object"
-        }
-      ]
     },
     "ThreadResumeInitialTurnsPageParams": {
       "properties": {
@@ -6970,30 +6325,6 @@
         },
         "method": {
           "enum": [
-            "marketplace/upgrade"
-          ],
-          "title": "Marketplace/upgradeRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/MarketplaceUpgradeParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Marketplace/upgradeRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
             "plugin/list"
           ],
           "title": "Plugin/listRequestMethod",
@@ -7042,30 +6373,6 @@
         },
         "method": {
           "enum": [
-            "plugin/reconcile"
-          ],
-          "title": "Plugin/reconcileRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/PluginReconcileParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Plugin/reconcileRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
             "plugin/read"
           ],
           "title": "Plugin/readRequestMethod",
@@ -7081,222 +6388,6 @@
         "params"
       ],
       "title": "Plugin/readRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "plugin/skill/read"
-          ],
-          "title": "Plugin/skill/readRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/PluginSkillReadParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Plugin/skill/readRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "plugin/share/save"
-          ],
-          "title": "Plugin/share/saveRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/PluginShareSaveParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Plugin/share/saveRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "plugin/share/updateTargets"
-          ],
-          "title": "Plugin/share/updateTargetsRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/PluginShareUpdateTargetsParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Plugin/share/updateTargetsRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "plugin/share/list"
-          ],
-          "title": "Plugin/share/listRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/PluginShareListParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Plugin/share/listRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "plugin/share/checkout"
-          ],
-          "title": "Plugin/share/checkoutRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/PluginShareCheckoutParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Plugin/share/checkoutRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "plugin/share/delete"
-          ],
-          "title": "Plugin/share/deleteRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/PluginShareDeleteParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Plugin/share/deleteRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "app/read"
-          ],
-          "title": "App/readRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/AppsReadParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "App/readRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "app/list"
-          ],
-          "title": "App/listRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/AppsListParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "App/listRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "app/installed"
-          ],
-          "title": "App/installedRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/AppsInstalledParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "App/installedRequest",
       "type": "object"
     },
     {
@@ -8107,161 +7198,6 @@
         "method"
       ],
       "title": "Account/logoutRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "account/rateLimits/read"
-          ],
-          "title": "Account/rateLimits/readRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GetAccountRateLimitsParams"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "method"
-      ],
-      "title": "Account/rateLimits/readRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "account/rateLimitResetCredit/consume"
-          ],
-          "title": "Account/rateLimitResetCredit/consumeRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ConsumeAccountRateLimitResetCreditParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Account/rateLimitResetCredit/consumeRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "account/usage/read"
-          ],
-          "title": "Account/usage/readRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/GetAccountTokenUsageParams"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "method"
-      ],
-      "title": "Account/usage/readRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "account/workspaceMessages/read"
-          ],
-          "title": "Account/workspaceMessages/readRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "type": "null"
-        }
-      },
-      "required": [
-        "id",
-        "method"
-      ],
-      "title": "Account/workspaceMessages/readRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "account/sendAddCreditsNudgeEmail"
-          ],
-          "title": "Account/sendAddCreditsNudgeEmailRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/SendAddCreditsNudgeEmailParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Account/sendAddCreditsNudgeEmailRequest",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "id": {
-          "$ref": "#/definitions/RequestId"
-        },
-        "method": {
-          "enum": [
-            "feedback/upload"
-          ],
-          "title": "Feedback/uploadRequestMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/FeedbackUploadParams"
-        }
-      },
-      "required": [
-        "id",
-        "method",
-        "params"
-      ],
-      "title": "Feedback/uploadRequest",
       "type": "object"
     },
     {

@@ -172,7 +172,6 @@ pub(crate) fn retry_runner_spawn_once<T>(
         Err(err) if is_refreshable_sandbox_creds_error(&err, command) => refresh().and_then(spawn),
         Err(err) => Err(err),
     };
-    super::runner_metrics::record("startup", if result.is_ok() { "success" } else { "error" });
     result
 }
 

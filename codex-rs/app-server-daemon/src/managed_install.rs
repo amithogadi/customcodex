@@ -28,21 +28,11 @@ pub(crate) fn package_root(codex_home: &Path) -> PathBuf {
     for (package, artifacts) in [
         (
             "app-server-daemon",
-            [
-                crate::DAEMON_PID_FILE_NAME,
-                "daemon.stderr.log",
-                crate::DAEMON_UPDATE_PID_FILE_NAME,
-                "daemon-updater.stderr.log",
-            ],
+            [crate::DAEMON_PID_FILE_NAME, "daemon.stderr.log"],
         ),
         (
             "standalone",
-            [
-                crate::LEGACY_PID_FILE_NAME,
-                "app-server.stderr.log",
-                crate::LEGACY_UPDATE_PID_FILE_NAME,
-                "app-server-updater.stderr.log",
-            ],
+            [crate::LEGACY_PID_FILE_NAME, "app-server.stderr.log"],
         ),
     ] {
         if artifacts.iter().any(|name| {
@@ -113,11 +103,6 @@ pub(crate) fn is_stable_standalone_release(codex_home: &Path, codex_bin: &Path) 
         && std::fs::read_to_string(standalone.join("auto-update-version"))
             .is_ok_and(|selected| selected == release_name)
         && std::fs::canonicalize(codex_bin).is_ok_and(|bin| bin.starts_with(&release))
-}
-
-/// Older managed binaries can serve app-server requests without owning an updater.
-pub(crate) async fn supports_daemon_update_loop(codex_bin: &Path) -> bool {
-    supports_daemon_command(codex_bin, &["pid-update-loop", "--help"]).await
 }
 
 /// Probe an internal daemon command without running a long-lived process.

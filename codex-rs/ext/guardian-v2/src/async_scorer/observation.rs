@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::Instant;
 use std::time::SystemTime;
 
-use codex_analytics::AnalyticsEventsClient;
 use codex_core::context::GuardianContextMode;
 use codex_core::context::GuardianReviewEvidence;
 use codex_core::context::NodeReplReviewEvidence;
@@ -29,7 +28,6 @@ use super::config::GuardianV2Config;
 use super::conversation::ConversationBackend;
 use super::coverage::scores_tool;
 use super::extension::GuardianV2Extension;
-use super::metrics::record_classification;
 use super::parent_compaction::ParentCompactionError;
 use super::parent_compaction::select_parent_compaction;
 use super::sampler::LunaSampler;
@@ -118,9 +116,7 @@ impl GuardianV2Extension {
         }) {
             score_progress.observe_js_execution();
         }
-        let metrics = score_progress.metrics.clone();
         let context_mode = GuardianContextMode::from_history(input.conversation_history.as_ref());
-        let analytics = input.session_store.get::<AnalyticsEventsClient>();
         let sampled_at = SystemTime::now();
         let (tool_call_index, reservation) = match input.thread_store.get::<ConversationBackend>() {
             Some(conversation) => {
@@ -131,16 +127,9 @@ impl GuardianV2Extension {
         };
         let reservation = match reservation {
             Ok(reservation) => reservation,
-            Err(error) => {
+            Err(_error) => {
                 score_progress.invalidate(tool_call_index);
                 score_progress.fail_closed(sampled_at);
-                record_classification(
-                    metrics.as_deref(),
-                    context_mode,
-                    classification_started_at.elapsed(),
-                    "failure",
-                    Some(super::metrics::sampler_failure_reason(&error)),
-                );
                 return;
             }
         };
@@ -171,13 +160,6 @@ impl GuardianV2Extension {
             Ok(context) => context,
             Err(error) => {
                 score_progress.invalidate(tool_call_index);
-                record_classification(
-                    metrics.as_deref(),
-                    context_mode,
-                    classification_started_at.elapsed(),
-                    "failure",
-                    Some("thread_context_error"),
-                );
                 event_sink.emit_warning(ExtensionWarning {
                     thread_id,
                     turn_id: Some(turn_id),
@@ -216,13 +198,6 @@ impl GuardianV2Extension {
             Ok(config) => config,
             Err(error) => {
                 score_progress.fail_closed(sampled_at);
-                record_classification(
-                    metrics.as_deref(),
-                    context_mode,
-                    classification_started_at.elapsed(),
-                    "failure",
-                    Some("configuration_error"),
-                );
                 self.event_sink.emit_warning(ExtensionWarning {
                     thread_id: input.thread_store.level_id().to_owned(),
                     turn_id: Some(input.turn_id.to_owned()),
@@ -252,20 +227,13 @@ impl GuardianV2Extension {
         ) {
             Ok(compaction) => compaction,
             Err(error) => {
-                let (outcome, failure_reason) = if error == ParentCompactionError::RequiresSync {
+                let (_outcome, _failure_reason) = if error == ParentCompactionError::RequiresSync {
                     score_progress.invalidate(tool_call_index);
                     ("skipped", None)
                 } else {
                     ("failure", Some("parent_compaction_error"))
                 };
                 score_progress.fail_closed(sampled_at);
-                record_classification(
-                    metrics.as_deref(),
-                    context_mode,
-                    classification_started_at.elapsed(),
-                    outcome,
-                    failure_reason,
-                );
                 return;
             }
         };
@@ -282,25 +250,11 @@ impl GuardianV2Extension {
             Err(ActionRenderError::TooLarge { .. }) => {
                 score_progress.mark_oversized(input.call_id, tool_call_index);
                 score_progress.fail_closed(sampled_at);
-                record_classification(
-                    metrics.as_deref(),
-                    context_mode,
-                    classification_started_at.elapsed(),
-                    "failure",
-                    Some("input_too_large"),
-                );
                 return;
             }
             Err(error) => {
                 score_progress.invalidate(tool_call_index);
                 score_progress.fail_closed(sampled_at);
-                record_classification(
-                    metrics.as_deref(),
-                    context_mode,
-                    classification_started_at.elapsed(),
-                    "failure",
-                    Some("action_serialization_error"),
-                );
                 event_sink.emit_warning(ExtensionWarning {
                     thread_id,
                     turn_id: Some(turn_id),
@@ -339,13 +293,6 @@ impl GuardianV2Extension {
 
         let Some(permissions) = input.permissions.await else {
             score_progress.fail_closed(sampled_at);
-            record_classification(
-                metrics.as_deref(),
-                context_mode,
-                classification_started_at.elapsed(),
-                "failure",
-                Some("permission_resolution_error"),
-            );
             return;
         };
         let score_authorization = ScoreAuthorization::current(&thread, &permissions).await;
@@ -353,14 +300,9 @@ impl GuardianV2Extension {
             reservation,
             classification_started_at,
             sampler,
-            decisions_sampler: input
-                .thread_store
-                .get::<super::decisions::DecisionsSampler>(),
             guardian_config,
             score_progress,
             parent_model,
-            metrics,
-            analytics,
             sampled_at,
             tool_call_index,
             event_sink,

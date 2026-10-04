@@ -112,7 +112,6 @@ async fn cloud_skills_reuse_cache_and_invalidate_on_connection_or_auth_change() 
             max_context_tokens: None,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
     let mut builder = apps_enabled_builder(apps.chatgpt_base_url)

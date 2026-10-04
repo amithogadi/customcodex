@@ -144,7 +144,7 @@ where
             return;
         }
 
-        if event.metadata().target() != "codex_otel.trace_safe" {
+        if event.metadata().target() != "codex.trace_safe" {
             return;
         }
 

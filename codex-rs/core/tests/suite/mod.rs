@@ -45,7 +45,6 @@ mod agent_control;
 mod agent_execution;
 mod agent_websocket;
 mod agents_md;
-mod app_tool_exposure;
 mod apply_patch_cli;
 mod apply_patch_serialization;
 #[cfg(target_os = "macos")]
@@ -94,7 +93,6 @@ mod guardian_cached_score;
 #[path = "guardian_checkpoint_migration_tests.rs"]
 mod guardian_checkpoint_migration;
 // Uses the same command-approval harness as guardian_review below.
-mod canonical_plugin_connectors;
 mod gateway_auth;
 #[cfg(not(target_os = "windows"))]
 mod guardian_context_budget;
@@ -126,8 +124,6 @@ mod json_result;
 mod live_cli;
 #[path = "managed_threads_tests.rs"]
 mod managed_threads;
-mod mcp_auth_elicitation;
-mod mcp_auth_refresh;
 mod mcp_ema_config;
 mod mcp_extension_protocol;
 mod mcp_optional_startup_grace;
@@ -155,7 +151,6 @@ mod multi_agent_tool_descriptions;
 mod multi_exec_server_sandbox;
 mod network_approval;
 mod openai_file_mcp;
-mod otel;
 mod override_updates;
 mod pending_input;
 mod pending_input_persistence;
@@ -166,11 +161,6 @@ mod prompt_cache_key;
 mod prompt_caching;
 mod prompt_debug_tests;
 mod quota_exceeded;
-mod realtime_conversation;
-mod realtime_initial_items;
-mod realtime_misalignment;
-mod realtime_sideband_endpoint;
-mod realtime_system_proxy;
 mod reasoning_effort_override;
 mod remote_env;
 mod remote_models;
@@ -179,7 +169,6 @@ mod request_compression;
 mod request_permissions;
 #[cfg(not(target_os = "windows"))]
 mod request_permissions_tool;
-mod request_plugin_install;
 mod request_user_input;
 mod request_user_input_async;
 mod responses_api_proxy_headers;
@@ -224,7 +213,6 @@ mod truncation;
 #[path = "turn_error_details_tests.rs"]
 mod turn_error_details;
 mod turn_input_submission;
-mod turn_phase_trace;
 mod turn_state;
 mod unified_exec;
 #[path = "unified_exec_launch_failure_tests.rs"]

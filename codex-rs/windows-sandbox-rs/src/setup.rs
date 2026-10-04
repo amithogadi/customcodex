@@ -358,7 +358,6 @@ fn run_setup_refresh_inner(
         deny_write_paths,
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
-        otel: None,
         real_user: crate::runtime_ownership::current_setup_user()?,
         user_profile: std::env::var_os("USERPROFILE")
             .filter(|value| !value.is_empty())
@@ -720,7 +719,6 @@ struct ElevationPayload {
     proxy_ports: Vec<u16>,
     #[serde(default)]
     allow_local_binding: bool,
-    otel: Option<codex_otel::StatsigMetricsSettings>,
     real_user: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     user_profile: Option<PathBuf>,
@@ -1171,7 +1169,6 @@ fn elevated_provisioning_payload(
         proxy_ports: offline_proxy_settings.proxy_ports,
         allow_local_binding: offline_proxy_settings.allow_local_binding,
         real_user,
-        otel: codex_otel::global_statsig_metrics_settings(),
         user_profile: None,
         mode: SetupMode::InteractiveProvision,
         runtime: SetupRuntime::Legacy,
@@ -1251,7 +1248,6 @@ pub fn run_elevated_provisioning_setup_with_retained_handles(
         deny_write_paths: Vec::new(),
         proxy_ports: settings.proxy_ports,
         allow_local_binding: settings.allow_local_binding,
-        otel: codex_otel::global_statsig_metrics_settings(),
         real_user: real_user.to_string(),
         user_profile: std::env::var_os("USERPROFILE")
             .filter(|value| !value.is_empty())

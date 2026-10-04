@@ -40,7 +40,6 @@ use codex_protocol::permissions::FileSystemSpecialPath as CoreFileSystemSpecialP
 use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
-use codex_protocol::protocol::ConversationTextRole;
 use codex_protocol::protocol::ExecCommandSource as CoreExecCommandSource;
 use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
@@ -2121,10 +2120,8 @@ fn config_granular_approval_policy_is_marked_experimental() {
         model_reasoning_summary: None,
         model_verbosity: None,
         service_tier: None,
-        analytics: None,
         apps: None,
         computer_use: None,
-        desktop: None,
         additional: HashMap::new(),
     });
 
@@ -2155,10 +2152,8 @@ fn config_approvals_reviewer_is_marked_experimental() {
         model_reasoning_summary: None,
         model_verbosity: None,
         service_tier: None,
-        analytics: None,
         apps: None,
         computer_use: None,
-        desktop: None,
         additional: HashMap::new(),
     });
 
@@ -2192,7 +2187,6 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             allow_managed_hooks_only: None,
             allow_browser_and_computer_use: None,
             allow_appshots: None,
-            allow_remote_control: None,
             computer_use: None,
             feature_requirements: None,
             hooks: None,
@@ -2203,9 +2197,7 @@ fn config_requirements_granular_allowed_approval_policy_is_marked_experimental()
             sqlite_home: None,
             log_dir: None,
             model_catalog_json: None,
-            check_for_update_on_startup: None,
             allow_login_shell: None,
-            feedback: None,
         });
 
     assert_eq!(reason, Some("askForApproval.granular"));
@@ -5318,60 +5310,6 @@ fn turn_start_params_treat_null_or_omitted_environments_as_default() {
     assert_eq!(
         crate::experimental_api::ExperimentalApi::experimental_reason(&omitted_environments),
         None
-    );
-}
-
-#[test]
-fn realtime_append_text_defaults_role_to_user() {
-    let params = serde_json::from_value::<ThreadRealtimeAppendTextParams>(json!({
-        "threadId": "thread_123",
-        "text": "hello",
-    }))
-    .expect("params should deserialize");
-
-    assert_eq!(
-        params,
-        ThreadRealtimeAppendTextParams {
-            thread_id: "thread_123".to_string(),
-            text: "hello".to_string(),
-            role: ConversationTextRole::User,
-        }
-    );
-}
-
-#[test]
-fn realtime_start_omitted_initial_items_remain_none() {
-    let params = serde_json::from_value::<ThreadRealtimeStartParams>(json!({
-        "threadId": "thread_123",
-        "outputModality": "audio",
-    }))
-    .expect("params should deserialize");
-
-    assert_eq!(params.initial_items, None);
-}
-#[test]
-fn realtime_start_deserializes_client_handoff_channel_prefixes() {
-    let params = serde_json::from_value::<ThreadRealtimeStartParams>(json!({
-        "threadId": "thread_123",
-        "outputModality": "audio",
-        "codexResponseHandoffChannelPrefixes": {
-            "analysis": ["[THINKING]"],
-            "commentary": ["[PROGRESS]", "[UPDATE]"],
-            "final": ["[DONE]"]
-        }
-    }))
-    .expect("params should deserialize");
-
-    assert_eq!(
-        params.codex_response_handoff_channel_prefixes,
-        Some(BTreeMap::from([
-            ("analysis".to_string(), vec!["[THINKING]".to_string()]),
-            (
-                "commentary".to_string(),
-                vec!["[PROGRESS]".to_string(), "[UPDATE]".to_string()],
-            ),
-            ("final".to_string(), vec!["[DONE]".to_string()]),
-        ]))
     );
 }
 

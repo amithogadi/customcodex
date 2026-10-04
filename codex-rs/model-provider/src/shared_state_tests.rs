@@ -2,8 +2,6 @@
 //! Discovery and inference must preserve primary auth and reject requests when gateway auth fails.
 
 use super::*;
-use crate::AgentIdentitySessionFallback;
-use crate::ProviderAuthScope;
 use crate::create_model_provider;
 use crate::test_support::seed_gateway_auth;
 use codex_api::Compression;
@@ -15,7 +13,6 @@ use codex_http_client::ReqwestTransport;
 use codex_login::AuthHeaders;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_login::default_client::ClientRedirectPolicy;
 use codex_login::default_client::create_client_for_route;
 use codex_model_provider_info::GatewayOAuthDelivery;
@@ -104,14 +101,7 @@ async fn gateway_credentials_accompany_primary_auth_in_models_and_responses() {
             .raw_model_catalog(RefreshStrategy::Online, factory.clone())
             .await;
         let auth = provider.api_auth().await.unwrap();
-        let scoped = provider
-            .api_auth_for_scope(ProviderAuthScope {
-                agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
-                session_source: SessionSource::Cli,
-                agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
-            })
-            .await
-            .unwrap();
+        let scoped = provider.api_auth_for_request().await.unwrap();
         let mut expected = HeaderMap::from_iter([
             (
                 http::header::AUTHORIZATION,

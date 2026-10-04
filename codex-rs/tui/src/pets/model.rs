@@ -7,8 +7,8 @@
 //!
 //! The key invariant is that every returned `Pet` points at a local
 //! spritesheet path that already exists and has app-compatible dimensions.
-//! Asset acquisition is intentionally out of scope here; callers must ensure a
-//! built-in pet has been downloaded before asking the model layer to load it.
+//! Pet assets are loaded from the filesystem. Built-in assets must already
+//! exist under CODEX_HOME before the model layer can load them.
 
 use std::collections::HashMap;
 use std::fs;
@@ -76,9 +76,8 @@ impl Pet {
     ///
     /// Selectors may name a built-in catalog pet, a custom pet id, a legacy
     /// avatar id, or an explicit path. This method assumes any built-in asset
-    /// has already been materialized into CODEX_HOME; if callers skip the
-    /// asset-fetch step, they will get a missing-spritesheet error here on
-    /// first use.
+    /// already exists in CODEX_HOME; otherwise it returns a
+    /// missing-spritesheet error.
     pub(super) fn load_with_codex_home(value: &str, codex_home: Option<&Path>) -> Result<Self> {
         if path_like(value) {
             return load_pet_path(value);

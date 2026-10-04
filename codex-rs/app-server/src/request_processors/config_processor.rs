@@ -6,7 +6,6 @@ use crate::error_code::internal_error;
 use crate::error_code::invalid_request;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
-use codex_analytics::AnalyticsEventsClient;
 use codex_app_server_protocol::AllowDenyRequirement;
 use codex_app_server_protocol::AutoReviewRequirements;
 use codex_app_server_protocol::CliAuthCredentialsStoreMode;
@@ -27,7 +26,6 @@ use codex_app_server_protocol::ConfiguredHookHandler;
 use codex_app_server_protocol::ConfiguredHookMatcherGroup;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetParams;
 use codex_app_server_protocol::ExperimentalFeatureEnablementSetResponse;
-use codex_app_server_protocol::FeedbackRequirements;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ManagedHooksRequirements;
 use codex_app_server_protocol::ModelProviderCapabilitiesReadResponse;
@@ -50,7 +48,6 @@ use codex_features::Feature;
 use codex_features::canonical_feature_for_key;
 use codex_features::feature_for_key;
 use codex_model_provider::create_model_provider;
-use codex_plugin::PluginId;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::WebSearchMode;
 use serde_json::json;
@@ -68,7 +65,6 @@ const SUPPORTED_EXPERIMENTAL_FEATURE_ENABLEMENT: &[&str] = &[
     "mcp_2026_07_28",
     "memories",
     "mentions_v2",
-    "remote_control",
     "remote_plugin",
     "tool_suggest",
     "windows_sandbox_service",
@@ -79,7 +75,6 @@ pub(crate) struct ConfigRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     config_manager: ConfigManager,
     thread_manager: Arc<ThreadManager>,
-    analytics_events_client: AnalyticsEventsClient,
 }
 
 impl ConfigRequestProcessor {
@@ -87,13 +82,11 @@ impl ConfigRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config_manager: ConfigManager,
         thread_manager: Arc<ThreadManager>,
-        analytics_events_client: AnalyticsEventsClient,
     ) -> Self {
         Self {
             outgoing,
             config_manager,
             thread_manager,
-            analytics_events_client,
         }
     }
 
@@ -241,15 +234,11 @@ impl ConfigRequestProcessor {
         &self,
         params: ConfigValueWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
-        let pending_changes = codex_core_plugins::toggles::collect_plugin_enabled_candidates(
-            [(&params.key_path, &params.value)].into_iter(),
-        );
         let response = self
             .config_manager
             .write_value(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(pending_changes).await;
         Ok(response)
     }
 
@@ -257,18 +246,11 @@ impl ConfigRequestProcessor {
         &self,
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
-        let pending_changes = codex_core_plugins::toggles::collect_plugin_enabled_candidates(
-            params
-                .edits
-                .iter()
-                .map(|edit| (&edit.key_path, &edit.value)),
-        );
         let response = self
             .config_manager
             .batch_write(params)
             .await
             .map_err(map_error)?;
-        self.emit_plugin_toggle_events(pending_changes).await;
         Ok(response)
     }
 
@@ -326,26 +308,6 @@ impl ConfigRequestProcessor {
         }
 
         Ok(ExperimentalFeatureEnablementSetResponse { enablement })
-    }
-
-    async fn emit_plugin_toggle_events(
-        &self,
-        pending_changes: std::collections::BTreeMap<String, bool>,
-    ) {
-        let plugins_manager = self.thread_manager.plugins_manager();
-        for (plugin_id, enabled) in pending_changes {
-            let Ok(plugin_id) = PluginId::parse(&plugin_id) else {
-                continue;
-            };
-            let metadata = plugins_manager
-                .telemetry_metadata_for_installed_plugin(&plugin_id)
-                .await;
-            if enabled {
-                self.analytics_events_client.track_plugin_enabled(metadata);
-            } else {
-                self.analytics_events_client.track_plugin_disabled(metadata);
-            }
-        }
     }
 }
 
@@ -527,7 +489,6 @@ fn map_requirements_to_api(
         allow_managed_hooks_only: requirements.allow_managed_hooks_only,
         allow_browser_and_computer_use: requirements.allow_browser_and_computer_use,
         allow_appshots: requirements.allow_appshots,
-        allow_remote_control: requirements.allow_remote_control,
         computer_use: requirements
             .computer_use
             .map(map_computer_use_requirements_to_api),
@@ -555,11 +516,7 @@ fn map_requirements_to_api(
         sqlite_home: requirements.sqlite_home.map(Into::into),
         log_dir: requirements.log_dir.map(Into::into),
         model_catalog_json: requirements.model_catalog_json.map(Into::into),
-        check_for_update_on_startup: requirements.check_for_update_on_startup,
         allow_login_shell: requirements.allow_login_shell,
-        feedback: requirements.feedback.map(|feedback| FeedbackRequirements {
-            enabled: feedback.enabled,
-        }),
     })
 }
 
@@ -609,8 +566,6 @@ fn map_computer_use_requirements_to_api(
     }
 }
 
-
-
 fn map_allow_deny_requirement_to_api(
     requirement: codex_config::AllowDenyRequirementToml,
 ) -> AllowDenyRequirement {
@@ -619,7 +574,6 @@ fn map_allow_deny_requirement_to_api(
         codex_config::AllowDenyRequirementToml::Deny => AllowDenyRequirement::Deny,
     }
 }
-
 
 fn map_hooks_requirements_to_api(hooks: ManagedHooksRequirementsToml) -> ManagedHooksRequirements {
     let ManagedHooksRequirementsToml {
@@ -827,7 +781,6 @@ mod tests {
     use codex_app_server_protocol::ComputerUseRequirements;
     use codex_app_server_protocol::ComputerUseWindowsExeRequirement;
     use codex_app_server_protocol::ComputerUseWindowsRequirements;
-    use codex_app_server_protocol::FeedbackRequirements;
     use codex_app_server_protocol::WindowsSandboxImplementation;
     use codex_config::AllowDenyRequirementToml;
     use codex_config::AutoReviewRequirementsToml;
@@ -841,7 +794,6 @@ mod tests {
     use codex_config::ModelsRequirementsToml;
     use codex_config::NewThreadModelDefaultsToml;
     use codex_config::WindowsRequirementsToml;
-    use codex_config::types::FeedbackConfigToml;
     use codex_config::types::ToolSuggestDisabledTool;
     use codex_exec_server::EnvironmentManager;
     use codex_login::CodexAuth;
@@ -981,16 +933,6 @@ client_id = "mcp-client"
     }
 
     #[test]
-    fn requirements_api_includes_allow_remote_control() {
-        let mapped = map_test_requirements(ConfigRequirementsToml {
-            allow_remote_control: Some(false),
-            ..ConfigRequirementsToml::default()
-        });
-
-        assert_eq!(mapped.allow_remote_control, Some(false));
-    }
-
-    #[test]
     fn requirements_api_includes_model_auto_review_and_new_thread_defaults() {
         let mapped = map_test_requirements(ConfigRequirementsToml {
             auto_review: Some(AutoReviewRequirementsToml {
@@ -1118,11 +1060,7 @@ client_id = "mcp-client"
             sqlite_home: Some(sqlite_home.clone()),
             log_dir: Some(log_dir.clone()),
             model_catalog_json: Some(model_catalog_json.clone()),
-            check_for_update_on_startup: Some(false),
             allow_login_shell: Some(false),
-            feedback: Some(FeedbackConfigToml {
-                enabled: Some(false),
-            }),
             ..ConfigRequirementsToml::default()
         });
 
@@ -1132,13 +1070,6 @@ client_id = "mcp-client"
             mapped.model_catalog_json,
             Some(PathUri::from(model_catalog_json))
         );
-        assert_eq!(mapped.check_for_update_on_startup, Some(false));
         assert_eq!(mapped.allow_login_shell, Some(false));
-        assert_eq!(
-            mapped.feedback,
-            Some(FeedbackRequirements {
-                enabled: Some(false),
-            })
-        );
     }
 }

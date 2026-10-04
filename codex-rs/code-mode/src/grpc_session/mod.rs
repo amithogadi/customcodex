@@ -51,15 +51,6 @@ type GrpcClient = CodeModeHostClient<GrpcTransport>;
 
 const SHUTDOWN_ERROR: &str = "code mode session is shutting down";
 
-fn inject_span_traceparent<T>(request: &mut tonic::Request<T>, span: &tracing::Span) {
-    if let Some(traceparent) =
-        codex_otel::span_w3c_trace_context(span).and_then(|trace| trace.traceparent)
-        && let Ok(traceparent) = traceparent.parse()
-    {
-        request.metadata_mut().insert("traceparent", traceparent);
-    }
-}
-
 /// Creates code-mode sessions over an HTTP/2 gRPC connection.
 #[derive(Clone)]
 pub struct GrpcCodeModeSessionProvider {
@@ -115,7 +106,6 @@ impl GrpcCodeModeSessionProvider {
         let mut open_session_request = tonic::Request::new(grpc::OpenSessionRequest {
             cell_execution_limits,
         });
-        inject_span_traceparent(&mut open_session_request, &open_session_span);
         let (lease, first) = async {
             let mut lease =
                 deadline::startup("session opening", client.open_session(open_session_request))
@@ -158,7 +148,6 @@ impl GrpcCodeModeSessionProvider {
             session_id: inner.id.clone(),
             tool_names: Vec::new(),
         });
-        inject_span_traceparent(&mut request, &subscribe_span);
         let mut client = inner.client();
         let response =
             match deadline::startup("tool subscription", client.subscribe_to_tool_calls(request))

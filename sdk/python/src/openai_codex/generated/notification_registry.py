@@ -11,7 +11,6 @@ from .v2_all import AccountLoginCompletedNotification
 from .v2_all import AccountRateLimitsUpdatedNotification
 from .v2_all import AccountUpdatedNotification
 from .v2_all import AgentMessageDeltaNotification
-from .v2_all import AppListUpdatedNotification
 from .v2_all import AuthRecoveryNotification
 from .v2_all import CommandExecOutputDeltaNotification
 from .v2_all import CommandExecutionOutputDeltaNotification
@@ -35,7 +34,6 @@ from .v2_all import ItemCompletedNotification
 from .v2_all import ItemGuardianApprovalReviewCompletedNotification
 from .v2_all import ItemGuardianApprovalReviewStartedNotification
 from .v2_all import ItemStartedNotification
-from .v2_all import McpServerEventStreamNotification
 from .v2_all import McpServerOauthLoginCompletedNotification
 from .v2_all import McpServerStatusUpdatedNotification
 from .v2_all import McpToolCallProgressNotification
@@ -49,7 +47,6 @@ from .v2_all import ProjectChangedNotification
 from .v2_all import ReasoningSummaryPartAddedNotification
 from .v2_all import ReasoningSummaryTextDeltaNotification
 from .v2_all import ReasoningTextDeltaNotification
-from .v2_all import RemoteControlStatusChangedNotification
 from .v2_all import ServerRequestResolvedNotification
 from .v2_all import SkillsChangedNotification
 from .v2_all import StrictReviewRequiredNotification
@@ -95,7 +92,6 @@ KnownNotificationPayload: TypeAlias = (
     | AccountRateLimitsUpdatedNotification
     | AccountUpdatedNotification
     | AgentMessageDeltaNotification
-    | AppListUpdatedNotification
     | AuthRecoveryNotification
     | CommandExecOutputDeltaNotification
     | CommandExecutionOutputDeltaNotification
@@ -119,7 +115,6 @@ KnownNotificationPayload: TypeAlias = (
     | ItemGuardianApprovalReviewCompletedNotification
     | ItemGuardianApprovalReviewStartedNotification
     | ItemStartedNotification
-    | McpServerEventStreamNotification
     | McpServerOauthLoginCompletedNotification
     | McpServerStatusUpdatedNotification
     | McpToolCallProgressNotification
@@ -133,7 +128,6 @@ KnownNotificationPayload: TypeAlias = (
     | ReasoningSummaryPartAddedNotification
     | ReasoningSummaryTextDeltaNotification
     | ReasoningTextDeltaNotification
-    | RemoteControlStatusChangedNotification
     | ServerRequestResolvedNotification
     | SkillsChangedNotification
     | StrictReviewRequiredNotification
@@ -180,7 +174,6 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "account/login/completed": AccountLoginCompletedNotification,
     "account/rateLimits/updated": AccountRateLimitsUpdatedNotification,
     "account/updated": AccountUpdatedNotification,
-    "app/list/updated": AppListUpdatedNotification,
     "autoApprovalReview/strictReviewRequired": StrictReviewRequiredNotification,
     "command/exec/outputDelta": CommandExecOutputDeltaNotification,
     "configWarning": ConfigWarningNotification,
@@ -208,7 +201,6 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "item/reasoning/summaryTextDelta": ReasoningSummaryTextDeltaNotification,
     "item/reasoning/textDelta": ReasoningTextDeltaNotification,
     "item/started": ItemStartedNotification,
-    "mcpServer/event/stream/notification": McpServerEventStreamNotification,
     "mcpServer/oauthLogin/completed": McpServerOauthLoginCompletedNotification,
     "mcpServer/startupStatus/updated": McpServerStatusUpdatedNotification,
     "model/rerouted": ModelReroutedNotification,
@@ -219,7 +211,6 @@ NOTIFICATION_MODELS: dict[str, type[KnownNotificationPayload]] = {
     "process/exited": ProcessExitedNotification,
     "process/outputDelta": ProcessOutputDeltaNotification,
     "project/changed": ProjectChangedNotification,
-    "remoteControl/status/changed": RemoteControlStatusChangedNotification,
     "serverRequest/resolved": ServerRequestResolvedNotification,
     "skills/changed": SkillsChangedNotification,
     "thread/archived": ThreadArchivedNotification,

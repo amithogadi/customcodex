@@ -40,7 +40,7 @@ fn make_mcp_tool(
             format!("Test tool: {tool_name}"),
             Arc::new(JsonObject::default()),
         ),
-        openai_file_input_optional_fields: Default::default(),
+
         connector_id: connector_id.map(str::to_string),
         connector_name: connector_name.map(str::to_string),
         plugin_display_names: Vec::new(),
@@ -223,7 +223,7 @@ async fn directly_exposes_effective_tool_sets_when_search_is_unavailable() {
 }
 
 #[tokio::test]
-async fn cached_app_handlers_still_obey_current_apps_enablement_and_tool_policy() {
+async fn explicit_codex_apps_server_ignores_retired_app_enablement_and_policy() {
     let config = test_config().await;
     let codex_home = tempdir().expect("create restrictive config directory");
     std::fs::write(
@@ -298,8 +298,8 @@ async fn cached_app_handlers_still_obey_current_apps_enablement_and_tool_policy(
         .expect("restored app tool should be registered");
 
     assert_eq!(allowed, HashSet::from([tools[0].canonical_tool_name()]));
-    assert!(disabled.is_empty());
-    assert!(restricted.is_empty());
+    assert_eq!(disabled, allowed);
+    assert_eq!(restricted, allowed);
     assert_eq!(restored, allowed);
     assert!(Arc::ptr_eq(cached_handler, &restored_handler.runtime));
     assert_eq!(restored_handler.exposure, ToolExposure::Deferred);
@@ -378,7 +378,7 @@ async fn excludes_tools_hidden_from_model_exposure() {
 }
 
 #[tokio::test]
-async fn app_tool_registration_uses_trusted_catalog_metadata_and_preserves_source_order() {
+async fn generic_tool_registration_requires_no_connector_metadata_and_preserves_source_order() {
     let config = test_config().await;
     let app_tool = make_mcp_tool(
         CODEX_APPS_MCP_SERVER_NAME,
@@ -420,7 +420,7 @@ async fn app_tool_registration_uses_trusted_catalog_metadata_and_preserves_sourc
     );
     let mcp_tools = [
         app_tool.clone(),
-        missing_connector_id,
+        missing_connector_id.clone(),
         synthetic_app_tool.clone(),
         regular_tool.clone(),
     ];
@@ -444,21 +444,22 @@ async fn app_tool_registration_uses_trusted_catalog_metadata_and_preserves_sourc
     assert_eq!(
         registered_names,
         vec![
-            regular_tool.canonical_tool_name(),
             app_tool.canonical_tool_name(),
+            missing_connector_id.canonical_tool_name(),
             synthetic_app_tool.canonical_tool_name(),
+            regular_tool.canonical_tool_name(),
         ]
     );
     assert_eq!(
         runtimes_by_name(
             &mcp_tools, &config, /*apps_enabled*/ false, /*search_tool_enabled*/ false,
         ),
-        expected_runtimes(&[regular_tool], ToolExposure::Direct)
+        expected_runtimes(&mcp_tools, ToolExposure::Direct)
     );
 }
 
 #[tokio::test]
-async fn applies_per_tool_app_policy_across_the_exposure_build() {
+async fn retired_app_policy_does_not_filter_explicit_mcp_tools() {
     let codex_home = tempdir().expect("tempdir should succeed");
     std::fs::write(
         codex_home.path().join(CONFIG_TOML_FILE),
@@ -499,7 +500,7 @@ enabled = true
 
     assert_eq!(
         runtimes,
-        expected_runtimes(&[enabled_tool], ToolExposure::Direct)
+        expected_runtimes(&mcp_tools, ToolExposure::Direct)
     );
 }
 

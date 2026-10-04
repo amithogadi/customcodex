@@ -81,7 +81,7 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
     app.chat_widget.handle_thread_session_quiet(started.session);
     app.chat_widget.update_account_state(
         /*status_account_display*/ None, /*plan_type*/ None,
-        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+        /*has_chatgpt_account*/ true,
     );
     app.chat_widget.open_model_popup();
     let request_id = std::iter::from_fn(|| events.try_recv().ok())
@@ -179,7 +179,6 @@ async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {
         Some(crate::status::StatusAccountDisplay::ApiKey),
         /*plan_type*/ None,
         /*has_chatgpt_account*/ false,
-        /*has_codex_backend_auth*/ false,
     );
     assert!(
         !app.chat_widget
@@ -321,9 +320,6 @@ pub(super) enum HistoryCapabilities {
     ThreadStartFails,
     ConfigReadUnsupported(i64),
     ConfigReadFails,
-    ConfigReadUnknownVoice,
-    VoiceCatalogCustom,
-    VoiceCatalogUnavailable,
 }
 
 /// Returns and resets `(thread/loaded/list, thread/read)` request counts.
@@ -372,58 +368,12 @@ pub(super) async fn start_recording_remote_app_server(
     .await
 }
 
-/// Proxies a real app server while optionally rejecting modern pagination like an older server.
 pub(super) async fn start_recording_app_server_with_history(
-    config: &Config,
-    history_capabilities: HistoryCapabilities,
-    blocked_thread_list: Option<(ThreadId, oneshot::Sender<()>, oneshot::Receiver<()>)>,
-    failed_thread_name: Option<&'static str>,
-    thread_params_mode: crate::app_server_session::ThreadParamsMode,
-    loader_overrides: LoaderOverrides,
-) -> Result<RecordingAppServer> {
-    start_recording_app_server_with_realtime_speech(
-        config,
-        history_capabilities,
-        blocked_thread_list,
-        failed_thread_name,
-        thread_params_mode,
-        RealtimeRequestBehavior::Forward,
-        loader_overrides,
-    )
-    .await
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum RealtimeRequestBehavior {
-    Forward,
-    AcceptStart,
-    AcceptSpeech,
-    AcceptSpeechAndStallStop,
-}
-
-pub(super) async fn start_recording_realtime_speech_app_server(
-    config: &Config,
-    realtime_behavior: RealtimeRequestBehavior,
-) -> Result<RecordingAppServer> {
-    start_recording_app_server_with_realtime_speech(
-        config,
-        HistoryCapabilities::Current,
-        /*blocked_thread_list*/ None,
-        /*failed_thread_name*/ None,
-        crate::app_server_session::ThreadParamsMode::Embedded,
-        realtime_behavior,
-        LoaderOverrides::default(),
-    )
-    .await
-}
-
-pub(super) async fn start_recording_app_server_with_realtime_speech(
     config: &Config,
     history_capabilities: HistoryCapabilities,
     mut blocked_thread_list: Option<(ThreadId, oneshot::Sender<()>, oneshot::Receiver<()>)>,
     failed_thread_name: Option<&'static str>,
     thread_params_mode: crate::app_server_session::ThreadParamsMode,
-    realtime_behavior: RealtimeRequestBehavior,
     loader_overrides: LoaderOverrides,
 ) -> Result<RecordingAppServer> {
     let state_db =
@@ -436,7 +386,6 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
         loader_overrides,
         /*strict_config*/ false,
         codex_config::CloudConfigBundleLoader::default(),
-        codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
         state_db,
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
@@ -501,11 +450,6 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                         .lock()
                         .expect("request recorder lock")
                         .push(request.clone());
-                    if realtime_behavior == RealtimeRequestBehavior::AcceptSpeechAndStallStop
-                        && request.method == "thread/realtime/stop"
-                    {
-                        continue;
-                    }
                     let request_id = request.id.clone();
                     let params = request.params.as_ref();
                     let requires_pagination = match request.method.as_str() {
@@ -536,20 +480,7 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                             .is_some_and(|tools| {
                                 tools.iter().any(|tool| tool["type"] == "namespace")
                             });
-                    let fake_realtime_response = (realtime_behavior
-                        == RealtimeRequestBehavior::AcceptStart
-                        && request.method == "thread/realtime/start")
-                        || (matches!(
-                            realtime_behavior,
-                            RealtimeRequestBehavior::AcceptSpeech
-                                | RealtimeRequestBehavior::AcceptSpeechAndStallStop
-                        ) && request.method == "thread/realtime/appendSpeech");
-                    let response = if fake_realtime_response {
-                        JSONRPCMessage::Response(JSONRPCResponse {
-                            id: request_id,
-                            result: serde_json::json!({}),
-                        })
-                    } else if (matches!(
+                    let response = if (matches!(
                         history_capabilities,
                         HistoryCapabilities::ItemsListFails
                             | HistoryCapabilities::ItemsAndSummaryTurnsFail
@@ -594,17 +525,6 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                 code: -32603,
                                 data: None,
                                 message: "config temporarily unavailable".to_string(),
-                            },
-                        })
-                    } else if history_capabilities == HistoryCapabilities::VoiceCatalogUnavailable
-                        && request.method == "thread/realtime/listVoices"
-                    {
-                        JSONRPCMessage::Error(JSONRPCError {
-                            id: request_id,
-                            error: JSONRPCErrorError {
-                                code: -32601,
-                                data: None,
-                                message: "method not found".to_string(),
                             },
                         })
                     } else if history_capabilities == HistoryCapabilities::ThreadStartFails
@@ -719,25 +639,7 @@ pub(super) async fn start_recording_app_server_with_realtime_speech(
                                 },
                             })
                         } else {
-                            let unknown_voice = history_capabilities
-                                == HistoryCapabilities::ConfigReadUnknownVoice
-                                && matches!(&request, ClientRequest::ConfigRead { .. });
-                            let custom_voice_catalog = history_capabilities
-                                == HistoryCapabilities::VoiceCatalogCustom
-                                && matches!(
-                                    &request,
-                                    ClientRequest::ThreadRealtimeListVoices { .. }
-                                );
                             let mut result = embedded.request(request).await?;
-                            if unknown_voice && let Ok(value) = &mut result {
-                                value["config"]["realtime"]["voice"] =
-                                    serde_json::json!("future_voice");
-                            }
-                            if custom_voice_catalog && let Ok(value) = &mut result {
-                                value["voices"]["v1"] =
-                                    serde_json::json!(["maple", "cove", "juniper"]);
-                                value["voices"]["defaultV1"] = serde_json::json!("maple");
-                            }
                             if background {
                                 let terminal = r#"{"data":[{"itemId":"x","processId":"x","command":"x","cwd":"/"}],"nextCursor":null}"#;
                                 result = Ok(serde_json::from_str(terminal)?);
@@ -1797,14 +1699,13 @@ async fn dynamic_tool_requests_ignore_other_namespaces_and_dispatch_tui_namespac
     app.config.chatgpt_base_url = backend_url;
     app.config.model_catalog = Some(catalog);
     app.config.cli_auth_credentials_store_mode = codex_login::AuthCredentialsStoreMode::File;
-    app_test_support::write_chatgpt_auth(
+    codex_login::login_with_api_key(
         codex_home.path(),
-        app_test_support::ChatGptAuthFixture::new("test-token")
-            .chatgpt_user_id("test-user")
-            .plan_type("plus"),
+        "test-api-key",
         codex_login::AuthCredentialsStoreMode::File,
+        codex_config::types::AuthKeyringBackendKind::default(),
     )
-    .expect("write fixture auth");
+    .expect("write fixture API key");
     app.config
         .permissions
         .set_permission_profile(PermissionProfile::workspace_write_with(

@@ -145,10 +145,6 @@ pub fn is_first_party_originator(originator_value: &str) -> bool {
         || originator_value.starts_with("Codex ")
 }
 
-pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
-    originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
-}
-
 pub fn get_codex_user_agent() -> String {
     // OS discovery can spawn subprocesses on Linux. Reuse it across requests,
     // while continuing to read the mutable originator and suffix below.

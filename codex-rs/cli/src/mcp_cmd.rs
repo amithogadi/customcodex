@@ -189,7 +189,6 @@ pub struct AddMcpStreamableHttpArgs {
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub enum McpOAuthClientRegistrationArg {
     Auto,
-    Cimd,
     Dcr,
 }
 
@@ -197,7 +196,6 @@ impl From<McpOAuthClientRegistrationArg> for McpOAuthClientRegistration {
     fn from(value: McpOAuthClientRegistrationArg) -> Self {
         match value {
             McpOAuthClientRegistrationArg::Auto => Self::Auto,
-            McpOAuthClientRegistrationArg::Cimd => Self::Cimd,
             McpOAuthClientRegistrationArg::Dcr => Self::Dcr,
         }
     }

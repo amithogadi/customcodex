@@ -117,19 +117,18 @@ with urllib.request.urlopen(request, timeout=30) as response:
         ))
         .join("\n");
     std::fs::write(codex_home.path().join("requirements.toml"), hooks)?;
-    let analytics_server = responses::start_mock_server().await;
-    mount_analytics_capture(&analytics_server, codex_home.path()).await?;
     MockResponsesConfig::new(&responses_url)
         .with_model(MODEL)
         .with_provider_config("supports_websockets = false")
         .with_approval_policy("on-request")
-        .with_root_config(&format!("approvals_reviewer = \"auto_review\"\nchatgpt_base_url = \"{}\"", analytics_server.uri()))
+        .with_root_config("approvals_reviewer = \"auto_review\"")
         .with_extra_config(&format!(
-            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\"\n\n[analytics]\nenabled = true\n\n[features.guardianv2]\nenabled = true\nmax_action_tokens = 128\n\n[features.guardianv2.review_scope]\ncomputer_use_only = false"
+            "[mcp_servers.{TEST_SERVER_NAME}]\nurl = \"{mcp_url}/mcp\"\ndefault_tools_approval_mode = \"prompt\"\n\n[features.guardianv2]\nenabled = true\nmax_action_tokens = 128\n\n[features.guardianv2.review_scope]\ncomputer_use_only = false"
         ))
         .enable_feature(Feature::GuardianApproval)
         .write(codex_home.path())?;
     let mut app_server = TestAppServer::builder()
+        .with_json_logging("codex_guardian_v2=debug")
         .with_codex_home(codex_home.path())
         .build_initialized_with_timeout(TIMEOUT)
         .await?;
@@ -156,24 +155,9 @@ with urllib.request.urlopen(request, timeout=30) as response:
         wait_for_guardian_reviews(&state, 1 + index).await?;
         // First establish a permissive score; after overflow, establish a new one.
         state.allow_luna.notify_one();
-        timeout(TIMEOUT, async {
-            loop {
-                let events = captured_analytics_events(&analytics_server).await;
-                if events
-                    .iter()
-                    .filter(|event| {
-                        event["event_type"] == "codex_guardian_v2_classification"
-                            && event["event_params"]["outcome"] == "success"
-                    })
-                    .count()
-                    > index
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(/*millis*/ 25)).await;
-            }
-        })
-        .await?;
+        app_server
+            .wait_for_json_log_messages("Guardian V2 classification finished", index + 1)
+            .await?;
         gate.notify_one();
     }
     let completed: TurnCompletedNotification =

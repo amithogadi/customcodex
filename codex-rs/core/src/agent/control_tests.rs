@@ -4524,14 +4524,13 @@ async fn spawn_thread_subagents_persist_parent_originator_across_new_and_truncat
     let parent = harness
         .manager
         .start_thread(StartThreadOptions {
-            metrics_service_name: Some("codex_work_desktop".to_string()),
             environments: Some(Vec::new()),
             ..StartThreadOptions::new(harness.config.clone())
         })
         .await
         .expect("parent thread should start");
     let parent_originator = persisted_originator(&parent.thread).await;
-    assert_eq!(parent_originator, "codex_work_desktop");
+    assert_eq!(parent_originator, "codex_cli_rs");
 
     let child_thread_id = harness
         .control
@@ -4645,7 +4644,6 @@ async fn resume_thread_subagent_restores_stored_metadata() {
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
-        /*analytics_events_client*/ None,
         crate::thread_manager::passthrough_image_store(),
         thread_store.clone(),
         /*agent_graph_store*/ None,

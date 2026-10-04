@@ -8,6 +8,7 @@ use futures::future::BoxFuture;
 use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 struct TestHandler {
     tool_name: codex_tools::ToolName,
@@ -611,7 +612,6 @@ fn post_tool_use_feedback_output_preserves_fallback_token_limit_override(
                     meta: None,
                 },
                 tool_input: serde_json::json!({}),
-                result_metadata_capture_allowed: false,
                 wall_time: Duration::ZERO,
                 original_image_detail_supported: false,
                 truncation_policy,
@@ -713,7 +713,6 @@ fn post_tool_use_feedback_output_preserves_mcp_result_metadata(tool_error: bool)
                 meta: Some(metadata.clone()),
             },
             tool_input: serde_json::json!({ "query": "rewritten query" }),
-            result_metadata_capture_allowed: true,
             wall_time: std::time::Duration::ZERO,
             original_image_detail_supported: false,
             truncation_policy: codex_utils_output_truncation::TruncationPolicy::Bytes(64),

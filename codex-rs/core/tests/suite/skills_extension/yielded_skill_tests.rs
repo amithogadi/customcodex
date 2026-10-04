@@ -1,9 +1,51 @@
-//! Skill analytics retain the originating turn when Code Mode resumes a yielded cell.
+//! Skill callbacks retain the originating turn when Code Mode resumes a yielded cell.
 
 use super::*;
 use codex_core::TurnInputSubmission;
+use codex_extension_api::ToolCallOutcome;
+use codex_extension_api::ToolFinishInput;
+use codex_extension_api::ToolLifecycleContributor;
+use codex_extension_api::ToolLifecycleFuture;
 use codex_protocol::openai_models::ToolMode;
 use pretty_assertions::assert_eq;
+
+#[derive(Default)]
+struct SkillReadObserver {
+    turns: std::sync::Mutex<Vec<String>>,
+    updated: tokio::sync::Notify,
+}
+
+impl ToolLifecycleContributor for SkillReadObserver {
+    fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
+        Box::pin(async move {
+            if input.tool_name.namespace.as_deref() != Some("skills")
+                || input.tool_name.name != "read"
+            {
+                return;
+            }
+            assert_eq!(input.outcome, ToolCallOutcome::Completed { success: true });
+            self.turns.lock().unwrap().push(input.turn_id.to_owned());
+            self.updated.notify_one();
+        })
+    }
+}
+
+impl SkillReadObserver {
+    async fn wait_for_reads(&self, count: usize) -> Result<Vec<String>> {
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let updated = self.updated.notified();
+                let turns = self.turns.lock().unwrap().clone();
+                if turns.len() >= count {
+                    return turns;
+                }
+                updated.await;
+            }
+        })
+        .await
+        .map_err(Into::into)
+    }
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn yielded_skill_read_keeps_originating_turn_metadata() -> Result<()> {
@@ -13,6 +55,8 @@ async fn yielded_skill_read_keeps_originating_turn_metadata() -> Result<()> {
     const RESOURCE: &str = "skill://demo/yielded/SKILL.md";
     let server = responses::start_mock_server().await;
     let mut extensions = ExtensionRegistryBuilder::new();
+    let reads = Arc::new(SkillReadObserver::default());
+    extensions.tool_lifecycle_contributor(reads.clone());
     install_with_providers(
         &mut extensions,
         SkillProviders::new().with_cloud_provider(Arc::new(FakeCloudSkillProvider {
@@ -37,12 +81,10 @@ async fn yielded_skill_read_keeps_originating_turn_metadata() -> Result<()> {
             max_context_tokens: config.skill_max_context_tokens,
             bundled_skills_enabled: false,
             cloud_skill_enabled: true,
-            shadow_selection_enabled: false,
         },
     );
-    let chatgpt_base_url = server.uri();
     let mut builder = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_auth(CodexAuth::from_api_key("test-api-key"))
         .with_exec_server_url("none")
         .with_extensions(Arc::new(extensions.build()))
         .with_model_info_override("gpt-5.5", |model| {
@@ -50,7 +92,6 @@ async fn yielded_skill_read_keeps_originating_turn_metadata() -> Result<()> {
             model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
         })
         .with_config(move |config| {
-            config.chatgpt_base_url = chatgpt_base_url;
             config.cloud_skill_enabled = true;
             config.features.enable(Feature::CodeMode).unwrap();
             config.features.enable(Feature::CodeModeHost).unwrap();
@@ -143,14 +184,13 @@ async fn yielded_skill_read_keeps_originating_turn_metadata() -> Result<()> {
     })
     .await;
 
-    let events = wait_for_analytics_events(&server, "skill_invocation", /*expected_count*/ 2).await;
-    assert_eq!(events.len(), 2);
+    let observed_turns = reads.wait_for_reads(2).await?;
+    assert_eq!(observed_turns.len(), 2);
     for turn_id in [&turn_a, &turn_b] {
-        let event = events
-            .iter()
-            .find(|event| event["event_params"]["turn_id"] == *turn_id)
-            .expect("each skill read should retain its originating turn");
-        assert_eq!(event["skill_name"], "demo:yielded");
+        assert!(
+            observed_turns.contains(turn_id),
+            "each completed skill read should retain its originating turn"
+        );
     }
     Ok(())
 }

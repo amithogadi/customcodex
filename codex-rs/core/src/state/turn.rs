@@ -16,7 +16,6 @@ use codex_rmcp_client::ElicitationResponse;
 use rmcp::model::RequestId;
 use tokio::sync::oneshot;
 
-use super::TurnTokenUsage;
 use crate::agent::types::AgentExecutionGuard;
 use crate::session::TurnInputQueue;
 use crate::session::step_context::StepContext;
@@ -79,7 +78,6 @@ pub(crate) struct RunningTask {
     pub(crate) _agent_execution_guard: Option<AgentExecutionGuard>,
     pub(crate) _diagnostics_guard: GaugeGuard,
     // Timer recorded when the task drops to capture the full turn duration.
-    pub(crate) _timer: Option<codex_otel::Timer>,
 }
 
 /// Mutable state for a single turn.
@@ -95,7 +93,6 @@ pub(crate) struct TurnState {
     pub(crate) tool_calls: u64,
     pub(crate) has_memory_citation: bool,
     pub(crate) token_usage_at_turn_start: TokenUsage,
-    pub(crate) token_usage_by_model: TurnTokenUsage,
     /// The last step captured for execution or selected from a speculative fallback.
     /// Remains absent until a step is captured; standalone local compaction has no step.
     pub(crate) last_known_step_context: Option<Arc<StepContext>>,

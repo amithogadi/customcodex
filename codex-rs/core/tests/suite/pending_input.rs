@@ -404,14 +404,20 @@ async fn enqueue_queue_only_agent_mail(codex: &CodexThread, text: &str) {
 
 async fn submit_queue_only_agent_mail(codex: &CodexThread, text: &str) {
     enqueue_queue_only_agent_mail(codex, text).await;
+    wait_for_submission_barrier(codex).await;
+}
+
+async fn wait_for_submission_barrier(codex: &CodexThread) {
+    let (reply, queued) = tokio::sync::oneshot::channel();
     codex
-        .submit(Op::RealtimeConversationListVoices)
+        .submit(Op::InterruptIfNoPendingInput {
+            // A nonexistent turn is a no-op that still acknowledges queue ordering.
+            turn_id: "mailbox-barrier-no-such-turn".to_string(),
+            reply,
+        })
         .await
-        .expect("submit list-voices barrier");
-    wait_for_event(codex, |event| {
-        matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
-    })
-    .await;
+        .expect("submit queue barrier");
+    assert!(!queued.await.expect("queue barrier acknowledgement"));
 }
 
 async fn wait_for_reasoning_item_started(codex: &CodexThread) {
@@ -2140,11 +2146,7 @@ async fn terminal_compaction_error_does_not_retry_pending_input(
                     start_options: Default::default(),
                 })
                 .await?;
-            codex.submit(Op::RealtimeConversationListVoices).await?;
-            wait_for_event(codex, |event| {
-                matches!(event, EventMsg::RealtimeConversationListVoicesResponse(_))
-            })
-            .await;
+            wait_for_submission_barrier(codex).await;
         }
     }
     release_failure.send(()).expect("release compact failure");

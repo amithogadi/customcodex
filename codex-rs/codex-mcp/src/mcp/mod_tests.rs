@@ -8,7 +8,6 @@ use crate::server::McpCredentialPolicy;
 use codex_config::Constrained;
 use codex_config::types::AppToolApproval;
 use codex_config::types::AuthKeyringBackendKind;
-use codex_login::CodexAuth;
 use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::models::ManagedFileSystemPermissions;
@@ -85,8 +84,6 @@ async fn status_snapshot_only_downgrades_oauth_authentication_failures() {
 
 pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
     McpConfig {
-        chatgpt_base_url: "https://chatgpt.com".to_string(),
-        apps_mcp_product_sku: None,
         requires_read_only_mcp_tools: false,
         codex_home,
         mcp_enterprise_managed_auth: None,
@@ -107,11 +104,11 @@ pub(crate) fn test_mcp_config(codex_home: PathBuf) -> McpConfig {
         server_permission_profiles: HashMap::new(),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
-        apps_enabled: false,
+
         prefix_mcp_tool_names: true,
         non_prefixed_mcp_tool_servers: Vec::new(),
         protocol_mode: McpProtocolMode::Legacy,
-        host_owned_apps_protocol_mode: McpProtocolMode::Legacy,
+
         client_elicitation_capability: ElicitationCapability::default(),
         mcp_server_catalog: ResolvedMcpCatalog::default(),
         connector_snapshot: codex_connectors::ConnectorSnapshot::default(),
@@ -200,11 +197,7 @@ fn qualified_mcp_tool_name_prefix_sanitizes_server_names_without_lowercasing() {
 fn mcp_server_permissions_handle_unattached_and_threadless_servers() {
     let mut config = test_mcp_config(PathBuf::new());
     config.permission_profile = PermissionProfile::Disabled;
-    let mut missing_server = codex_apps_mcp_server_config(
-        "https://example.com",
-        /*apps_mcp_product_sku*/ None,
-        /*originator*/ None,
-    );
+    let mut missing_server = test_http_server("https://example.com");
     missing_server.environment_id = "missing".to_string();
     let mut selected_server = missing_server.clone();
     selected_server.environment_id = "unattached".to_string();
@@ -322,11 +315,7 @@ fn tool_plugin_context_collects_app_and_mcp_sources() {
         "alpha".to_string(),
         McpPluginAttribution::new("alpha@test".to_string(), "alpha-plugin".to_string()),
         /*plugin_order*/ 0,
-        codex_apps_mcp_server_config(
-            "https://alpha.example",
-            /*apps_mcp_product_sku*/ None,
-            /*originator*/ None,
-        ),
+        test_http_server("https://alpha.example"),
     ));
     config.mcp_server_catalog = catalog.build();
     config.connector_snapshot =
@@ -397,11 +386,7 @@ fn selected_mcp_attribution_does_not_join_an_unrelated_local_summary() {
         ),
         /*selection_order*/ 0,
         "executor-1",
-        codex_apps_mcp_server_config(
-            "https://github.example",
-            /*apps_mcp_product_sku*/ None,
-            /*originator*/ None,
-        ),
+        test_http_server("https://github.example"),
     ));
     config.mcp_server_catalog = catalog.build();
     config.connector_snapshot =
@@ -434,124 +419,6 @@ fn selected_mcp_attribution_does_not_join_an_unrelated_local_summary() {
         }
     );
     assert!(provenance.is_selected_plugin_mcp_server("github"));
-}
-
-#[test]
-fn codex_apps_mcp_url_for_base_url_uses_plugin_service_paths() {
-    assert_eq!(
-        codex_apps_mcp_url_for_base_url("https://chatgpt.com/backend-api"),
-        "https://chatgpt.com/backend-api/ps/mcp"
-    );
-    assert_eq!(
-        codex_apps_mcp_url_for_base_url("https://chat.openai.com"),
-        "https://chat.openai.com/backend-api/ps/mcp"
-    );
-    assert_eq!(
-        codex_apps_mcp_url_for_base_url("http://localhost:8080/api/codex"),
-        "http://localhost:8080/api/codex/ps/mcp"
-    );
-    assert_eq!(
-        codex_apps_mcp_url_for_base_url("http://localhost:8080"),
-        "http://localhost:8080/api/codex/ps/mcp"
-    );
-}
-
-#[test]
-fn codex_apps_server_config_uses_plugin_service_path() {
-    let config = codex_apps_mcp_server_config(
-        "https://chatgpt.com",
-        /*apps_mcp_product_sku*/ None,
-        /*originator*/ None,
-    );
-    let url = match &config.transport {
-        McpServerTransportConfig::StreamableHttp { url, .. } => url,
-        _ => panic!("expected streamable http transport for codex apps"),
-    };
-
-    assert_eq!(url, "https://chatgpt.com/backend-api/ps/mcp");
-}
-
-#[test]
-fn codex_apps_server_config_forwards_thread_originator_header() {
-    let config = codex_apps_mcp_server_config(
-        "https://chatgpt.com",
-        /*apps_mcp_product_sku*/ None,
-        Some("thread_originator"),
-    );
-
-    match &config.transport {
-        McpServerTransportConfig::StreamableHttp {
-            http_headers,
-            env_http_headers,
-            ..
-        } => {
-            assert_eq!(
-                http_headers,
-                &Some(HashMap::from([
-                    ("originator".to_string(), "thread_originator".to_string()),
-                    ("X-OpenAI-Product-Sku".to_string(), "codex".to_string()),
-                ]))
-            );
-            assert!(env_http_headers.is_none());
-        }
-        other => panic!("expected streamable http transport, got {other:?}"),
-    }
-}
-
-#[test]
-fn codex_apps_server_config_sets_product_sku_header() {
-    for (configured_product_sku, expected_product_sku) in [(None, "codex"), (Some("tpp"), "tpp")] {
-        let config = codex_apps_mcp_server_config(
-            "https://chatgpt.com",
-            configured_product_sku,
-            /*originator*/ None,
-        );
-
-        match &config.transport {
-            McpServerTransportConfig::StreamableHttp {
-                http_headers,
-                env_http_headers,
-                ..
-            } => {
-                assert_eq!(
-                    http_headers,
-                    &Some(HashMap::from([(
-                        "X-OpenAI-Product-Sku".to_string(),
-                        expected_product_sku.to_string(),
-                    )]))
-                );
-                assert!(env_http_headers.is_none());
-            }
-            other => panic!("expected streamable http transport, got {other:?}"),
-        }
-    }
-}
-
-#[test]
-fn codex_apps_server_config_forwards_originator_and_configured_product_sku_headers() {
-    let config = codex_apps_mcp_server_config(
-        "https://chatgpt.com",
-        Some("tpp"),
-        Some("thread_originator"),
-    );
-
-    match &config.transport {
-        McpServerTransportConfig::StreamableHttp {
-            http_headers,
-            env_http_headers,
-            ..
-        } => {
-            assert_eq!(
-                http_headers,
-                &Some(HashMap::from([
-                    ("originator".to_string(), "thread_originator".to_string()),
-                    ("X-OpenAI-Product-Sku".to_string(), "tpp".to_string()),
-                ]))
-            );
-            assert!(env_http_headers.is_none());
-        }
-        other => panic!("expected streamable http transport, got {other:?}"),
-    }
 }
 
 #[test]
@@ -603,37 +470,10 @@ fn effective_mcp_servers_require_catalog_registration() {
     );
 }
 
-#[test]
-fn effective_mcp_servers_preserve_chatgpt_auth_for_staging() {
-    for url in [
-        "https://chatgpt-staging.com",
-        "https://preview.chatgpt-staging.com",
-    ] {
-        let mut config = test_mcp_config(PathBuf::new());
-        config.chatgpt_base_url = url.to_string();
-        let server = codex_apps_mcp_server_config(
-            url, /*apps_mcp_product_sku*/ None, /*originator*/ None,
-        );
-        let mut catalog = ResolvedMcpCatalog::builder();
-        catalog.register(McpServerRegistration::from_config(
-            "staging".to_string(),
-            server.clone(),
-        ));
-        config.mcp_server_catalog = catalog.build();
-        let configured = HashMap::from([("staging".to_string(), server)]);
-        let effective =
-            effective_mcp_servers_from_configured(configured, &config, /*auth*/ None);
-
-        assert_eq!(effective["staging"].config().auth, McpServerAuth::ChatGpt);
-    }
-}
-
 #[tokio::test]
 async fn effective_mcp_servers_preserve_runtime_servers() {
     let codex_home = tempfile::tempdir().expect("tempdir");
     let mut config = test_mcp_config(codex_home.path().to_path_buf());
-    config.apps_enabled = true;
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
 
     let mut catalog = ResolvedMcpCatalog::builder();
     catalog.register(McpServerRegistration::from_config(
@@ -698,15 +538,11 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
     ));
     catalog.register(McpServerRegistration::from_config(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        codex_apps_mcp_server_config(
-            &config.chatgpt_base_url,
-            config.apps_mcp_product_sku.as_deref(),
-            /*originator*/ None,
-        ),
+        test_http_server("https://user.example/explicit-named-server"),
     ));
     config.mcp_server_catalog = catalog.build();
 
-    let effective = effective_mcp_servers(&config, Some(&auth));
+    let effective = effective_mcp_servers(&config, None);
 
     let sample = effective.get("sample").expect("user server should exist");
     let docs = effective
@@ -734,8 +570,12 @@ async fn effective_mcp_servers_preserve_runtime_servers() {
     }
     match &codex_apps.transport {
         McpServerTransportConfig::StreamableHttp { url, .. } => {
-            assert_eq!(url, "https://chatgpt.com/backend-api/ps/mcp");
+            assert_eq!(url, "https://user.example/explicit-named-server");
         }
         other => panic!("expected streamable http transport, got {other:?}"),
     }
+}
+
+fn test_http_server(url: &str) -> McpServerConfig {
+    serde_json::from_value(serde_json::json!({ "url": url })).expect("valid explicit MCP server")
 }

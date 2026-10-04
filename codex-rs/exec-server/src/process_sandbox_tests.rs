@@ -36,7 +36,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::timeout;
 
 use super::PreparedExecRequest;
-use super::prepare_exec_request_with_telemetry;
+use super::prepare_exec_request_with_log_context;
 #[cfg(unix)]
 use crate::CODEX_ARG0_EXEC_HELPER_ARG1;
 use crate::ExecParams;
@@ -44,7 +44,7 @@ use crate::ExecServerRuntimeOptions;
 #[cfg(any(unix, windows))]
 use crate::FileSystemSandboxContext;
 use crate::ProcessId;
-use crate::process_telemetry::ProcessTelemetry;
+use crate::process_log::ProcessLogContext;
 
 async fn prepare_exec_request(
     params: &ExecParams,
@@ -53,13 +53,13 @@ async fn prepare_exec_request(
     network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     network_policy_audit_observer: Option<NetworkPolicyAuditObserver>,
 ) -> Result<PreparedExecRequest, JSONRPCErrorError> {
-    prepare_exec_request_with_telemetry(
+    prepare_exec_request_with_log_context(
         params,
         env,
         runtime_paths,
         network_policy_decider,
         network_policy_audit_observer,
-        &ProcessTelemetry::default(),
+        &ProcessLogContext::default(),
     )
     .await
 }

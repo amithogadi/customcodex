@@ -71,7 +71,6 @@ use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
-use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::PermissionProfile;
@@ -1218,7 +1217,6 @@ async fn start_resource_in_process_client(
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         embedded_network_policy: Default::default(),
         thread_config_loader,
-        feedback: CodexFeedback::new(),
         log_db: None,
         state_db: Some(state_db),
         environment_manager,

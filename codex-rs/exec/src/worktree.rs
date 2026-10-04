@@ -38,7 +38,6 @@ pub(super) async fn fork_source(
         strict_config,
         cloud_config_bundle: network.cloud_config_bundle,
         embedded_network_policy: network.policy,
-        feedback: CodexFeedback::new(),
         log_db: None,
         state_db: state_db.clone(),
         environment_manager: std::sync::Arc::new(environment_manager),

@@ -48,8 +48,8 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         &self,
         review_id: &str,
         review_reason: GuardianReviewReason,
-        deadline: Instant,
-        cancellation: &CancellationToken,
+        _deadline: Instant,
+        _cancellation: &CancellationToken,
     ) -> Result<(PreparedApproval, codex_guardian_reviewer::ReviewReport), ReviewDecision> {
         let super::super::runtime::ReviewRuntime {
             session,
@@ -66,7 +66,6 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         let model_context = context.model_context();
         let turn = Arc::clone(context.turn());
         let GuardianReviewOptions {
-            plugin_attribution_override,
             approval_request_source,
             external_cancel: _,
             require_synchronous_review: _,
@@ -74,46 +73,14 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         } = options;
         let target_item_id = guardian_request_target_item_id(&request).map(str::to_string);
         let assessment_turn_id = guardian_request_turn_id(&request, &turn.sub_id).to_string();
-        let plugin_attribution = match plugin_attribution_override {
-            Some(attribution) => Some(attribution),
-            None if matches!(&request, GuardianApprovalRequest::ExecCommand { .. }) => {
-                let attribution_deadline = std::cmp::min(
-                    deadline,
-                    Instant::now() + GUARDIAN_PLUGIN_ATTRIBUTION_TIMEOUT,
-                );
-                let attribution = tokio::select! {
-                    biased;
-                    _ = cancellation.cancelled() => return Err(ReviewDecision::Abort),
-                    attribution = tokio::time::timeout_at(
-                        attribution_deadline,
-                        plugin_attribution_for_guardian_request(&context, &request),
-                    ) => attribution,
-                };
-                match attribution {
-                    Ok(attribution) => attribution,
-                    Err(_) => {
-                        tracing::warn!(
-                            timeout_ms = GUARDIAN_PLUGIN_ATTRIBUTION_TIMEOUT.as_millis(),
-                            "Guardian plugin attribution timed out"
-                        );
-                        None
-                    }
-                }
-            }
-            None => plugin_attribution_for_guardian_request(&context, &request).await,
-        };
-        let (plugin_id, script_path) = plugin_attribution
-            .as_ref()
-            .map(PluginCommandAttribution::serialized_fields)
-            .unzip();
         let report =
             codex_guardian_reviewer::ReviewReport::new(codex_guardian_reviewer::ReviewMetadata {
                 thread_id: session.thread_id.to_string(),
                 turn_id: assessment_turn_id,
                 review_id: review_id.to_owned(),
                 target_item_id,
-                plugin_id,
-                script_path,
+                plugin_id: None,
+                script_path: None,
                 approval_request_source,
                 reviewed_action: guardian_reviewed_action(&request),
                 action: guardian_assessment_action(&request),
@@ -143,13 +110,13 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         cancellation: &CancellationToken,
     ) -> (
         GuardianReviewOutcome,
-        GuardianReviewAnalyticsResult,
+        GuardianReviewDetails,
         Option<ApprovalEvidence>,
     ) {
         if self.history_reset.is_cancelled() || cancellation.is_cancelled() {
             return (
                 GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
-                GuardianReviewAnalyticsResult::without_session(),
+                GuardianReviewDetails::without_session(),
                 None,
             );
         }
@@ -168,7 +135,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         {
             return (
                 GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
-                GuardianReviewAnalyticsResult::without_session(),
+                GuardianReviewDetails::without_session(),
                 None,
             );
         }

@@ -29,7 +29,6 @@ use crate::context::ManagedDeveloperInstructions;
 use crate::context::ModelSwitchInstructions;
 use crate::context::MultiAgentRoleInstructions;
 use crate::context::NetworkRuleSaved;
-use crate::context::RecommendedPluginsInstructions;
 use crate::context::world_state::Placement;
 use crate::context::world_state::WorldState;
 use crate::context::world_state::WorldStateSnapshot;
@@ -40,12 +39,12 @@ use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::exec_policy::BANNED_PREFIX_SUGGESTIONS;
 use crate::exec_policy::ExecPolicyManager;
 use crate::exec_policy::default_policy_path;
+use crate::image_preparation::ImagePreparationMetadata;
 use crate::image_preparation::ImagePreparationMode;
 use crate::image_preparation::ImageResizeNoticeMode;
 use crate::image_preparation::prepare_response_items as prepare_image_response_items;
 use crate::image_preparation::unified_image_budget_enabled;
 use crate::parse_turn_item;
-use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_history::RealtimeEventOrder;
 use crate::session::step_context::StepContext;
 use crate::session::step_settings::ResolvedStepSettings;
@@ -60,11 +59,6 @@ use async_channel::Receiver;
 use async_channel::Sender;
 use chrono::Local;
 use chrono::Utc;
-use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::ImagePreparationFact;
-use codex_analytics::ImagePreparationMetadata;
-use codex_analytics::SubAgentThreadStartedInput;
-use codex_analytics::TurnCodexErrorFact;
 use codex_async_utils::OrCancelExt;
 use codex_attachment_store::AttachmentStore;
 use codex_attachment_store::InlineAttachmentStore;
@@ -85,7 +79,6 @@ use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::auth_env_telemetry::collect_auth_env_telemetry;
 use codex_mcp::McpResourceClient;
 use codex_mcp::McpRuntime;
 use codex_mcp::McpRuntimeContext;
@@ -95,13 +88,8 @@ use codex_models_manager::manager::SharedModelsManager;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
-use codex_otel::auth_storage::AuthStorageOriginator;
-use codex_otel::current_span_trace_id;
-use codex_otel::current_span_w3c_trace_context;
-use codex_otel::set_parent_from_w3c_trace_context;
 use codex_prompts::render_model_instructions;
 use codex_protocol::ResponseUsageMetadata;
-use codex_protocol::SessionId;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -237,7 +225,6 @@ pub(crate) mod context_window;
 mod daemon_recovery;
 mod environment;
 mod extension_interruption;
-pub(crate) mod extension_metrics;
 mod guardian_checkpoint;
 mod handlers;
 mod inject;
@@ -288,11 +275,8 @@ use self::session::SessionSettingsCommit;
 pub(crate) use self::session::SessionSettingsUpdate;
 #[cfg(test)]
 use self::turn::AssistantMessageStreamParsers;
-use self::turn::RealtimeEventText;
-use self::turn::agent_message_text;
 #[cfg(test)]
 use self::turn::collect_explicit_app_ids_from_skill_items;
-use self::turn::realtime_text_for_event;
 use self::turn_context::TurnContext;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
@@ -327,15 +311,12 @@ use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::sandboxing::ApprovalAction;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::turn_timing::TurnTimingState;
-use crate::turn_timing::record_turn_ttfm_metric;
+use crate::turn_timing::record_turn_ttfm;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use crate::windows_sandbox::local_binding_policy_for_sandbox;
 use crate::windows_sandbox::managed_proxy_routing_for_windows_sandbox;
-use codex_core_plugins::PluginCommandAttribution;
 use codex_core_plugins::PluginsManager;
-use codex_core_plugins::RecommendedPluginCandidatesInput;
-use codex_git_utils::get_git_repo_root;
 use codex_history::CodexHarnessMetadata;
 use codex_history::CompactedItem;
 use codex_history::CompactionResumeMetadata;
@@ -344,9 +325,6 @@ pub(crate) use codex_history::PreviousTurnSettings;
 use codex_history::ResponseItemEnvelope;
 use codex_mcp::McpConfig;
 use codex_mcp::effective_mcp_servers;
-use codex_otel::SessionTelemetry;
-use codex_otel::THREAD_STARTED_METRIC;
-use codex_otel::TelemetryAuthMode;
 use codex_protocol::ResponseItemId;
 use codex_protocol::approvals::ExecApprovalKind;
 use codex_protocol::config_types::CollaborationMode;
@@ -461,7 +439,6 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) originator: String,
     pub(crate) agent_control: AgentControlInit,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
-    pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) inherited_environments: Option<TurnEnvironmentSnapshot>,
     /// Parent rollout trace used only to derive fresh spawned child traces.
@@ -476,7 +453,6 @@ pub(crate) struct SessionSpawnArgs {
     pub(crate) turn_extension_init: ExtensionDataInit,
     pub(crate) client_mcp_extensions: ClientMcpExtensions,
     pub(crate) reserved_thread_id: Option<ThreadId>,
-    pub(crate) analytics_events_client: Option<AnalyticsEventsClient>,
     pub(crate) image_store: Arc<dyn AttachmentStore>,
     pub(crate) thread_store: Arc<dyn ThreadStore>,
     pub(crate) attestation_provider: Option<Arc<dyn AttestationProvider>>,
@@ -519,26 +495,8 @@ impl Session {
     ) -> BoxFuture<'static, CodexResult<(Arc<Self>, SessionIo)>> {
         let tree_shutdown = args.agent_control.runtime().shutdown.clone();
         Box::pin(async move {
-            let parent_trace = match args.parent_trace {
-                Some(trace) => {
-                    if codex_otel::context_from_w3c_trace_context(&trace).is_some() {
-                        Some(trace)
-                    } else {
-                        warn!("ignoring invalid thread spawn trace carrier");
-                        None
-                    }
-                }
-                None => None,
-            };
             let thread_spawn_span = info_span!("thread_spawn", otel.name = "thread_spawn");
-            if let Some(trace) = parent_trace.as_ref() {
-                let _ = set_parent_from_w3c_trace_context(&thread_spawn_span, trace);
-            }
-            let spawn = Self::spawn_internal(SessionSpawnArgs {
-                parent_trace,
-                ..args
-            })
-            .instrument(thread_spawn_span);
+            let spawn = Self::spawn_internal(args).instrument(thread_spawn_span);
             tokio::select! {
                 biased;
                 _ = tree_shutdown.cancelled() => Err(CodexErr::TurnAborted),
@@ -574,7 +532,6 @@ impl Session {
             originator,
             agent_control,
             dynamic_tools,
-            metrics_service_name,
             user_shell_override,
             inherited_exec_policy,
             inherited_environments,
@@ -585,7 +542,6 @@ impl Session {
             turn_extension_init,
             client_mcp_extensions,
             reserved_thread_id,
-            analytics_events_client,
             image_store,
             thread_store,
             attestation_provider,
@@ -834,7 +790,6 @@ impl Session {
         );
         let service_tier =
             get_service_tier(config.service_tier.clone(), fast_mode_enabled, &model_info);
-        let storage_originator = AuthStorageOriginator::from_client_name(&originator);
         let session_configuration = SessionConfiguration {
             turn_extension_init,
             provider: create_model_provider(
@@ -865,7 +820,6 @@ impl Session {
             thread_name: None,
             disabled_plugin_ids,
             original_config_do_not_use: Arc::clone(&config),
-            metrics_service_name,
             app_server_client_name: None,
             app_server_client_version: None,
             trusted_guardian_reviewer,
@@ -914,7 +868,6 @@ impl Session {
             reserved_thread_id,
             environment_manager,
             inherited_environments,
-            analytics_events_client,
             image_store,
             thread_store,
             parent_rollout_thread_trace,
@@ -947,14 +900,14 @@ impl Session {
             .as_ref()
             .and_then(|startup| startup.session_teardown());
         let session_for_loop = Arc::clone(&session);
-        let session_loop_handle = tokio::spawn(storage_originator.scope(async move {
+        let session_loop_handle = tokio::spawn(async move {
             submission_loop(session_for_loop, configured_config, rx_sub)
                 .instrument(info_span!("session_loop", thread_id = %thread_id))
                 .await;
             if let Some(tree_teardown) = tree_teardown {
                 tree_teardown.complete();
             }
-        }));
+        });
         let io = SessionIo {
             tx_sub,
             rx_event,
@@ -1010,10 +963,7 @@ impl SessionIo {
     }
 
     /// Use sparingly: prefer `submit()` so submission IDs are generated consistently.
-    pub(crate) async fn submit_with_id(&self, mut sub: Submission) -> CodexResult<()> {
-        if sub.trace.is_none() {
-            sub.trace = current_span_w3c_trace_context();
-        }
+    pub(crate) async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.tx_sub
             .send(sub)
             .await
@@ -2225,17 +2175,6 @@ impl Session {
         }
     }
 
-    /// Record a terminal CodexErr before the app-server completion notification is reduced.
-    pub(crate) fn track_turn_codex_error(&self, turn_context: &TurnContext, error: &CodexErr) {
-        self.services
-            .analytics_events_client
-            .track_turn_codex_error(TurnCodexErrorFact::from_codex_err(
-                self.thread_id.to_string(),
-                turn_context.sub_id.clone(),
-                error,
-            ));
-    }
-
     /// Returns the reviewer pool installed by the Guardian extension.
     pub(crate) fn guardian_review_session(&self) -> Option<Arc<GuardianReviewSessionManager>> {
         self.services
@@ -2295,29 +2234,8 @@ impl Session {
             msg,
         };
         // Private reviewers have no app-server listener; publicly resumed Guardian threads do.
-        if matches!(
-            &turn_context.session_source,
-            SessionSource::SubAgent(SubAgentSource::Other(name))
-                if name == crate::guardian::GUARDIAN_REVIEWER_NAME
-        ) && self.services.analytics_events_client.is_enabled()
-            && turn_context.parent_thread_id.is_some()
-            && self
-                .state
-                .lock()
-                .await
-                .session_configuration
-                .trusted_guardian_reviewer
-        {
-            self.services
-                .analytics_events_client
-                .track_guardian_session_event(self.thread_id, &event);
-        }
         self.send_event_raw(event).await;
         self.maybe_notify_parent_of_terminal_turn(turn_context, &legacy_source)
-            .await;
-        self.maybe_mirror_event_text_to_realtime(&legacy_source)
-            .await;
-        self.maybe_clear_realtime_handoff_for_event(&legacy_source)
             .await;
 
         let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
@@ -2402,66 +2320,6 @@ impl Session {
                 &self.services.rollout_thread_trace,
             )
             .await;
-    }
-
-    async fn maybe_mirror_event_text_to_realtime(&self, msg: &EventMsg) {
-        if self.conversation.running_state().await.is_none() {
-            return;
-        }
-        match msg {
-            EventMsg::ItemStarted(event) => {
-                if let TurnItem::AgentMessage(item) = &event.item {
-                    self.conversation
-                        .register_handoff_stream_item(
-                            item.id.clone(),
-                            item.phase.clone(),
-                            agent_message_text(item),
-                        )
-                        .await;
-                }
-                return;
-            }
-            EventMsg::AgentMessageContentDelta(event) => {
-                if let Err(err) = self
-                    .conversation
-                    .stream_handoff_delta(&event.item_id, event.delta.clone())
-                    .await
-                {
-                    debug!("failed to stream event text to realtime conversation: {err}");
-                }
-                return;
-            }
-            EventMsg::ItemCompleted(event) => {
-                if let TurnItem::AgentMessage(item) = &event.item
-                    && self.conversation.finish_handoff_stream_item(&item.id).await
-                {
-                    return;
-                }
-            }
-            _ => {}
-        }
-        let result = match realtime_text_for_event(msg) {
-            Some(RealtimeEventText::Handoff(text, phase)) => {
-                self.conversation.handoff_out(text, phase).await
-            }
-            Some(RealtimeEventText::QuietReasoning(text)) => {
-                self.conversation.send_reasoning_status(&text).await
-            }
-            None => return,
-        };
-        if let Err(err) = result {
-            debug!("failed to mirror event text to realtime conversation: {err}");
-        }
-    }
-
-    async fn maybe_clear_realtime_handoff_for_event(&self, msg: &EventMsg) {
-        if !matches!(msg, EventMsg::TurnComplete(_)) {
-            return;
-        }
-        if let Err(err) = self.conversation.handoff_complete().await {
-            debug!("failed to finalize realtime handoff output: {err}");
-        }
-        self.conversation.clear_active_handoff().await;
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
@@ -2565,7 +2423,7 @@ impl Session {
         turn_context: &TurnContext,
         item: TurnItem,
     ) {
-        record_turn_ttfm_metric(turn_context, &item).await;
+        record_turn_ttfm(self.thread_id, turn_context, &item).await;
         for contributor in self.services.extensions.turn_lifecycle_contributors() {
             contributor
                 .on_item_completed(
@@ -2767,7 +2625,6 @@ impl Session {
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
         additional_permissions: Option<AdditionalPermissionProfile>,
         available_decisions: Option<Vec<ReviewDecision>>,
-        plugin_attribution_override: Option<PluginCommandAttribution>,
     ) -> ReviewDecision {
         let _elicitation = self.services.elicitations.register();
         //  command-level approvals use `call_id`.
@@ -2810,21 +2667,12 @@ impl Session {
                 additional_permissions.as_ref(),
             )
         });
-        let plugin_attribution = plugin_attribution_override.or_else(|| {
-            cwd.to_abs_path()
-                .ok()
-                .and_then(|cwd| turn_context.plugin_attribution_for_command(&command, &cwd))
-        });
-        let (plugin_id, script_path) = plugin_attribution
-            .as_ref()
-            .map(PluginCommandAttribution::serialized_fields)
-            .unzip();
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             model_context: Some(model_context),
             kind,
             call_id,
-            plugin_id,
-            script_path,
+            plugin_id: None,
+            script_path: None,
             approval_id,
             turn_id: turn_context.sub_id.clone(),
             environment_id,
@@ -3561,14 +3409,7 @@ impl Session {
                 .history
                 .record_annotated_items(&mut items, model_info.truncation_policy.into());
         }
-        for image in image_preparations {
-            self.services
-                .analytics_events_client
-                .track_image_preparation(ImagePreparationFact {
-                    turn_id: turn_context.sub_id.clone(),
-                    metadata: image,
-                });
-        }
+        for _image in image_preparations {}
         let rollout_items: Vec<RolloutItem> =
             items.into_iter().map(RolloutItem::ResponseItem).collect();
         if self.persist_rollout_items(&rollout_items).await
@@ -3737,7 +3578,6 @@ impl Session {
             turn_context.use_model_token_budget_defaults,
             settings.model_info.as_ref(),
         );
-        let session_telemetry = settings.telemetry(&turn_context.session_telemetry);
         let environments = environments.or_cancel(cancellation_token).await?;
         // Keep both preparation futures off caller stacks while they are live together.
         let load_agents_md = Box::pin(async {
@@ -3778,16 +3618,14 @@ impl Session {
             if let Some(discovery) = &executor_capability_discovery {
                 extension_data.insert(discovery.as_ref().clone());
             }
-            let (mcp, prepared_recommendations) = tokio::join!(
-                // MCP refresh can be large; keep it off the sampling request's stack.
-                Box::pin(self.mcp_runtime_for_step(
-                    turn_context.as_ref(),
-                    &selected_capability_roots,
-                    required_servers,
-                    required_plugins,
-                )),
-                turn::prepare_tool_recommendations(self.as_ref(), turn_context.as_ref()),
-            );
+            // MCP refresh can be large; keep it off the sampling request's stack.
+            let mcp = Box::pin(self.mcp_runtime_for_step(
+                turn_context.as_ref(),
+                &selected_capability_roots,
+                required_servers,
+                required_plugins,
+            ))
+            .await;
             // A step keeps the plugins from the environments it captured, even if shared MCP
             // moves on to another environment. Its skill tools and the model use this same copy.
             let selected_plugins = self
@@ -3814,7 +3652,6 @@ impl Session {
                 &environments,
                 &mcp,
                 &extension_data,
-                prepared_recommendations,
             )
             .await?;
             Ok::<_, CodexErr>((
@@ -3845,10 +3682,8 @@ impl Session {
                 .features
                 .enabled(Feature::InstantInterrupt)
                 .then(CancellationToken::new),
-            realtime: self.conversation.snapshot().await,
             settings,
             token_budget,
-            session_telemetry,
             turn: turn_context,
             environments,
             selected_capability_roots,
@@ -4231,32 +4066,12 @@ impl Session {
             developer_sections
                 .push(DeveloperInstructions::new(developer_instructions).render_fragment());
         }
-        let loaded_plugins = self
+        let _loaded_plugins = self
             .services
             .plugins_manager
             .plugins_for_config(&turn_context.config.plugins_config_input())
             .await
             .without_plugins(&turn_context.disabled_plugin_ids);
-        let recommended_plugin_candidates = if turn_context
-            .config
-            .features
-            .plugin_recommendations_enabled()
-        {
-            let auth = self.services.auth_manager.auth().await;
-            let plugins_config = turn_context.config.plugins_config_input();
-            self.services
-                .plugins_manager
-                .recommended_plugin_candidates_for_config(RecommendedPluginCandidatesInput {
-                    plugins_config: &plugins_config,
-                    loaded_plugins: &loaded_plugins,
-                    auth: auth.as_ref(),
-                    disabled_tools: &turn_context.config.tool_suggest.disabled_tools,
-                    app_server_client_name: turn_context.app_server_client_name.as_deref(),
-                })
-                .await
-        } else {
-            None
-        };
         let context_contributors = self.services.extensions.context_contributors().to_vec();
         for contributor in &context_contributors {
             for fragment in contributor
@@ -4398,14 +4213,6 @@ impl Session {
                     "user" => contextual_user_sections.push(fragment.render_fragment()),
                     _ => {}
                 }
-            }
-
-            if next_item.is_none()
-                && let Some(recommended_plugins) = recommended_plugin_candidates
-                    .as_deref()
-                    .and_then(RecommendedPluginsInstructions::from_plugins)
-            {
-                developer_sections.push(recommended_plugins.render_fragment());
             }
 
             if let Some(developer_message) = crate::context_manager::updates::build_rendered_message(
@@ -4737,7 +4544,7 @@ impl Session {
     pub(crate) async fn record_token_usage_info(
         &self,
         turn_context: &TurnContext,
-        settings: &ResolvedStepSettings,
+        _settings: &ResolvedStepSettings,
         token_usage: Option<&TokenUsage>,
     ) -> CodexResult<()> {
         if let Some(token_usage) = token_usage {
@@ -4753,17 +4560,10 @@ impl Session {
                 }
                 state.token_info()
             };
-            let turn_state = self
+            let _turn_state = self
                 .input_queue
                 .turn_state_for_sub_id(&self.active_turn, &turn_context.sub_id)
                 .await;
-            if let Some(turn_state) = turn_state {
-                turn_state.lock().await.token_usage_by_model.record(
-                    settings.selected_collaboration_mode().model(),
-                    settings.telemetry(&turn_context.session_telemetry),
-                    token_usage,
-                );
-            }
             let budget_result = self.record_rollout_budget_usage(token_usage).await;
             if let Some(token_info) = token_info.as_ref() {
                 for contributor in self.services.extensions.token_usage_contributors() {
@@ -5064,47 +4864,6 @@ fn apply_prepared_image_file_ids(
             }
         }
     }
-}
-
-pub(crate) fn emit_subagent_session_started(
-    analytics_events_client: &AnalyticsEventsClient,
-    client_metadata: AppServerClientMetadata,
-    session_id: SessionId,
-    thread_id: ThreadId,
-    parent_thread_id: Option<ThreadId>,
-    thread_config: ThreadConfigSnapshot,
-    subagent_source: SubAgentSource,
-) {
-    let AppServerClientMetadata {
-        client_name,
-        client_version,
-    } = client_metadata;
-    if (client_name.is_none() || client_version.is_none())
-        && subagent_source.kind() != crate::guardian::GUARDIAN_REVIEWER_NAME
-    {
-        tracing::warn!("skipping subagent thread analytics: missing inherited client metadata");
-        return;
-    }
-    let created_at = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    analytics_events_client.track_subagent_thread_started(SubAgentThreadStartedInput {
-        session_id: session_id.to_string(),
-        thread_id: thread_id.to_string(),
-        parent_thread_id: parent_thread_id.map(|thread_id| thread_id.to_string()),
-        forked_from_thread_id: thread_config
-            .forked_from_thread_id
-            .map(|thread_id| thread_id.to_string()),
-        product_client_id: thread_config.originator.clone(),
-        client_name,
-        client_version,
-        model: thread_config.model,
-        ephemeral: thread_config.ephemeral,
-        thread_source: thread_config.thread_source,
-        subagent_source,
-        created_at,
-    });
 }
 
 /// Builds hook configuration for one config snapshot, including any enabled plugin hooks.

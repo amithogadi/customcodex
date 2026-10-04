@@ -8,14 +8,7 @@ use super::*;
 use crate::terminal_hyperlinks::HyperlinkLine;
 use std::sync::Weak;
 
-
 pub(super) struct RenderedHistoryTail {
-    pub(super) cell: Weak<dyn HistoryCell>,
-    pub(super) lines: Vec<HyperlinkLine>,
-}
-
-pub(super) struct ThreadUsageStatusHistory {
-    thread_id: ThreadId,
     pub(super) cell: Weak<dyn HistoryCell>,
     pub(super) lines: Vec<HyperlinkLine>,
 }
@@ -58,9 +51,6 @@ impl App {
         self.transcript_cells.push(cell.clone());
         let deferred = tui.is_owned_screen() || self.native_history.insert(&cell);
         self.render_inserted_history_cell(tui, &cell, deferred);
-        // A committed cell can unblock a settled /usage card that was waiting
-        // behind a transient active cell or a provisional stream tail.
-        self.chat_widget.request_pending_usage_output_insertion();
         if is_session_header {
             self.merge_startup_warnings(tui, &history_cell::StartupWarningsCell::default());
         }
@@ -76,25 +66,12 @@ impl App {
         let width = self
             .chat_widget
             .history_wrap_width(tui.terminal.last_known_screen_size.width);
-        // Owned replay must not eagerly format every historical entry. Composite status cards are
-        // the only committed cells whose mutable usage data needs insertion-time bookkeeping.
-        let lines = if !deferred || cell.as_any().is::<history_cell::CompositeHistoryCell>() {
+        // Owned replay must not eagerly format every historical entry.
+        let lines = if !deferred {
             cell.display_hyperlink_lines_for_mode(width, self.chat_widget.history_render_mode())
         } else {
             Vec::new()
         };
-        if cell.as_any().is::<history_cell::CompositeHistoryCell>()
-            && lines.first().is_some_and(|line| {
-                line.line.spans.len() == 1 && line.line.spans[0].content.as_ref() == "/status"
-            })
-            && let Some(thread_id) = self.chat_widget.thread_id()
-        {
-            self.last_thread_usage_status_cell = Some(ThreadUsageStatusHistory {
-                thread_id,
-                cell: Arc::downgrade(cell),
-                lines: lines.clone(),
-            });
-        }
         // Invisible diagnostics still update the badge without replacing the rendered tail.
         if deferred || lines.is_empty() {
             tui.frame_requester().schedule_frame();
@@ -116,173 +93,12 @@ impl App {
         }
     }
 
-    pub(super) fn finish_thread_usage_refresh(
-        &mut self,
-        tui: &mut tui::Tui,
-        thread_id: ThreadId,
-        request_id: u64,
-        result: std::result::Result<crate::chatwidget::ThreadUsageOutcome, String>,
-    ) -> Result<()> {
-        let may_update_status = match &result {
-            Ok(crate::chatwidget::ThreadUsageOutcome::Available(usage)) => {
-                usage.thread_id == thread_id.to_string()
-            }
-            Ok(crate::chatwidget::ThreadUsageOutcome::Disabled) => true,
-            Err(_) => false,
-        };
-        if !self
-            .chat_widget
-            .finish_thread_usage_refresh(thread_id, request_id, result)
-            || !may_update_status
-        {
-            return Ok(());
-        }
-
-        if !tui.is_owned_screen()
-            && (self.overlay.is_some() || self.initial_history_replay_buffer.is_some())
-        {
-            self.pending_thread_usage_history_refresh = true;
-            return Ok(());
-        }
-        self.refresh_thread_usage_history_tail(tui)
-    }
-
-    pub(crate) fn refresh_thread_usage_history_tail(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        let Some(status_history) = self.last_thread_usage_status_cell.as_ref() else {
-            self.pending_thread_usage_history_refresh = false;
-            return Ok(());
-        };
-        if self.chat_widget.thread_id() != Some(status_history.thread_id) {
-            self.last_thread_usage_status_cell = None;
-            self.pending_thread_usage_history_refresh = false;
-            return Ok(());
-        }
-        let Some(status_cell) = status_history.cell.upgrade() else {
-            self.last_thread_usage_status_cell = None;
-            self.pending_thread_usage_history_refresh = false;
-            return Ok(());
-        };
-
-        // A queued card reads the latest usage when it is first emitted.
-        if self.native_history.contains(&status_cell) {
-            self.pending_thread_usage_history_refresh = false;
-            return Ok(());
-        }
-
-        let width = self
-            .chat_widget
-            .history_wrap_width(tui.terminal.last_known_screen_size.width);
-        let updated_lines = status_cell
-            .display_hyperlink_lines_for_mode(width, self.chat_widget.history_render_mode());
-        if updated_lines == status_history.lines {
-            self.pending_thread_usage_history_refresh = false;
-            return Ok(());
-        }
-        if tui.is_owned_screen() {
-            // Composite cells are backed by mutable usage state, so the retained view remeasures
-            // them on its next frame without replacing native terminal history.
-            if let Some(status_history) = self.last_thread_usage_status_cell.as_mut() {
-                status_history.lines = updated_lines;
-            }
-            self.last_rendered_history_tail = None;
-            self.pending_thread_usage_history_refresh = false;
-            tui.frame_requester().schedule_frame();
-            return Ok(());
-        }
-        let Some(rendered_tail) = self.last_rendered_history_tail.as_ref() else {
-            self.insert_history_cell_lines(tui, status_cell.as_ref(), width);
-            self.last_rendered_history_tail = Some(RenderedHistoryTail {
-                cell: Arc::downgrade(&status_cell),
-                lines: updated_lines.clone(),
-            });
-            if let Some(status_history) = self.last_thread_usage_status_cell.as_mut() {
-                status_history.lines = updated_lines;
-            }
-            self.pending_thread_usage_history_refresh = false;
-            return Ok(());
-        };
-        if !rendered_tail
-            .cell
-            .upgrade()
-            .is_some_and(|cell| Arc::ptr_eq(&cell, &status_cell))
-        {
-            self.insert_history_cell_lines(tui, status_cell.as_ref(), width);
-            self.last_rendered_history_tail = Some(RenderedHistoryTail {
-                cell: Arc::downgrade(&status_cell),
-                lines: updated_lines.clone(),
-            });
-            if let Some(status_history) = self.last_thread_usage_status_cell.as_mut() {
-                status_history.lines = updated_lines;
-            }
-            self.pending_thread_usage_history_refresh = false;
-            return Ok(());
-        }
-
-        let prefix_len = rendered_tail
-            .lines
-            .iter()
-            .zip(&updated_lines)
-            .take_while(|(previous, updated)| previous == updated)
-            .count();
-        if prefix_len == rendered_tail.lines.len() && prefix_len == updated_lines.len() {
-            self.pending_thread_usage_history_refresh = false;
-            return Ok(());
-        }
-
-        let wrap_policy = self.history_line_wrap_policy();
-        if !tui.replace_visible_history_tail(
-            &rendered_tail.lines[prefix_len..],
-            &updated_lines[prefix_len..],
-            wrap_policy,
-        )? {
-            self.insert_history_cell_lines(tui, status_cell.as_ref(), width);
-        }
-        self.last_rendered_history_tail = Some(RenderedHistoryTail {
-            cell: Arc::downgrade(&status_cell),
-            lines: updated_lines.clone(),
-        });
-        if let Some(status_history) = self.last_thread_usage_status_cell.as_mut() {
-            status_history.lines = updated_lines;
-        }
-        self.pending_thread_usage_history_refresh = false;
-        Ok(())
-    }
-
-    pub(super) fn pending_usage_output_insertion_blocked(&self) -> bool {
-        self.chat_widget.usage_history_insertion_blocked()
-            || self
-                .transcript_cells
-                .last()
-                .is_some_and(|cell| cell.as_any().is::<history_cell::AgentMessageCell>())
-    }
-
-    fn insert_pending_usage_output(&mut self, tui: &mut tui::Tui) {
-        if let Some(cell) = self.chat_widget.take_pending_rate_limit_reset_hint() {
-            self.insert_history_cell(tui, Box::new(history_cell::SessionNoticeCell(cell)));
-        }
-    }
-
-    pub(super) fn insert_pending_usage_output_if_ready(&mut self, tui: &mut tui::Tui) {
-        if self.pending_usage_output_insertion_blocked() {
-            return;
-        }
-        self.insert_pending_usage_output(tui);
-    }
-
-    pub(super) fn insert_pending_usage_output_after_stream_shutdown(&mut self, tui: &mut tui::Tui) {
-        if self.chat_widget.usage_history_insertion_blocked() {
-            return;
-        }
-        self.insert_pending_usage_output(tui);
-    }
-
     pub(super) fn open_url_in_browser(&mut self, url: String) {
         if let Err(err) = webbrowser::open(&url) {
             self.chat_widget
                 .add_error_message(format!("Failed to open browser for {url}: {err}"));
         }
     }
-
 
     pub(super) fn clear_ui_header_lines_with_version(
         &self,
@@ -385,12 +201,9 @@ impl App {
         self.cancel_pending_key_chord();
         self.transcript_view = Default::default();
         self.last_rendered_history_tail = None;
-        self.last_thread_usage_status_cell = None;
-        self.pending_thread_usage_history_refresh = false;
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
         self.transcript_reflow.clear();
-        self.chat_widget.clear_pending_rate_limit_reset_hint();
         self.initial_history_replay_buffer = None;
         self.scrollback_has_older_history = false;
         self.backtrack = BacktrackState::default();

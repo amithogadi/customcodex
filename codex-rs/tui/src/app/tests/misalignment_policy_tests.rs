@@ -66,7 +66,7 @@ async fn misalignment_continuation_requires_current_review_and_submits_once() ->
         if !reject {
             app.chat_widget.update_account_state(
                 /*status_account_display*/ None, /*plan_type*/ None,
-                /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+                /*has_chatgpt_account*/ true,
             );
             app.chat_widget.open_model_popup();
             let request_id = std::iter::from_fn(|| rx.try_recv().ok())

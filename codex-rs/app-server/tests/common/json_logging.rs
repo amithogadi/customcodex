@@ -36,13 +36,30 @@ impl JsonLogCapture {
         event_name: &str,
         count: usize,
     ) -> Result<Vec<Value>> {
+        self.wait_for_records("event.name", event_name, count).await
+    }
+
+    pub(crate) async fn wait_for_messages(
+        &self,
+        message: &str,
+        count: usize,
+    ) -> Result<Vec<Value>> {
+        self.wait_for_records("message", message, count).await
+    }
+
+    async fn wait_for_records(
+        &self,
+        field: &str,
+        event_name: &str,
+        count: usize,
+    ) -> Result<Vec<Value>> {
         let result = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let updated = self.updated.notified();
                 let events = self
                     .events()?
                     .into_iter()
-                    .filter(|event| event["fields"]["event.name"].as_str() == Some(event_name))
+                    .filter(|event| event["fields"][field].as_str() == Some(event_name))
                     .collect::<Vec<_>>();
                 if events.len() >= count {
                     return Ok(events);

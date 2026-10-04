@@ -129,9 +129,6 @@ impl GrpcSession {
         // The saved traceparent belongs to the outer execution. Prefer the runtime's
         // per-tool span so the callback is nested under its invocation, with the
         // execution context as a fallback when no current span context is available.
-        let traceparent = codex_otel::current_span_w3c_trace_context()
-            .and_then(|trace| trace.traceparent)
-            .or(traceparent);
         if subscriptions.is_empty() {
             return Err("no code-mode tool subscription matches the requested tool".to_string());
         }
@@ -145,7 +142,7 @@ impl GrpcSession {
             tool_kind: conversions::tool_kind(invocation.tool_kind),
             input_json,
             sequence,
-            traceparent,
+            traceparent: None,
         };
         if message.encoded_len() > MAX_FRAME_BYTES {
             return Err(format!(

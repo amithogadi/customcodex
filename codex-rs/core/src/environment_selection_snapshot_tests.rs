@@ -2,7 +2,6 @@
 
 use super::*;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
-use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::sandbox::SandboxType;
@@ -129,23 +128,10 @@ async fn credential_refresh_does_not_restore_a_removed_environment() {
     let cwd = AbsolutePathBuf::from_absolute_path(home.path()).expect("cwd");
     let cwd_uri = PathUri::from_abs_path(&cwd);
     let session_id = ThreadId::new();
-    let telemetry = SessionTelemetry::new(
-        session_id,
-        "test",
-        "test",
-        /*account_id*/ None,
-        /*account_email*/ None,
-        /*auth_mode*/ None,
-        "test".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        SessionSource::Cli,
-    );
     let (broker, _) = watch::channel(SnapshotCredentialBrokerState::Starting);
     let shell_snapshot = ShellSnapshot::new(
         cwd,
         session_id,
-        telemetry,
         /*state_db*/ None,
         Some(broker),
         /*prefer_executor_snapshots*/ false,

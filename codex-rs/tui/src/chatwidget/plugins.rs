@@ -3,15 +3,12 @@ use std::path::PathBuf;
 use super::ChatWidget;
 use super::plugin_catalog::marketplace_display_name;
 use super::plugin_catalog::marketplace_is_user_configured;
-use super::plugin_catalog::marketplace_is_user_configured_git;
 use super::plugin_catalog::marketplace_tab_id;
 use super::plugin_catalog::marketplace_tab_id_from_path;
 use super::plugin_catalog::marketplace_tab_id_matching_saved_id;
-use super::plugin_catalog::merge_remote_marketplaces;
 use super::plugin_catalog::plugin_detail_hint_line;
 use crate::app_event::AppEvent;
 use crate::app_event::PluginLocation;
-use crate::app_event::PluginRemoteSectionError;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
@@ -21,7 +18,6 @@ use crate::key_hint;
 use crate::render::renderable::ColumnRenderable;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
-use codex_app_server_protocol::MarketplaceUpgradeResponse;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginMarketplaceEntry;
@@ -42,13 +38,6 @@ pub(super) const ADD_MARKETPLACE_TAB_ID: &str = "add-marketplace";
 pub(super) struct PluginListFetchState {
     pub(super) cache_cwd: Option<PathBuf>,
     pub(super) in_flight_cwd: Option<PathBuf>,
-    pub(super) vertical_section_requested: bool,
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct PluginInstallAuthFlowState {
-    plugin_display_name: String,
-    next_app_index: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -102,29 +91,22 @@ impl ChatWidget {
             return;
         }
 
-        let auth_flow_active = self.plugin_install_auth_flow.is_some();
-        let should_refresh_plugins_popup = !auth_flow_active
-            && (self
+        let should_refresh_plugins_popup = (self
+            .bottom_pane
+            .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+            .is_some()
+            || self
                 .bottom_pane
-                .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
+                .selected_index_for_active_view(PLUGINS_SELECTION_VIEW_ID)
                 .is_some()
-                || self
-                    .bottom_pane
-                    .selected_index_for_active_view(PLUGINS_SELECTION_VIEW_ID)
-                    .is_some()
-                || !matches!(
-                    self.plugins_cache_for_current_cwd(),
-                    PluginsCacheState::Ready(_)
-                ));
+            || !matches!(
+                self.plugins_cache_for_current_cwd(),
+                PluginsCacheState::Ready(_)
+            ));
 
         match result {
             Ok(response) => {
                 self.plugins_fetch_state.cache_cwd = Some(cwd);
-                self.plugin_remote_sections_loading = request_was_in_flight;
-                if request_was_in_flight {
-                    self.plugin_remote_sections_loaded = false;
-                }
-                self.plugin_remote_section_errors.clear();
                 let active_tab_id = self
                     .plugins_active_tab_id
                     .as_deref()
@@ -146,9 +128,6 @@ impl ChatWidget {
                 self.newly_installed_marketplace_tab_id = None;
             }
             Err(err) => {
-                self.plugin_remote_sections_loading = false;
-                self.plugin_remote_sections_loaded = false;
-                self.plugins_fetch_state.vertical_section_requested = false;
                 if should_refresh_plugins_popup {
                     self.plugins_fetch_state.cache_cwd = None;
                     self.plugins_cache = PluginsCacheState::Failed(err.clone());
@@ -158,44 +137,6 @@ impl ChatWidget {
                     );
                 }
             }
-        }
-    }
-
-    pub(crate) fn on_plugin_remote_sections_loaded(
-        &mut self,
-        cwd: PathBuf,
-        marketplaces: Vec<PluginMarketplaceEntry>,
-        section_errors: Vec<PluginRemoteSectionError>,
-    ) {
-        if self.config.cwd.as_path() != cwd.as_path() {
-            return;
-        }
-
-        let should_refresh_plugins_popup = self
-            .bottom_pane
-            .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
-            .is_some();
-        self.plugin_remote_sections_loading = false;
-        self.plugin_remote_sections_loaded = true;
-        self.plugins_fetch_state.vertical_section_requested = false;
-        let refreshed_response = match &mut self.plugins_cache {
-            PluginsCacheState::Ready(response)
-                if self.plugins_fetch_state.cache_cwd.as_deref() == Some(cwd.as_path()) =>
-            {
-                merge_remote_marketplaces(response, marketplaces);
-                self.plugin_remote_section_errors = section_errors;
-                Some(response.clone())
-            }
-            _ => {
-                self.plugin_remote_section_errors = section_errors;
-                None
-            }
-        };
-
-        if let Some(response) = refreshed_response
-            && should_refresh_plugins_popup
-        {
-            self.refresh_plugins_popup_if_open(&response);
         }
     }
 
@@ -215,8 +156,6 @@ impl ChatWidget {
         }
 
         self.plugins_fetch_state.in_flight_cwd = Some(cwd.clone());
-        self.plugins_fetch_state.vertical_section_requested =
-            !self.config.features.enabled(Feature::RemotePlugin);
         if self.plugins_fetch_state.cache_cwd.as_deref() != Some(cwd.as_path()) {
             self.plugins_cache = PluginsCacheState::Loading;
         }
@@ -286,9 +225,9 @@ impl ChatWidget {
         let cwd = self.config.cwd.to_path_buf();
         let view = CustomPromptView::new(
             "Add marketplace".to_string(),
-            "owner/repo, git URL, or local marketplace path".to_string(),
+            "Local marketplace directory".to_string(),
             String::new(),
-            Some("Examples: owner/repo, git URL, ./marketplace".to_string()),
+            Some("Example: ./marketplace".to_string()),
             Box::new(move |source: String| {
                 let source = source.trim().to_string();
                 if source.is_empty() {
@@ -315,26 +254,6 @@ impl ChatWidget {
         {
             self.bottom_pane
                 .show_selection_view(self.marketplace_add_loading_popup_params());
-        }
-    }
-
-    pub(crate) fn open_marketplace_upgrade_loading_popup(
-        &mut self,
-        marketplace_name: Option<&str>,
-    ) {
-        self.plugins_active_tab_id = self
-            .bottom_pane
-            .active_tab_id_for_active_view(PLUGINS_SELECTION_VIEW_ID)
-            .map(str::to_string)
-            .or_else(|| self.plugins_active_tab_id.clone());
-        let params = self.marketplace_upgrade_loading_popup_params(marketplace_name);
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(PLUGINS_SELECTION_VIEW_ID, params)
-        {
-            self.bottom_pane.show_selection_view(
-                self.marketplace_upgrade_loading_popup_params(marketplace_name),
-            );
         }
     }
 
@@ -456,40 +375,11 @@ impl ChatWidget {
         }
 
         match result {
-            Ok(response) => {
-                self.plugin_install_apps_needing_auth = response.apps_needing_auth;
-                self.plugin_install_auth_flow = None;
-                if self.plugin_install_apps_needing_auth.is_empty() {
-                    self.add_info_message(
-                        format!("Installed {plugin_display_name} plugin."),
-                        Some("No additional app authentication is required.".to_string()),
-                    );
-                    true
-                } else {
-                    let app_names = self
-                        .plugin_install_apps_needing_auth
-                        .iter()
-                        .map(|app| app.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    self.add_info_message(
-                        format!("Installed {plugin_display_name} plugin."),
-                        Some(format!(
-                            "{} app(s) still need authentication: {app_names}",
-                            self.plugin_install_apps_needing_auth.len()
-                        )),
-                    );
-                    self.plugin_install_auth_flow = Some(PluginInstallAuthFlowState {
-                        plugin_display_name,
-                        next_app_index: 0,
-                    });
-                    self.open_plugin_install_auth_popup();
-                    false
-                }
+            Ok(_) => {
+                self.add_info_message(format!("Installed {plugin_display_name} plugin."), None);
+                true
             }
             Err(err) => {
-                self.plugin_install_apps_needing_auth.clear();
-                self.plugin_install_auth_flow = None;
                 let plugins_response = match self.plugins_cache_for_current_cwd() {
                     PluginsCacheState::Ready(response) => Some(response),
                     _ => None,
@@ -596,101 +486,9 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn on_marketplace_upgrade_loaded(
-        &mut self,
-        cwd: PathBuf,
-        result: Result<MarketplaceUpgradeResponse, String>,
-    ) {
-        if self.config.cwd.as_path() != cwd.as_path() {
-            return;
-        }
-
-        match result {
-            Ok(response) => {
-                if response.upgraded_roots.len() == 1 {
-                    self.plugins_active_tab_id =
-                        Some(marketplace_tab_id_from_path(&response.upgraded_roots[0]));
-                }
-
-                let selected_count = response.selected_marketplaces.len();
-                let upgraded_count = response.upgraded_roots.len();
-                let error_count = response.errors.len();
-                if selected_count == 0 {
-                    self.add_info_message(
-                        "No configured Git marketplaces to upgrade.".to_string(),
-                        Some("Only configured Git marketplaces can be upgraded.".to_string()),
-                    );
-                    return;
-                }
-
-                if upgraded_count == 0 && error_count == 0 {
-                    let message = if selected_count == 1 {
-                        format!(
-                            "Marketplace {} is already up to date.",
-                            response.selected_marketplaces[0]
-                        )
-                    } else {
-                        format!(
-                            "Checked {selected_count} marketplaces; all are already up to date."
-                        )
-                    };
-                    self.add_info_message(
-                        message,
-                        Some(format!(
-                            "Checked: {}",
-                            response.selected_marketplaces.join(", ")
-                        )),
-                    );
-                    return;
-                }
-
-                if upgraded_count > 0 {
-                    let noun = if upgraded_count == 1 {
-                        "marketplace"
-                    } else {
-                        "marketplaces"
-                    };
-                    self.add_info_message(
-                        format!("Upgraded {upgraded_count} {noun}."),
-                        Some(format!(
-                            "Updated roots: {}",
-                            response
-                                .upgraded_roots
-                                .iter()
-                                .map(|root| root.as_path().display().to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )),
-                    );
-                }
-
-                if error_count > 0 {
-                    let noun = if error_count == 1 {
-                        "marketplace"
-                    } else {
-                        "marketplaces"
-                    };
-                    self.add_error_message(format!(
-                        "Failed to upgrade {error_count} {noun}: {}",
-                        response
-                            .errors
-                            .iter()
-                            .map(|err| format!("{}: {}", err.marketplace_name, err.message))
-                            .collect::<Vec<_>>()
-                            .join("; ")
-                    ));
-                }
-            }
-            Err(err) => {
-                self.add_error_message(err);
-            }
-        }
-    }
-
     pub(crate) fn handle_plugins_popup_key_event(&mut self, key_event: KeyEvent) -> bool {
         let remove_marketplace = key_hint::ctrl(KeyCode::Char('r')).is_press(key_event);
-        let upgrade_marketplace = key_hint::ctrl(KeyCode::Char('u')).is_press(key_event);
-        if !remove_marketplace && !upgrade_marketplace {
+        if !remove_marketplace {
             return false;
         }
 
@@ -718,27 +516,7 @@ impl ChatWidget {
             );
             return true;
         }
-        if marketplace.path.is_none()
-            || !marketplace_is_user_configured_git(&self.config, &marketplace.name)
-        {
-            return false;
-        }
-        if key_event.kind != KeyEventKind::Press {
-            return true;
-        }
-
-        let cwd = self.config.cwd.to_path_buf();
-        let marketplace_name = Some(marketplace.name.clone());
-        self.open_marketplace_upgrade_loading_popup(marketplace_name.as_deref());
-        self.app_event_tx
-            .send(AppEvent::OpenMarketplaceUpgradeLoading {
-                marketplace_name: marketplace_name.clone(),
-            });
-        self.app_event_tx.send(AppEvent::FetchMarketplaceUpgrade {
-            cwd,
-            marketplace_name,
-        });
-        true
+        false
     }
 
     pub(crate) fn on_plugin_enabled_set(
@@ -796,8 +574,6 @@ impl ChatWidget {
 
         match result {
             Ok(_response) => {
-                self.plugin_install_apps_needing_auth.clear();
-                self.plugin_install_auth_flow = None;
                 self.add_info_message(
                     format!("Uninstalled {plugin_display_name} plugin."),
                     Some("Bundled apps remain installed.".to_string()),
@@ -813,212 +589,6 @@ impl ChatWidget {
                     self.plugin_detail_error_popup_params(&err, plugins_response.as_ref()),
                 );
             }
-        }
-    }
-
-    pub(crate) fn advance_plugin_install_auth_flow(&mut self) {
-        let should_finish = {
-            let Some(flow) = self.plugin_install_auth_flow.as_mut() else {
-                return;
-            };
-            flow.next_app_index += 1;
-            flow.next_app_index >= self.plugin_install_apps_needing_auth.len()
-        };
-
-        if should_finish {
-            self.finish_plugin_install_auth_flow(/*abandoned*/ false);
-            return;
-        }
-
-        self.open_plugin_install_auth_popup();
-    }
-
-    pub(crate) fn abandon_plugin_install_auth_flow(&mut self) {
-        self.finish_plugin_install_auth_flow(/*abandoned*/ true);
-    }
-
-    fn open_plugin_install_auth_popup(&mut self) {
-        let Some(params) = self.plugin_install_auth_popup_params() else {
-            self.finish_plugin_install_auth_flow(/*abandoned*/ false);
-            return;
-        };
-        if !self
-            .bottom_pane
-            .replace_selection_view_if_active(PLUGINS_SELECTION_VIEW_ID, params)
-            && let Some(params) = self.plugin_install_auth_popup_params()
-        {
-            self.bottom_pane.show_selection_view(params);
-        }
-    }
-
-    fn plugin_install_auth_popup_params(&self) -> Option<SelectionViewParams> {
-        let flow = self.plugin_install_auth_flow.as_ref()?;
-        let app = self
-            .plugin_install_apps_needing_auth
-            .get(flow.next_app_index)?;
-        let total = self.plugin_install_apps_needing_auth.len();
-        let current = flow.next_app_index + 1;
-        let is_installed = self.plugin_install_auth_app_is_installed(app.id.as_str());
-        let status_label = if is_installed {
-            "Already installed in this session."
-        } else {
-            "Install the required Apps in ChatGPT to continue:"
-        };
-        let mut header = ColumnRenderable::new();
-        header.push(
-            ratatui::widgets::Paragraph::new(Line::from("Plugins".bold()))
-                .wrap(ratatui::widgets::Wrap { trim: false }),
-        );
-        header.push(
-            ratatui::widgets::Paragraph::new(Line::from(
-                format!("{} plugin installed.", flow.plugin_display_name).bold(),
-            ))
-            .wrap(ratatui::widgets::Wrap { trim: false }),
-        );
-        header.push(
-            ratatui::widgets::Paragraph::new(Line::from(
-                format!("App setup {current}/{total}: {}", app.name).dim(),
-            ))
-            .wrap(ratatui::widgets::Wrap { trim: false }),
-        );
-        header.push(
-            ratatui::widgets::Paragraph::new(Line::from(status_label.dim()))
-                .wrap(ratatui::widgets::Wrap { trim: false }),
-        );
-
-        let mut items = Vec::new();
-
-        if let Some(install_url) = app.install_url.clone() {
-            let install_label = if is_installed {
-                "Manage on ChatGPT"
-            } else {
-                "Install on ChatGPT"
-            };
-            items.push(SelectionItem {
-                name: install_label.to_string(),
-                description: Some("Open the ChatGPT app management page".to_string()),
-                selected_description: Some("Open the app page in your browser".to_string()),
-                actions: vec![Box::new(move |tx| {
-                    tx.send(AppEvent::OpenUrlInBrowser {
-                        url: install_url.clone(),
-                    });
-                })],
-                ..Default::default()
-            });
-        } else {
-            items.push(SelectionItem {
-                name: "ChatGPT apps link unavailable".to_string(),
-                description: Some("This app did not provide an install/manage URL".to_string()),
-                is_disabled: true,
-                ..Default::default()
-            });
-        }
-
-        if is_installed {
-            items.push(SelectionItem {
-                name: "Continue".to_string(),
-                description: Some("This app is already installed".to_string()),
-                selected_description: Some("Advance to the next app".to_string()),
-                actions: vec![Box::new(|tx| {
-                    tx.send(AppEvent::PluginInstallAuthAdvance {
-                        refresh_connectors: false,
-                    });
-                })],
-                ..Default::default()
-            });
-        } else {
-            items.push(SelectionItem {
-                name: "I've installed it".to_string(),
-                description: Some(
-                    "Trust your confirmation and continue to the next app".to_string(),
-                ),
-                selected_description: Some(
-                    "Continue without waiting for refresh to complete".to_string(),
-                ),
-                actions: vec![Box::new(|tx| {
-                    tx.send(AppEvent::PluginInstallAuthAdvance {
-                        refresh_connectors: true,
-                    });
-                })],
-                ..Default::default()
-            });
-        }
-
-        items.push(SelectionItem {
-            name: "Skip remaining app setup".to_string(),
-            description: Some("Stop this follow-up flow for this plugin".to_string()),
-            selected_description: Some("Abandon remaining required app setup".to_string()),
-            actions: vec![Box::new(|tx| {
-                tx.send(AppEvent::PluginInstallAuthAbandon);
-            })],
-            ..Default::default()
-        });
-
-        Some(SelectionViewParams {
-            view_id: Some(PLUGINS_SELECTION_VIEW_ID),
-            header: Box::new(header),
-            footer_hint: Some(plugin_detail_hint_line()),
-            items,
-            col_width_mode: ColumnWidthMode::AutoAllRows,
-            ..SelectionViewParams::picker()
-        })
-    }
-
-    fn plugin_install_auth_app_is_installed(&self, app_id: &str) -> bool {
-        if !self.connectors_enabled() {
-            return false;
-        }
-
-        let connectors = &self.connectors;
-        connectors.installed_app_ids.contains(app_id)
-            || connectors
-                .partial_snapshot
-                .iter()
-                .chain(match &connectors.cache {
-                    super::connectors::ConnectorsCacheState::Ready(snapshot) => Some(snapshot),
-                    _ => None,
-                })
-                .flat_map(|snapshot| &snapshot.connectors)
-                .any(|connector| connector.id == app_id && connector.is_accessible)
-    }
-
-    fn finish_plugin_install_auth_flow(&mut self, abandoned: bool) {
-        let Some(flow) = self.plugin_install_auth_flow.take() else {
-            return;
-        };
-        self.plugin_install_apps_needing_auth.clear();
-        if abandoned {
-            self.add_info_message(
-                format!(
-                    "Skipped remaining app setup for {} plugin.",
-                    flow.plugin_display_name
-                ),
-                Some("The plugin may not be usable until required apps are installed.".to_string()),
-            );
-        } else {
-            self.add_info_message(
-                format!(
-                    "Completed app setup flow for {} plugin.",
-                    flow.plugin_display_name
-                ),
-                Some("You can now continue managing plugins from /plugins.".to_string()),
-            );
-        }
-
-        let plugins_response = match self.plugins_cache_for_current_cwd() {
-            PluginsCacheState::Ready(response) => Some(response),
-            _ => None,
-        };
-        if let Some(plugins_response) = plugins_response {
-            let tab_id = self.plugins_active_tab_id.clone();
-            let _ = self.bottom_pane.replace_selection_view_if_active(
-                PLUGINS_SELECTION_VIEW_ID,
-                self.plugins_popup_params(
-                    &plugins_response,
-                    tab_id,
-                    /*initial_selected_idx*/ None,
-                ),
-            );
         }
     }
 

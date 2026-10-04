@@ -100,6 +100,14 @@ impl ComposableRequirementsLayer {
                 .as_ref()
                 .map(|base_dir| AbsolutePathBufGuard::new(base_dir.as_path()));
             let mut regular_toml = parse_layer_toml(&toml, &source)?;
+            if let Some(capability) = crate::retired::required_retired_capability(&regular_toml) {
+                return Err(RequirementsCompositionError::Parse {
+                    layer_source: source.clone(),
+                    message: format!(
+                        "required capability `{capability}` was removed from this build"
+                    ),
+                });
+            }
 
             // These fields can only be set locally; ignore them before validating cloud policy.
             strip_cloud_auth_requirements(&source, &mut regular_toml);

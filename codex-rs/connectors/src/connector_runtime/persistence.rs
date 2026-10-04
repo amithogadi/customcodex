@@ -24,7 +24,6 @@ use super::ConnectorRuntimeContext;
 use super::ConnectorRuntimeIdentity;
 use super::ConnectorRuntimePayload;
 use super::ConnectorRuntimeSnapshot;
-use super::emit_duration;
 
 const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write.duration_ms";
 const CODEX_APPS_TOOLS_CACHE_DIR: &str = "cache/codex_apps_tools";
@@ -129,11 +128,6 @@ pub(crate) fn persist_codex_apps_cache<T>(
     } else {
         "failure"
     };
-    emit_duration(
-        MCP_TOOLS_CACHE_WRITE_DURATION_METRIC,
-        cache_write_start.elapsed(),
-        &[("status", status)],
-    );
 }
 
 fn read_bounded_cache_file(cache_path: &Path) -> anyhow::Result<(Vec<u8>, SystemTime)> {

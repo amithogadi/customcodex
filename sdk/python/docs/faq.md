@@ -86,11 +86,6 @@ schedule work or grant authority, and it is ignored when joining an active turn.
 ## How do I log in?
 
 - `login_api_key(...)` authenticates immediately with an API key.
-- `login_chatgpt()` starts browser login and returns a handle with `auth_url`.
-- `login_chatgpt_device_code()` starts device-code login and returns a handle
-  with `verification_url` and `user_code`.
-- Interactive handles expose `wait()` for the matching
-  `account/login/completed` notification and `cancel()` to stop that attempt.
 - `account()` reads the current account state, and `logout()` clears it.
 
 ## Public kwargs are snake_case

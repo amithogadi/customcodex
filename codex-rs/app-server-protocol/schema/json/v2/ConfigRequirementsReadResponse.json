@@ -123,132 +123,6 @@
       },
       "type": "object"
     },
-    "BrowserUseAccessApprovalLifetime": {
-      "enum": [
-        "turn",
-        "thread"
-      ],
-      "type": "string"
-    },
-    "BrowserUseOriginPolicy": {
-      "properties": {
-        "access": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AllowDenyRequirement"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "accessApprovalLifetime": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/BrowserUseAccessApprovalLifetime"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "autoReview": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AllowDenyRequirement"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "downloads": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AllowDenyRequirement"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "fullCdpAccess": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AllowDenyRequirement"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "persistentApproval": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "uploads": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AllowDenyRequirement"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "BrowserUseRequirements": {
-      "properties": {
-        "allowGlobalPersistentApproval": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "allowHistoryAccess": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "allowWebmcp": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "defaultOriginPolicy": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/BrowserUseOriginPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "disableAutoReview": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "origins": {
-          "additionalProperties": {
-            "$ref": "#/definitions/BrowserUseOriginPolicy"
-          },
-          "type": [
-            "object",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "CliAuthCredentialsStoreMode": {
       "enum": [
         "file",
@@ -399,12 +273,6 @@
             "null"
           ]
         },
-        "allowRemoteControl": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "allowedApprovalPolicies": {
           "items": {
             "$ref": "#/definitions/AskForApproval"
@@ -470,25 +338,9 @@
             }
           ]
         },
-        "browserUse": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/BrowserUseRequirements"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "chatgptBaseUrl": {
           "type": [
             "string",
-            "null"
-          ]
-        },
-        "checkForUpdateOnStartup": {
-          "type": [
-            "boolean",
             "null"
           ]
         },
@@ -535,26 +387,6 @@
           "type": [
             "object",
             "null"
-          ]
-        },
-        "feedback": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/FeedbackRequirements"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "inAppBrowser": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/InAppBrowserRequirements"
-            },
-            {
-              "type": "null"
-            }
           ]
         },
         "logDir": {
@@ -755,34 +587,12 @@
       ],
       "type": "object"
     },
-    "FeedbackRequirements": {
-      "properties": {
-        "enabled": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
     "ForcedLoginMethod": {
       "enum": [
         "chatgpt",
         "api"
       ],
       "type": "string"
-    },
-    "InAppBrowserRequirements": {
-      "properties": {
-        "allowExternalBrowserSettingsImport": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "type": "object"
     },
     "ManagedHooksRequirements": {
       "properties": {

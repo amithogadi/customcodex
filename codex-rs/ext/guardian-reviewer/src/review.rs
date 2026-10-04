@@ -7,10 +7,10 @@ use crate::GuardianReviewSessionLimits;
 use crate::ReviewDenials;
 use crate::ReviewReport;
 use crate::ReviewRequest;
-use codex_analytics::GuardianReviewAnalyticsResult;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::SynchronousApprovalReviewer;
 use codex_protocol::approvals::GuardianReviewReason;
+use codex_protocol::guardian_review::GuardianReviewDetails;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
@@ -53,7 +53,7 @@ pub trait ReviewHost: Send + Sync {
     ) -> impl Future<
         Output = (
             GuardianReviewOutcome,
-            GuardianReviewAnalyticsResult,
+            GuardianReviewDetails,
             Option<Self::Evidence>,
         ),
     > + Send;
@@ -90,7 +90,7 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
             let (outcome, analytics, evidence) = if self.cancellation.is_cancelled() {
                 (
                     GuardianReviewOutcome::Error(GuardianReviewError::Cancelled),
-                    GuardianReviewAnalyticsResult::without_session(),
+                    GuardianReviewDetails::without_session(),
                     None,
                 )
             } else {
@@ -104,23 +104,16 @@ impl<H: ReviewHost> SynchronousApprovalReviewer for ReviewRequest<'_, H> {
                 ))
                 .await
             };
-            let completed_at_ms = codex_analytics::now_unix_millis();
+            let completed_at_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
             let completed = report.complete(
                 outcome,
                 self.model,
                 self.require_guardian,
                 analytics,
                 completed_at_ms.try_into().unwrap_or_default(),
-            );
-            if self.log_assessments {
-                self.telemetry
-                    .guardian_assessment(&completed.event, completed.assessment_outcome);
-            }
-            report.track(
-                self.telemetry,
-                self.analytics,
-                completed.analytics,
-                completed_at_ms,
             );
             if let Some(message) = completed.warning {
                 self.host

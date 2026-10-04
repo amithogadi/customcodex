@@ -58,7 +58,6 @@ use codex_config::LoaderOverrides;
 use codex_core::ARCHIVED_SESSIONS_SUBDIR;
 use codex_core::config::ConfigBuilder;
 use codex_exec_server::EnvironmentManager;
-use codex_feedback::CodexFeedback;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -863,7 +862,6 @@ async fn thread_turns_list_reads_store_history_without_rollout_path() -> Result<
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         embedded_network_policy: Default::default(),
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
-        feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
@@ -934,7 +932,6 @@ async fn thread_read_loaded_include_turns_reads_store_history_without_rollout_pa
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         embedded_network_policy: Default::default(),
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
-        feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
@@ -1043,7 +1040,6 @@ async fn thread_list_includes_store_thread_without_rollout_path() -> Result<()> 
         cloud_config_bundle: CloudConfigBundleLoader::default(),
         embedded_network_policy: Default::default(),
         thread_config_loader: Arc::new(codex_config::NoopThreadConfigLoader),
-        feedback: CodexFeedback::new(),
         log_db: None,
         state_db: None,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),

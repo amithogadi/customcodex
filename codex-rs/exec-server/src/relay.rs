@@ -28,6 +28,7 @@ use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::connection::JsonRpcTransport;
 use crate::connection::WEBSOCKET_KEEPALIVE_INTERVAL;
+use crate::connection_metadata::ExecutorRegistration;
 use crate::noise_channel::NoiseChannelIdentity;
 use crate::noise_channel::NoiseChannelPublicKey;
 use crate::noise_channel::PendingResponderHandshake;
@@ -45,7 +46,6 @@ use crate::relay_proto::RelayResume;
 use crate::relay_proto::relay_message_frame;
 #[cfg(test)]
 use crate::server::ConnectionProcessor;
-use crate::telemetry::ExecutorRegistration;
 use crate::websocket_pong_watchdog::WEBSOCKET_PONG_TIMEOUT;
 use crate::websocket_pong_watchdog::WEBSOCKET_PONG_TIMEOUT_REASON;
 use crate::websocket_pong_watchdog::WebSocketPongWatchdog;

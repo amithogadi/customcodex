@@ -38,7 +38,6 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
-const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
 impl ChatWidget {
     /// Dispatch a bare slash command and record its staged local-history entry.
@@ -218,19 +217,7 @@ impl ChatWidget {
                     enabled: !self.daybreak_enabled,
                 });
             }
-            SlashCommand::Feedback => {
-                if !self.config.feedback_enabled {
-                    let params = crate::bottom_pane::feedback_disabled_params();
-                    self.bottom_pane.show_selection_view(params);
-                    self.request_redraw();
-                    return;
-                }
-                // Step 1: pick a category (UI built in feedback_view)
-                let params =
-                    crate::bottom_pane::feedback_selection_params(self.app_event_tx.clone());
-                self.bottom_pane.show_selection_view(params);
-                self.request_redraw();
-            }
+
             SlashCommand::New => {
                 self.show_session_checkout_picker(ManagedWorktreeMode::New, /*name*/ None);
             }
@@ -352,8 +339,6 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Rename => {
-                self.session_telemetry
-                    .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 self.show_rename_prompt();
             }
             SlashCommand::Model => {
@@ -377,12 +362,6 @@ impl ChatWidget {
                         Some(GOAL_USAGE_HINT.to_string()),
                     );
                 }
-            }
-            SlashCommand::Voice => {
-                self.app_event_tx.send(AppEvent::VoiceControl {
-                    thread_id: self.thread_id(),
-                    control: crate::app_event::VoiceControl::Toggle,
-                });
             }
             SlashCommand::Side | SlashCommand::Btw => {
                 self.request_empty_side_conversation(cmd);
@@ -442,11 +421,6 @@ impl ChatWidget {
                         return;
                     }
 
-                    self.session_telemetry.counter(
-                        "codex.windows_sandbox.setup_elevated_sandbox_command",
-                        /*inc*/ 1,
-                        &[],
-                    );
                     self.app_event_tx
                         .send(AppEvent::BeginWindowsSandboxElevatedSetup {
                             preset,
@@ -455,7 +429,6 @@ impl ChatWidget {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = &self.session_telemetry;
                     // Not supported; on non-Windows this command should never be reachable.
                 }
             }
@@ -527,19 +500,7 @@ impl ChatWidget {
             SlashCommand::Daemon => self.app_event_tx.send(AppEvent::OpenDaemonMenu),
             SlashCommand::Warnings => self.app_event_tx.send(AppEvent::OpenWarnings),
             SlashCommand::Status => {
-                if self.should_prefetch_rate_limits() {
-                    let request_id = self.next_status_refresh_request_id;
-                    self.next_status_refresh_request_id =
-                        self.next_status_refresh_request_id.wrapping_add(1);
-                    self.add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
-                    self.app_event_tx.send(AppEvent::RefreshRateLimits {
-                        origin: RateLimitRefreshOrigin::StatusCommand { request_id },
-                    });
-                } else {
-                    self.add_status_output(
-                        /*refreshing_rate_limits*/ false, /*request_id*/ None,
-                    );
-                }
+                self.add_status_output(false, None);
             }
             SlashCommand::Cd => {
                 self.dispatch_command_with_args(SlashCommand::Cd, "~".to_string(), Vec::new());
@@ -549,11 +510,6 @@ impl ChatWidget {
                     format!("Current working directory: {}", self.config.cwd.display()),
                     /*hint*/ None,
                 );
-            }
-            SlashCommand::Usage => {
-                if self.ensure_usage_command_available() {
-                    self.open_usage_menu();
-                }
             }
             SlashCommand::Ide => {
                 self.handle_ide_command();
@@ -587,9 +543,6 @@ impl ChatWidget {
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output(McpServerStatusDetail::ToolsAndAuthOnly);
-            }
-            SlashCommand::Apps => {
-                self.add_connectors_output();
             }
             SlashCommand::Plugins => {
                 self.add_plugins_output();
@@ -796,30 +749,6 @@ impl ChatWidget {
             SlashCommand::Pwd => {
                 self.add_error_message("Usage: /pwd".to_string());
             }
-            SlashCommand::Usage => {
-                if self.ensure_usage_command_available() {
-                    match crate::analytics::TokenActivityView::parse(trimmed) {
-                        Some(view) => self
-                            .app_event_tx
-                            .send(AppEvent::OpenAnalytics { view: Some(view) }),
-                        None => self.add_error_message(
-                            "Usage: /usage [daily|weekly|cumulative]".to_string(),
-                        ),
-                    }
-                }
-            }
-            SlashCommand::Voice => match trimmed.to_ascii_lowercase().as_str() {
-                "settings" => self.app_event_tx.send(AppEvent::OpenRealtimeSettings),
-                "mute" => self.app_event_tx.send(AppEvent::VoiceControl {
-                    thread_id: self.thread_id(),
-                    control: crate::app_event::VoiceControl::Mute,
-                }),
-                "stop" => self.app_event_tx.send(AppEvent::VoiceControl {
-                    thread_id: self.thread_id(),
-                    control: crate::app_event::VoiceControl::Stop,
-                }),
-                _ => self.add_error_message("Usage: /voice [settings|mute|stop]".to_string()),
-            },
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);
             }
@@ -874,8 +803,6 @@ impl ChatWidget {
                 if !self.ensure_thread_rename_allowed() {
                     return;
                 }
-                self.session_telemetry
-                    .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 let Some(name) = normalize_thread_name(&args) else {
                     self.add_error_message("Thread name cannot be empty.".to_string());
                     return;
@@ -1219,26 +1146,15 @@ impl ChatWidget {
 
         BuiltinCommandFlags {
             collaboration_modes_enabled: self.collaboration_modes_enabled(),
-            connectors_enabled: self.connectors_enabled(),
             plugins_command_enabled: self.config.features.enabled(Feature::Plugins),
-            token_activity_command_enabled: self.has_codex_backend_auth,
             goal_command_enabled: self.config.features.enabled(Feature::Goals),
             service_tier_commands_enabled: self.fast_mode_enabled(),
             daybreak_command_description: self.daybreak_command_description(),
-            voice_command_enabled: self.realtime_conversation_available_for_thread,
             worktrees_enabled: self.config.features.enabled(Feature::Worktrees)
                 && self.local_worktree_operations,
             allow_elevate_sandbox,
             side_conversation_active: self.active_side_conversation,
         }
-    }
-
-    fn ensure_usage_command_available(&mut self) -> bool {
-        if self.has_codex_backend_auth {
-            return true;
-        }
-        self.add_error_message(USAGE_CHATGPT_LOGIN_REQUIRED.to_string());
-        false
     }
 
     fn queued_command_drain_result(&self, cmd: SlashCommand) -> QueueDrain {
@@ -1250,14 +1166,12 @@ impl ChatWidget {
             | SlashCommand::Status
             | SlashCommand::Daemon
             | SlashCommand::Pwd
-            | SlashCommand::Usage
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate
             | SlashCommand::Mcp
-            | SlashCommand::Apps
             | SlashCommand::Plugins
             | SlashCommand::Rollout
             | SlashCommand::Copy
@@ -1266,7 +1180,6 @@ impl ChatWidget {
             | SlashCommand::Daybreak
             | SlashCommand::Diff
             | SlashCommand::Rename
-            | SlashCommand::Voice
             | SlashCommand::Recap
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Cd => match self.thread_id {
@@ -1280,8 +1193,7 @@ impl ChatWidget {
                     QueueDrain::Continue
                 }
             }
-            SlashCommand::Feedback
-            | SlashCommand::Warnings
+            SlashCommand::Warnings
             | SlashCommand::Export
             | SlashCommand::New
             | SlashCommand::Archive

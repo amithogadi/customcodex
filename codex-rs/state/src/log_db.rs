@@ -28,7 +28,6 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -71,8 +70,8 @@ pub fn default_filter() -> Targets {
         .with_target("opentelemetry-http", LevelFilter::OFF)
         .with_target("tonic::transport", LevelFilter::WARN)
         .with_target("tower::buffer", LevelFilter::WARN)
-        .with_target("codex_otel.log_only", LevelFilter::OFF)
-        .with_target("codex_otel.trace_safe", LevelFilter::OFF)
+        .with_target("codex.log_only", LevelFilter::OFF)
+        .with_target("codex.trace_safe", LevelFilter::OFF)
         .with_target("rmcp", LevelFilter::INFO)
         .with_target("tokio_graceful::guard", LevelFilter::DEBUG)
         .with_target("tokio_graceful::trigger", LevelFilter::DEBUG)
@@ -131,9 +130,15 @@ where
 }
 
 /// Receives a formatted, redacted diagnostic when a SQLite log batch is lost
-/// this propagatest to telemetry and feedback memory buffer to avoid lost reports
+/// independently of the failed log sink.
 pub trait LogWriteFailureReporter: Send + Sync {
     fn report_failure(&self, diagnostic: &str);
+}
+
+impl<F: Fn(&str) + Send + Sync> LogWriteFailureReporter for F {
+    fn report_failure(&self, diagnostic: &str) {
+        self(diagnostic);
+    }
 }
 
 pub struct LogDbLayer {
@@ -215,13 +220,7 @@ impl LogDbLayer {
     }
 
     fn try_send(&self, entry: LogEntry) {
-        if let Err(error) = self.sender.try_send(LogDbCommand::Entry(Box::new(entry))) {
-            let reason = match error {
-                mpsc::error::TrySendError::Full(_) => "full",
-                mpsc::error::TrySendError::Closed(_) => "closed",
-            };
-            crate::telemetry::record_log_queue_drop(reason, /*telemetry*/ None);
-        }
+        let _ = self.sender.try_send(LogDbCommand::Entry(Box::new(entry)));
     }
 }
 
@@ -538,14 +537,10 @@ async fn flush(
         return;
     }
     let entries = buffer.split_off(0);
-    let started = Instant::now();
     let result = state_db.insert_logs(entries.as_slice()).await;
-    let duration = started.elapsed();
-    // if log flushing failed it means that likely something is wrong with the logs database,
-    // so store the logs in the memory buffer to avoid them being lost during /feedback
-    // the entries are dropped because the in memory buffer has it's own space-constrainted rules for preserving logs
+    // Preserve a local diagnostic when writing logs to SQLite fails.
     if let Err(error) = &result {
-        let error = crate::telemetry::classify_error(error);
+        let error = crate::errors::classify_error(error);
         let timestamp =
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, /*use_z*/ true);
         let entry_count = entries.len();
@@ -554,13 +549,6 @@ async fn flush(
             "{timestamp} ERROR failed to flush logs to SQLite error={error:?} entries={entry_count}\n"
         ));
     }
-
-    crate::telemetry::record_log_write(
-        /*telemetry*/ None,
-        duration,
-        entries.as_slice(),
-        &result,
-    );
 }
 
 #[derive(Default)]

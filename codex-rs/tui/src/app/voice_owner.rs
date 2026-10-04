@@ -3,8 +3,6 @@
 
 use super::*;
 
-use crate::app_event::VoiceControl;
-
 impl App {
     pub(super) fn voice_owner_thread_id(&self) -> Option<ThreadId> {
         self.background_voice
@@ -46,25 +44,6 @@ impl App {
             return Some(owner);
         }
         (self.chat_widget.thread_id() == Some(thread_id)).then_some(&mut self.chat_widget)
-    }
-
-    pub(super) fn control_voice(&mut self, control: VoiceControl) {
-        if let Some(thread_id) = self.voice_owner_thread_id()
-            && let Some(owner) = self.voice_widget_for_thread(thread_id)
-        {
-            match control {
-                VoiceControl::Toggle => owner.toggle_realtime_conversation(),
-                VoiceControl::Stop => owner.stop_realtime_conversation(),
-                VoiceControl::Mute => owner.toggle_realtime_microphone(),
-            }
-        } else if matches!(control, VoiceControl::Toggle) && !self.reconnect.offline {
-            // Preserve the ended owner's transcript before allowing another call.
-            self.retire_background_voice();
-            self.chat_widget.toggle_realtime_conversation();
-        } else if matches!(control, VoiceControl::Mute) {
-            self.chat_widget.toggle_realtime_microphone();
-        }
-        self.repaint_agents_overview();
     }
 
     pub(super) fn retire_background_voice(&mut self) {

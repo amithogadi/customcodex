@@ -110,14 +110,3 @@ fn updater_only_runs_for_stable_installer_owned_releases() {
         &local_managed
     ));
 }
-
-#[cfg(unix)]
-#[tokio::test]
-async fn older_managed_binary_does_not_claim_updater_support() {
-    let temp = tempfile::TempDir::new().expect("home");
-    let binary = temp.path().join("codex");
-    codex_utils_cargo_bin::write_executable(&binary, "#!/bin/sh\nexit 2\n").expect("older binary");
-    assert!(!super::supports_daemon_update_loop(&binary).await);
-    codex_utils_cargo_bin::write_executable(&binary, "#!/bin/sh\nexit 0\n").expect("newer binary");
-    assert!(super::supports_daemon_update_loop(&binary).await);
-}

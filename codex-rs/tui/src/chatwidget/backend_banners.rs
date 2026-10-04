@@ -18,7 +18,6 @@ use crate::bottom_pane::SelectionViewParams;
 use crate::bottom_pane::popup_consts::accept_cancel_hint_line;
 use crate::keymap::ListAction;
 use crate::model_catalog::LUNA_RESERVE_MODEL;
-use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ModelPreset;
@@ -309,61 +308,6 @@ impl ChatWidget {
         self.refresh_backend_banner_visibility();
     }
 
-    pub(crate) fn update_backend_banner(&mut self, response: &GetAccountRateLimitsResponse) {
-        self.observe_backend_banner_view();
-        self.backend_banner_state.account_id = response.account_id.clone();
-        // Only a full, identity-validated backend read can authorize recovery. Unknown banners
-        // still block it; percentages, sparse notifications and reset timestamps cannot prove it.
-        let has_usable_credits = response
-            .rate_limits
-            .credits
-            .as_ref()
-            .is_some_and(|credits| credits.unlimited || credits.has_credits);
-        self.backend_banner_state.ordinary_usage_recovered =
-            response.ordinary_usage_allowed.is_some()
-                && (response.ordinary_usage_allowed == Some(true) || has_usable_credits)
-                && response.rate_limit_upsell.is_none()
-                && response.rate_limits.spend_control_reached != Some(true)
-                && response.rate_limits.rate_limit_reached_type.is_none();
-        if self.backend_banner_state.ordinary_usage_recovered {
-            self.luna_reserve_notice_account_id = None;
-        }
-        let banner = response
-            .rate_limit_upsell
-            .as_ref()
-            .and_then(BackendBanner::parse)
-            .map(|mut banner| {
-                banner.account_id = response.account_id.clone().unwrap_or_default();
-                banner.plan_type = response.rate_limits.plan_type;
-                banner
-            });
-        let same_occurrence = self
-            .backend_banner_state
-            .banner
-            .as_ref()
-            .zip(banner.as_ref())
-            .is_some_and(|(old, new)| {
-                old.account_id == new.account_id
-                    && old.banner_type == new.banner_type
-                    && old.reset_at == new.reset_at
-                    && old.presentation == new.presentation
-                    && old.blocked_model_slug.as_ref().or(old.model_slug.as_ref())
-                        == new.blocked_model_slug.as_ref().or(new.model_slug.as_ref())
-                    && old.fallback_model_slugs == new.fallback_model_slugs
-            });
-        self.backend_banner_state.banner = banner;
-        if !same_occurrence {
-            self.backend_banner_state.shown = false;
-            self.backend_banner_state.dismissed = self.reserve_notice_already_shown();
-            self.backend_banner_state.picker_dismissed = Arc::default();
-            self.backend_banner_notice_model = None;
-        }
-        if self.waiting_for_luna_reserve() {
-            self.hold_rate_limit_recovery();
-        }
-        self.refresh_backend_banner_visibility();
-    }
-
     fn reserve_notice_already_shown(&self) -> bool {
         self.backend_banner_state
             .banner
@@ -443,7 +387,6 @@ impl ChatWidget {
         }
         self.bottom_pane
             .dismiss_view_by_id(LUNA_RESERVE_RECOVERY_VIEW_ID);
-        self.clear_security_setup_banner();
         match (is_reserve, content) {
             (true, Some(content)) => {
                 self.bottom_pane.set_inline_banner(/*banner*/ None);
@@ -513,7 +456,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn clear_backend_banner(&mut self) {
-        self.clear_security_setup_banner();
         self.backend_banner_state = BackendBannerState::default();
         self.backend_banner_notice_model = None;
         self.bottom_pane

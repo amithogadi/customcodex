@@ -34,11 +34,6 @@ impl SandboxTags {
         }
     }
 
-    /// Adds the captured labels to a tool's metric attributes.
-    pub(crate) fn append_metric_tags(&self, tags: &mut Vec<(&str, &str)>) {
-        tags.extend([("sandbox", self.sandbox), ("sandbox_policy", self.policy)]);
-    }
-
     /// Records the same captured labels in model and MCP request metadata.
     pub(crate) fn record_metadata(&self, metadata: &mut CodexResponsesMetadata) {
         metadata.sandbox = Some(self.sandbox.to_string());

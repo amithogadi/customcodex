@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 use crate::AppInfo;
-use crate::metadata::connector_install_url;
+
 use crate::normalize_connector_value;
 
 pub struct AccessibleConnectorTool {
@@ -63,7 +63,6 @@ where
         .into_values()
         .map(|(mut connector, plugin_display_names)| {
             connector.plugin_display_names = plugin_display_names.into_iter().collect();
-            connector.install_url = Some(connector_install_url(&connector.name, &connector.id));
             connector
         })
         .collect();

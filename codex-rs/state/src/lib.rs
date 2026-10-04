@@ -11,6 +11,7 @@ const _: () = assert!(
 
 mod audit;
 mod delegated_preview;
+mod errors;
 mod extract;
 pub mod log_db;
 mod migrations;
@@ -18,7 +19,6 @@ mod model;
 mod paths;
 mod runtime;
 mod sqlite;
-mod telemetry;
 
 pub use log_db::LogWriteFailureReporter;
 pub use model::CreatedProject;
@@ -34,7 +34,7 @@ pub use model::QueuedUserSubmissionRecord;
 pub use model::RolloutMigrationCursor;
 pub use model::RolloutMigrationSkippedRollout;
 pub use model::RolloutMigrationState;
-/// Preferred entrypoint: owns configuration and metrics.
+/// Preferred entrypoint: owns database configuration and lifecycle.
 pub use runtime::StateRuntime;
 pub use sqlite::SqliteConfig;
 
@@ -86,7 +86,6 @@ pub use runtime::GoalAccountingOutcome;
 pub use runtime::GoalStore;
 pub use runtime::GoalUpdate;
 pub use runtime::MemoryStore;
-pub use runtime::RemoteControlEnrollmentRecord;
 pub use runtime::SqliteIntegrityCheck;
 pub use runtime::SqliteQueueStore;
 pub use runtime::ThreadFilterOptions;
@@ -99,11 +98,6 @@ pub use runtime::runtime_db_path_for_corruption_error;
 pub use runtime::sqlite_error_detail_is_lock;
 pub use runtime::sqlite_integrity_check;
 pub use sqlite::RuntimeDbPath;
-pub use telemetry::DbTelemetry;
-pub use telemetry::DbTelemetryHandle;
-pub use telemetry::install_process_db_telemetry;
-pub use telemetry::record_backfill_gate;
-pub use telemetry::record_fallback;
 
 /// Maximum number of pending user submissions permitted for one thread.
 pub const MAX_QUEUE_ITEMS: usize = 100;
@@ -131,30 +125,3 @@ pub const PINNED_THREAD_SECTION_NAME: &str = "Pinned";
 
 /// Environment variable for overriding the SQLite state database home directory.
 pub const SQLITE_HOME_ENV: &str = "CODEX_SQLITE_HOME";
-
-/// Errors encountered during DB operations. Tags: [stage]
-pub const DB_ERROR_METRIC: &str = "codex.db.error";
-/// Metrics on backfill process. Tags: [status]
-pub const DB_METRIC_BACKFILL: &str = "codex.db.backfill";
-/// Metrics on backfill duration. Tags: [status]
-pub const DB_METRIC_BACKFILL_DURATION_MS: &str = "codex.db.backfill.duration_ms";
-/// Confirmed SQLite quick-check corruption findings. Tags: [db]
-pub const DB_CORRUPTION_METRIC: &str = "codex.sqlite.corruption.count";
-/// SQLite initialization attempts. Tags: [status, phase, db, error]
-pub const DB_INIT_METRIC: &str = "codex.sqlite.init.count";
-/// SQLite initialization latency. Tags: [status, phase, db, error]
-pub const DB_INIT_DURATION_METRIC: &str = "codex.sqlite.init.duration_ms";
-/// Rollout fallback attempts. Tags: [caller, reason]
-pub const DB_FALLBACK_METRIC: &str = "codex.sqlite.fallback.count";
-/// SQLite log batch write attempts. Tags: [status, error]
-pub const LOG_WRITE_METRIC: &str = "codex.sqlite.logs.write.count";
-/// SQLite log batch write latency. Tags: [status, error]
-pub const LOG_WRITE_DURATION_METRIC: &str = "codex.sqlite.logs.write.duration_ms";
-/// Estimated bytes in each SQLite log batch. Tags: [status, error]
-pub const LOG_WRITE_BYTES_METRIC: &str = "codex.sqlite.logs.write.bytes";
-/// Number of entries in each SQLite log batch. Tags: [status, error]
-pub const LOG_WRITE_ENTRIES_METRIC: &str = "codex.sqlite.logs.write.entries";
-/// Largest estimated entry size in each SQLite log batch. Tags: [status, error]
-pub const LOG_WRITE_MAX_ENTRY_BYTES_METRIC: &str = "codex.sqlite.logs.write.max_entry_bytes";
-/// SQLite log entries discarded before they can be queued. Tags: [reason]
-pub const LOG_QUEUE_DROPPED_METRIC: &str = "codex.sqlite.logs.queue.dropped";

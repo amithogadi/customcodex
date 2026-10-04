@@ -10,11 +10,9 @@ use crate::HooksToml;
 use crate::computer_use::ComputerUseConfigToml;
 use crate::permissions_toml::PermissionsToml;
 use crate::profile_toml::ConfigProfile;
-use crate::types::AnalyticsConfigToml;
 use crate::types::ApprovalsReviewer;
 use crate::types::AppsConfigToml;
 use crate::types::AuthCredentialsStoreMode;
-use crate::types::FeedbackConfigToml;
 use crate::types::History;
 use crate::types::MarketplaceConfig;
 use crate::types::McpEnterpriseManagedAuthConfig;
@@ -22,7 +20,6 @@ use crate::types::McpServerConfig;
 use crate::types::MemoriesToml;
 use crate::types::Notice;
 use crate::types::OAuthCredentialsStoreMode;
-use crate::types::OtelConfigToml;
 use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ShellEnvironmentPolicyToml;
@@ -202,7 +199,6 @@ pub struct ConfigToml {
     #[serde(default)]
     pub auto_review: Option<AutoReviewToml>,
 
-
     pub computer_use: Option<ComputerUseConfigToml>,
 
     #[serde(default)]
@@ -272,12 +268,14 @@ pub struct ConfigToml {
     /// Compact prompt used for history compaction.
     pub compact_prompt: Option<String>,
 
-    /// When set, restricts ChatGPT login to one or more workspace identifiers.
-    #[serde(default)]
+    /// Retired user setting. Managed authentication restrictions live in requirements.
+    #[serde(skip_deserializing)]
+    #[schemars(skip)]
     pub forced_chatgpt_workspace_id: Option<ForcedChatgptWorkspaceIds>,
 
-    /// When set, restricts the login mechanism users may use.
-    #[serde(default)]
+    /// Retired user setting. Managed authentication restrictions live in requirements.
+    #[serde(skip_deserializing)]
+    #[schemars(skip)]
     pub forced_login_method: Option<ForcedLoginMethod>,
 
     /// Preferred backend for storing CLI auth credentials.
@@ -409,9 +407,6 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
-    /// Optional product SKU forwarded on host-owned Codex Apps MCP requests.
-    pub apps_mcp_product_sku: Option<String>,
-
     /// Bounded, product-owned metadata attached to every Responses API request.
     pub responses_api_metadata: Option<BTreeMap<String, String>>,
 
@@ -423,39 +418,6 @@ pub struct ConfigToml {
 
     /// Base URL override for the built-in `openai` model provider.
     pub openai_base_url: Option<String>,
-
-    /// Machine-local realtime audio device preferences used by realtime voice.
-    #[serde(default)]
-    pub audio: Option<RealtimeAudioToml>,
-
-    /// Experimental / do not use. Overrides only the realtime conversation
-    /// websocket transport base URL (the `Op::RealtimeConversation`
-    /// `/v1/realtime`
-    /// connection) without changing normal provider HTTP requests.
-    pub experimental_realtime_ws_base_url: Option<String>,
-    /// Experimental / do not use. Overrides only the WebRTC realtime call
-    /// creation base URL. This is separate from `experimental_realtime_ws_base_url`
-    /// because WebRTC call creation is HTTP, while sideband control is websocket.
-    pub experimental_realtime_webrtc_call_base_url: Option<String>,
-    /// Experimental / do not use. Selects the realtime websocket model/snapshot
-    /// used for the `Op::RealtimeConversation` connection.
-    pub experimental_realtime_ws_model: Option<String>,
-    /// Experimental / do not use. Realtime websocket session selection.
-    /// `version` controls v1/v2 and `type` controls conversational/transcription.
-    #[serde(default)]
-    pub realtime: Option<RealtimeToml>,
-    /// Experimental / do not use. Overrides only the realtime conversation
-    /// websocket transport instructions (the `Op::RealtimeConversation`
-    /// `/ws` session.update instructions) without changing normal prompts.
-    pub experimental_realtime_ws_backend_prompt: Option<String>,
-    /// Experimental / do not use. Replaces the synthesized realtime startup
-    /// context appended to websocket session instructions. An empty string
-    /// disables startup context injection entirely.
-    pub experimental_realtime_ws_startup_context: Option<String>,
-    /// Experimental / do not use. Replaces the built-in realtime start
-    /// instructions inserted into developer messages when realtime becomes
-    /// active.
-    pub experimental_realtime_start_instructions: Option<String>,
 
     /// Removed. Former remote thread-store endpoint setting kept only so we can
     /// fail fast instead of silently falling back to local persistence.
@@ -517,34 +479,17 @@ pub struct ConfigToml {
     #[serde(default)]
     pub project_root_markers: Option<Vec<String>>,
 
-    /// When `true`, checks for Codex updates on startup and surfaces update prompts.
-    /// Set to `false` only if your Codex updates are centrally managed.
-    /// Defaults to `true`.
-    pub check_for_update_on_startup: Option<bool>,
-
     /// Legacy fallback for `tui.disable_paste_burst`. Prefer the setting under `[tui]`.
     pub disable_paste_burst: Option<bool>,
-
-    /// When `false`, disables analytics across Codex product surfaces in this machine.
-    /// Defaults to `true`.
-    pub analytics: Option<AnalyticsConfigToml>,
-
-    /// When `false`, disables feedback collection across Codex product surfaces.
-    /// Defaults to `true`.
-    pub feedback: Option<FeedbackConfigToml>,
 
     /// Settings for app-specific controls.
     #[serde(default)]
     pub apps: Option<AppsConfigToml>,
 
-
     /// Legacy worktree settings consumed by the terminal. Desktop controls are ignored.
     #[serde(default, rename = "desktop", skip_serializing)]
     #[schemars(skip)]
     pub legacy_worktree_settings: Option<HashMap<String, JsonValue>>,
-
-    /// OTEL configuration.
-    pub otel: Option<OtelConfigToml>,
 
     /// Windows-specific configuration.
     #[serde(default)]
@@ -614,80 +559,6 @@ impl ProjectConfig {
     pub fn is_untrusted(&self) -> bool {
         matches!(self.trust_level, Some(TrustLevel::Untrusted))
     }
-}
-
-/// Selected microphone inputs. Scalars preserve existing single-channel configuration.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
-#[serde(untagged)]
-pub enum MicrophoneChannels {
-    Single(std::num::NonZeroU16),
-    Multiple(Vec<std::num::NonZeroU16>),
-}
-
-impl MicrophoneChannels {
-    pub fn as_slice(&self) -> &[std::num::NonZeroU16] {
-        match self {
-            Self::Single(channel) => std::slice::from_ref(channel),
-            Self::Multiple(channels) => channels,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RealtimeAudioConfig {
-    /// One-based microphone channels to mix; unset mixes all input channels.
-    pub microphone_channel: Option<MicrophoneChannels>,
-    pub microphone: Option<String>,
-    pub speaker: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RealtimeWsMode {
-    #[default]
-    Conversational,
-    Transcription,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RealtimeTransport {
-    #[default]
-    #[serde(rename = "webrtc")]
-    WebRtc,
-    Websocket,
-}
-
-pub use codex_protocol::protocol::RealtimeConversationVersion as RealtimeWsVersion;
-pub use codex_protocol::protocol::RealtimeVoice;
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct RealtimeConfig {
-    pub version: RealtimeWsVersion,
-    #[serde(rename = "type")]
-    pub session_type: RealtimeWsMode,
-    pub transport: RealtimeTransport,
-    pub voice: Option<RealtimeVoice>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct RealtimeToml {
-    pub version: Option<RealtimeWsVersion>,
-    #[serde(rename = "type")]
-    pub session_type: Option<RealtimeWsMode>,
-    pub transport: Option<RealtimeTransport>,
-    pub voice: Option<RealtimeVoice>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
-pub struct RealtimeAudioToml {
-    /// One-based microphone channels to mix; unset mixes all input channels.
-    pub microphone_channel: Option<MicrophoneChannels>,
-    pub microphone: Option<String>,
-    pub speaker: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
@@ -1059,47 +930,19 @@ mod tests {
     }
 
     #[test]
-    fn forced_chatgpt_workspace_id_accepts_single_string() {
-        let config: ConfigToml = toml::from_str(&format!(
-            r#"forced_chatgpt_workspace_id = "{WORKSPACE_ID_A}""#
-        ))
-        .expect("single workspace id should deserialize");
-
-        assert_eq!(
-            config
-                .forced_chatgpt_workspace_id
-                .expect("workspace id should be set")
-                .into_vec(),
-            vec![WORKSPACE_ID_A.to_string()]
-        );
-    }
-
-    #[test]
-    fn forced_chatgpt_workspace_id_accepts_string_list() {
-        let config: ConfigToml = toml::from_str(&format!(
-            r#"forced_chatgpt_workspace_id = ["{WORKSPACE_ID_A}", "{WORKSPACE_ID_B}"]"#
-        ))
-        .expect("workspace id list should deserialize");
-
-        assert_eq!(
-            config
-                .forced_chatgpt_workspace_id
-                .expect("workspace ids should be set")
-                .into_vec(),
-            vec![WORKSPACE_ID_A.to_string(), WORKSPACE_ID_B.to_string()]
-        );
-    }
-
-    #[test]
-    fn forced_chatgpt_workspace_id_rejects_comma_separated_string() {
-        let err = toml::from_str::<ConfigToml>(&format!(
-            r#"forced_chatgpt_workspace_id = "{WORKSPACE_ID_A},{WORKSPACE_ID_B}""#
-        ))
-        .expect_err("comma-separated string should be rejected");
-
-        let message = err.to_string();
-        assert!(message.contains("TOML list of strings"));
-        assert!(message.contains("comma-separated strings are not supported"));
+    fn retired_login_settings_are_ignored() {
+        for workspace in [
+            format!("{WORKSPACE_ID_A:?}"),
+            format!("[{WORKSPACE_ID_A:?}, {WORKSPACE_ID_B:?}]"),
+            format!("\"{WORKSPACE_ID_A},{WORKSPACE_ID_B}\""),
+        ] {
+            let config: ConfigToml = toml::from_str(&format!(
+                "forced_login_method = \"chatgpt\"\nforced_chatgpt_workspace_id = {workspace}\n"
+            ))
+            .expect("retired user settings must not block provider login");
+            assert!(config.forced_login_method.is_none());
+            assert!(config.forced_chatgpt_workspace_id.is_none());
+        }
     }
 
     #[test]

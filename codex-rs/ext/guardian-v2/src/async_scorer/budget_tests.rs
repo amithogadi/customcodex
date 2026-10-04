@@ -49,7 +49,6 @@ async fn catalog_budget_fixture(base_url: String, window: i64) -> Result<Guardia
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
-            extension_metrics: None,
             session_store: &session_store,
             thread_store: test.codex.thread_extension_data(),
         })
@@ -206,13 +205,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
                 ScoreAuthorization::current(&fixture.test.codex, &Default::default()).await;
             seed_cached_score(&progress, thread_store, /*index*/ 0, authorization);
             assert_eq!(
-                cached_approval(
-                    &fixture.registry,
-                    thread_store,
-                    "review action",
-                    /*metrics*/ None
-                )
-                .await,
+                cached_approval(&fixture.registry, thread_store, "review action",).await,
                 Some(ReviewDecision::Approved)
             );
         }
@@ -282,13 +275,7 @@ async fn assert_catalog_budget(evidence: BudgetEvidence) -> Result<()> {
         assert!(text.contains(&instruction));
         assert!(input.contains("read_file"));
         assert_eq!(
-            cached_approval(
-                &fixture.registry,
-                thread_store,
-                "review action",
-                /*metrics*/ None
-            )
-            .await,
+            cached_approval(&fixture.registry, thread_store, "review action",).await,
             if matches!(evidence, BudgetEvidence::Checkpoint) {
                 // A valid sampled snapshot cannot make an unannotated live checkpoint safe.
                 None

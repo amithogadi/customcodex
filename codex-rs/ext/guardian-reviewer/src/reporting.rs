@@ -3,15 +3,12 @@
 
 use std::sync::Arc;
 
-use codex_analytics::AnalyticsEventsClient;
-use codex_analytics::GuardianApprovalRequestSource;
-use codex_analytics::GuardianReviewAnalyticsResult;
-use codex_analytics::GuardianReviewTrackContext;
-use codex_analytics::GuardianReviewedAction;
 use codex_extension_api::ExtensionData;
-use codex_otel::SessionTelemetry;
 use codex_protocol::approvals::GuardianAssessmentAction;
 use codex_protocol::approvals::GuardianReviewReason;
+use codex_protocol::guardian_review::GuardianApprovalRequestSource;
+use codex_protocol::guardian_review::GuardianReviewDetails;
+use codex_protocol::guardian_review::GuardianReviewedAction;
 use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::GuardianAssessmentDecisionSource;
@@ -42,22 +39,12 @@ pub struct ReviewMetadata {
 
 pub struct ReviewReport {
     started: GuardianAssessmentEvent,
-    tracking: GuardianReviewTrackContext,
     approval_request_source: GuardianApprovalRequestSource,
     reviewed_action: GuardianReviewedAction,
 }
 
 impl ReviewReport {
     pub fn new(metadata: ReviewMetadata) -> Self {
-        let tracking = GuardianReviewTrackContext::new(
-            metadata.thread_id,
-            metadata.turn_id.clone(),
-            metadata.review_id.clone(),
-            metadata.target_item_id.clone(),
-            metadata.approval_request_source,
-            metadata.reviewed_action.clone(),
-            crate::REVIEW_TIMEOUT.as_millis() as u64,
-        );
         let started = GuardianAssessmentEvent {
             review_reason: Some(metadata.review_reason),
             model_context: Some(metadata.model_context),
@@ -66,7 +53,12 @@ impl ReviewReport {
             plugin_id: metadata.plugin_id,
             script_path: metadata.script_path,
             turn_id: metadata.turn_id,
-            started_at_ms: tracking.started_at_ms.try_into().unwrap_or_default(),
+            started_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .try_into()
+                .unwrap_or(i64::MAX),
             completed_at_ms: None,
             status: GuardianAssessmentStatus::InProgress,
             risk_level: None,
@@ -77,7 +69,6 @@ impl ReviewReport {
         };
         Self {
             started,
-            tracking,
             approval_request_source: metadata.approval_request_source,
             reviewed_action: metadata.reviewed_action,
         }
@@ -96,30 +87,13 @@ impl ReviewReport {
         outcome: GuardianReviewOutcome,
         model: &ModelInfo,
         require_guardian: bool,
-        analytics: GuardianReviewAnalyticsResult,
+        analytics: GuardianReviewDetails,
         completed_at_ms: i64,
     ) -> ReviewCompletion {
         let mut event = self.started.clone();
         event.completed_at_ms = Some(completed_at_ms);
         event.decision_source = Some(GuardianAssessmentDecisionSource::Agent);
         crate::complete_review(outcome, model, require_guardian, event, analytics)
-    }
-
-    pub fn track(
-        &self,
-        telemetry: &SessionTelemetry,
-        analytics: &AnalyticsEventsClient,
-        result: GuardianReviewAnalyticsResult,
-        completed_at_ms: u64,
-    ) {
-        crate::metrics::emit_guardian_review_metrics(
-            telemetry,
-            &result,
-            self.approval_request_source,
-            &self.reviewed_action,
-            completed_at_ms.saturating_sub(self.tracking.started_at_ms),
-        );
-        analytics.track_guardian_review(&self.tracking, result, completed_at_ms);
     }
 }
 

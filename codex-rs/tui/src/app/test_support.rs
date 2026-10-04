@@ -15,12 +15,10 @@ pub(crate) async fn make_test_app() -> App {
     let config = chat_widget.config_ref().clone();
     let file_search = FileSearchManager::new(config.cwd.to_path_buf(), app_event_tx.clone());
     let model = get_model_offline_for_tests(config.model.as_deref());
-    let session_telemetry = test_session_telemetry(&config, model.as_str());
 
     App {
         feature_write_lock: Arc::default(),
         model_catalog: chat_widget.model_catalog(),
-        session_telemetry,
         app_event_tx,
         chat_widget,
         workspace_command_runner: None,
@@ -43,10 +41,7 @@ pub(crate) async fn make_test_app() -> App {
         turn_tips: Default::default(),
         transcript_view: Default::default(),
         last_rendered_history_tail: None,
-        last_thread_usage_status_cell: None,
-        pending_thread_usage_history_refresh: false,
         overlay: None,
-        retained_analytics: None,
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,
         transcript_reflow: TranscriptReflowState::default(),
@@ -62,8 +57,6 @@ pub(crate) async fn make_test_app() -> App {
         skill_load_warnings: SkillLoadWarningState::default(),
         backtrack: BacktrackState::default(),
         backtrack_render_pending: false,
-        feedback: codex_feedback::CodexFeedback::new(),
-        feedback_audience: FeedbackAudience::External,
         environment_manager: Arc::new(EnvironmentManager::default_for_tests()),
         app_server_target: crate::AppServerTarget::Embedded,
         pending_right_click_paste: None,
@@ -75,8 +68,6 @@ pub(crate) async fn make_test_app() -> App {
             vscode: crate::tui::VscodeDetection::Other,
         },
         reconnect: Default::default(),
-        daemon_cli_executable: None,
-        pending_update_action: None,
         pending_shutdown_exit_thread_id: None,
         windows_sandbox: WindowsSandboxState::default(),
         thread_event_channels: HashMap::new(),
@@ -112,7 +103,6 @@ pub(crate) async fn make_test_app() -> App {
         pending_managed_worktree_attach: None,
         startup_protected_input_boundary: false,
         startup_pending_protected_request: false,
-        account_email_request_id: None,
         rate_limit_hard_stop_generation: 0,
         rate_limit_refresh_state: Default::default(),
         pending_mcp_login_start: None,
@@ -124,33 +114,15 @@ pub(crate) async fn make_test_app() -> App {
     }
 }
 
-fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info =
-        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
-    SessionTelemetry::new(
-        ThreadId::new(),
-        model,
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        /*account_email*/ None,
-        /*auth_mode*/ None,
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        serde_json::from_value(serde_json::json!("cli"))
-            .expect("cli session source should deserialize"),
-    )
-}
-
-pub(super) fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {
+pub(super) fn plugin_enabled_in_effective_config(config: &Config, plugin_id: &str) -> Option<bool> {
     config
         .config_layer_stack
         .effective_config()
         .as_table()
-        .and_then(|table| table.get("apps"))
+        .and_then(|table| table.get("plugins"))
         .and_then(TomlValue::as_table)
-        .and_then(|apps| apps.get(app_id))
+        .and_then(|plugins| plugins.get(plugin_id))
         .and_then(TomlValue::as_table)
-        .and_then(|app| app.get("enabled"))
+        .and_then(|plugin| plugin.get("enabled"))
         .and_then(TomlValue::as_bool)
 }

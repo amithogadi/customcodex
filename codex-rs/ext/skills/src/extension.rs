@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use crate::HostSkillsSnapshot;
 use crate::InjectedHostSkillPrompts;
-use codex_analytics::InvocationType;
 use codex_exec_server::ExecutorCapabilityDiscoverySnapshot;
 use codex_exec_server::LOCAL_ENVIRONMENT_ID;
 use codex_exec_server::ResolvedSelectedCapabilityRoot;
@@ -12,14 +11,11 @@ use codex_extension_api::ContextualUserFragment;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionEventSink;
 use codex_extension_api::ExtensionFuture;
-use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ExtensionWarning;
 use codex_extension_api::PromptFragment;
 use codex_extension_api::SelectedPluginSnapshot;
 use codex_extension_api::SkillInvocationContributor;
-use codex_extension_api::SkillInvocationInput;
-use codex_extension_api::SkillInvocationKind;
 use codex_extension_api::ThreadLifecycleContributor;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ToolCall;
@@ -30,7 +26,6 @@ use codex_extension_api::TurnInputContributor;
 use codex_extension_api::WorldStateContributionInput;
 use codex_extension_api::WorldStateSectionContribution;
 use codex_mcp::McpResourceClient;
-use codex_otel::MetricsClient;
 use codex_protocol::openai_models::ModelInfo;
 
 use crate::SkillsExtensionConfig;
@@ -55,10 +50,8 @@ use crate::render::render_available_skills;
 use crate::render::skill_metadata_budget;
 use crate::render::truncate_main_prompt_contents;
 use crate::render::truncate_utf8_to_bytes;
-use crate::render_observability::CatalogSurface;
-use crate::render_observability::record_catalog_render;
+use crate::render_observability::trace_catalog_budget_pressure;
 use crate::selection::collect_explicit_skill_mentions;
-use crate::shadow_selection_experiment::ShadowSelectionExperiment;
 use crate::sources::SkillProviders;
 use crate::state::ExecutorSkillsStepState;
 use crate::state::HostSkillsCatalogInWorldState;
@@ -66,8 +59,6 @@ use crate::state::HostSkillsStepState;
 use crate::state::SkillsSessionState;
 use crate::state::SkillsThreadState;
 use crate::state::SkillsTurnState;
-use crate::telemetry::SkillTelemetry;
-use crate::tools::SkillAnalytics;
 use crate::tools::SkillToolAuthority;
 use crate::tools::skill_tools;
 use crate::warnings::bounded_warnings;
@@ -82,7 +73,6 @@ struct SkillsExtension<C> {
     providers: SkillProviders,
     event_sink: Arc<dyn ExtensionEventSink>,
     config_from_host: Arc<dyn Fn(&C) -> SkillsExtensionConfig + Send + Sync>,
-    shadow_selection: Arc<ShadowSelectionExperiment>,
 }
 
 #[derive(Default)]
@@ -92,16 +82,12 @@ struct RenderedCatalog {
 }
 
 fn render_catalog(
-    extension_metrics: Option<&dyn ExtensionMetrics>,
-    catalog_surface: CatalogSurface,
     catalog: &SkillCatalog,
     include_skills_usage_instructions: bool,
     policy: SkillCatalogRenderPolicy,
     budget: SkillMetadataBudget,
 ) -> RenderedCatalog {
     render_prepared_catalog(
-        extension_metrics,
-        catalog_surface,
         include_skills_usage_instructions,
         budget,
         render_available_skills(catalog, policy, budget, include_skills_usage_instructions),
@@ -109,22 +95,15 @@ fn render_catalog(
 }
 
 fn render_prepared_catalog(
-    extension_metrics: Option<&dyn ExtensionMetrics>,
-    catalog_surface: CatalogSurface,
     include_skills_usage_instructions: bool,
     budget: SkillMetadataBudget,
     rendered: Option<AvailableSkillsRender>,
 ) -> RenderedCatalog {
     let Some(rendered) = rendered else {
-        record_catalog_render(
-            extension_metrics,
-            catalog_surface,
-            budget,
-            &SkillRenderReport::default(),
-        );
+        trace_catalog_budget_pressure(budget, &SkillRenderReport::default());
         return RenderedCatalog::default();
     };
-    record_catalog_render(extension_metrics, catalog_surface, budget, &rendered.report);
+    trace_catalog_budget_pressure(budget, &rendered.report);
     let warning_message = rendered.report.warning_message();
     let fragment = rendered.into_fragment(include_skills_usage_instructions);
     RenderedCatalog {
@@ -145,7 +124,6 @@ where
         Box::pin(async move {
             input.session_store.insert(SkillsSessionState {
                 mcp_resources: input.mcp_resource_client.clone(),
-                extension_metrics: input.extension_metrics.clone(),
             });
             let cloud_skills_available = !input
                 .environments
@@ -221,12 +199,7 @@ where
             let include_usage = thread_store
                 .get::<ModelInfo>()
                 .is_some_and(|model_info| model_info.include_skills_usage_instructions);
-            let extension_metrics = session_store
-                .get::<SkillsSessionState>()
-                .and_then(|state| state.extension_metrics.clone());
             let rendered = render_catalog(
-                extension_metrics.as_deref(),
-                CatalogSurface::ThreadContext,
                 &catalog,
                 include_usage,
                 SkillCatalogRenderPolicy::ExtensionCompatible,
@@ -345,26 +318,6 @@ where
     fn requires_host_skill_discovery(&self) -> bool {
         self.providers.has_host_provider()
     }
-
-    fn on_skill_invocation<'a>(
-        &'a self,
-        input: SkillInvocationInput<'a>,
-    ) -> ExtensionFuture<'a, ()> {
-        Box::pin(async move {
-            match input.kind {
-                SkillInvocationKind::Implicit => {
-                    if let Some(state) = input
-                        .thread_store
-                        .get::<SkillsThreadState>()
-                        .and_then(|state| state.shadow_selection_turn(input.turn_id))
-                    {
-                        state.record_invocation(input.skill_resource);
-                    }
-                }
-                SkillInvocationKind::Explicit => {}
-            }
-        })
-    }
 }
 
 impl<C> TurnInputContributor for SkillsExtension<C>
@@ -374,7 +327,6 @@ where
     fn contribute<'a>(
         &'a self,
         input: TurnInputContext<'a>,
-        extension_metrics: Option<Arc<dyn ExtensionMetrics>>,
         session_store: &'a ExtensionData,
         thread_store: &'a ExtensionData,
         turn_store: &'a ExtensionData,
@@ -413,26 +365,6 @@ where
             }
 
             let selected_entries = collect_explicit_skill_mentions(&input.user_input, &catalog);
-            let shadow_selection_turn = if config.shadow_selection_enabled {
-                let mut shadow_catalog = catalog.clone();
-                if let Some(host_skills) = host_skills {
-                    shadow_catalog.extend(host_skills.0.clone());
-                }
-                let shadow_selected_entries =
-                    collect_explicit_skill_mentions(&input.user_input, &shadow_catalog);
-                Some(self.shadow_selection.start(
-                    &input,
-                    shadow_catalog,
-                    &shadow_selected_entries,
-                    host_snapshot.clone(),
-                    Arc::clone(&thread_state.recent_skill_invocations),
-                    Arc::clone(&thread_state.shadow_task_context),
-                ))
-            } else {
-                None
-            };
-            thread_state
-                .replace_shadow_selection_turn(input.turn_id.clone(), shadow_selection_turn);
             let mut fragments: Vec<Box<dyn ContextualUserFragment + Send>> = Vec::new();
             if config.include_instructions && !host_catalog_in_world_state {
                 let mut turn_catalog = catalog.clone();
@@ -450,8 +382,6 @@ where
                 let metadata_budget =
                     skill_metadata_budget(context_window, config.max_context_tokens);
                 let rendered = render_catalog(
-                    extension_metrics.as_deref(),
-                    CatalogSurface::TurnInput,
                     &turn_catalog,
                     include_usage,
                     SkillCatalogRenderPolicy::ExtensionCompatible,
@@ -468,7 +398,6 @@ where
             let mut warnings = catalog.warnings.clone();
             let mut main_prompts_injected = false;
             let mut injected_host_skill_prompts = InjectedHostSkillPrompts::default();
-            let analytics = SkillAnalytics::from_stores(session_store, thread_store);
             for entry in &selected_entries {
                 match self
                     .read_main_prompt(
@@ -516,15 +445,6 @@ where
                         main_prompts_injected = true;
                         if entry.authority.kind == SkillSourceKind::Host {
                             injected_host_skill_prompts.insert_path(entry.main_prompt.as_str());
-                        } else if let Some(analytics) = analytics.as_ref()
-                            && let Some(model_info) = thread_store.get::<ModelInfo>()
-                        {
-                            analytics.track_skill_invocation(
-                                entry,
-                                model_info.slug.clone(),
-                                input.turn_id.clone(),
-                                InvocationType::Explicit,
-                            );
                         }
                     }
                     Err(message) => {
@@ -678,30 +598,12 @@ pub fn install_with_providers<C>(
 ) where
     C: Send + Sync + 'static,
 {
-    install_with_providers_and_metrics(
-        registry,
-        providers,
-        /*metrics_client*/ None,
-        config_from_host,
-    );
-}
-
-pub fn install_with_providers_and_metrics<C>(
-    registry: &mut ExtensionRegistryBuilder<C>,
-    providers: SkillProviders,
-    metrics_client: Option<MetricsClient>,
-    config_from_host: impl Fn(&C) -> SkillsExtensionConfig + Send + Sync + 'static,
-) where
-    C: Send + Sync + 'static,
-{
     let extension = Arc::new(SkillsExtension {
         providers,
         event_sink: registry.event_sink(),
         config_from_host: Arc::new(config_from_host),
-        shadow_selection: Arc::new(ShadowSelectionExperiment::new(metrics_client)),
     });
     registry.thread_lifecycle_contributor(extension.clone());
-    registry.turn_lifecycle_contributor(Arc::new(SkillTelemetry));
     registry.turn_lifecycle_contributor(extension.clone());
     registry.config_contributor(extension.clone());
     registry.prompt_contributor(extension.clone());

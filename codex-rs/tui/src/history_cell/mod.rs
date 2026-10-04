@@ -44,7 +44,6 @@ use crate::test_support::test_path_buf;
 use crate::text_formatting::truncate_text;
 use crate::tooltips;
 use crate::ui_consts::LIVE_PREFIX_COLS;
-use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_line;
@@ -58,9 +57,9 @@ use codex_app_server_protocol::ToolRequestUserInputQuestion;
 use codex_app_server_protocol::WebSearchAction;
 #[cfg(test)]
 use codex_config::types::McpServerTransportConfig;
+use codex_diagnostics::RuntimeMetricsSummary;
 #[cfg(test)]
 use codex_mcp::qualified_mcp_tool_name_prefix;
-use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyAmendment;

@@ -3,7 +3,6 @@ use codex_config::RequirementSource;
 use codex_config::Sourced;
 use codex_config::config_toml::ConfigToml;
 use codex_config::types::ApprovalsReviewer;
-use codex_config::types::FeedbackConfigToml;
 use codex_features::FeatureToml;
 use codex_login::default_client::RESIDENCY_HEADER_NAME;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -39,7 +38,6 @@ pub(super) fn apply_to_config(
     if let Some(providers) = &requirements.model_providers {
         config.model_providers.extend(providers.value.clone());
     }
-    apply_exact!(check_for_update_on_startup);
     apply_exact!(allow_login_shell);
     if requirements
         .approvals_reviewer
@@ -48,11 +46,6 @@ pub(super) fn apply_to_config(
     {
         config.features.get_or_insert_default().guardianv2 = Some(FeatureToml::Enabled(false));
     }
-    apply_feedback_requirement(
-        &mut config.feedback,
-        requirements.feedback.as_ref(),
-        startup_warnings,
-    );
     if requirements.enforce_residency.value().is_some() {
         for (provider_name, provider) in &config.model_providers {
             let has_residency_header = provider
@@ -112,20 +105,6 @@ fn replace_required_leaf<T: Clone + PartialEq>(
         .is_some_and(|configured| configured != required);
     *configured = Some(required.clone());
     conflict
-}
-
-fn apply_feedback_requirement(
-    configured: &mut Option<FeedbackConfigToml>,
-    requirement: Option<&Sourced<FeedbackConfigToml>>,
-    startup_warnings: &mut Vec<String>,
-) {
-    let Some(Sourced { value, source }) = requirement else {
-        return;
-    };
-    let FeedbackConfigToml { enabled } = value;
-    let configured = configured.get_or_insert_default();
-    let conflict = replace_required_leaf(&mut configured.enabled, enabled);
-    push_structured_requirement_override_warning("feedback", conflict, source, startup_warnings);
 }
 
 pub(super) fn push_sqlite_home_env_override_warning(

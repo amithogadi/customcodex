@@ -19,7 +19,6 @@ use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
 use super::Forwarder;
-use crate::ExecServerTelemetry;
 use crate::noise_relay::stream_handler::NoiseStreamConnection;
 
 #[tokio::test]
@@ -28,7 +27,6 @@ async fn transport_disconnect_cancels_an_unfinished_websocket_handshake() -> Res
     let forwarder = Forwarder::new(
         format!("ws://{}", listener.local_addr()?),
         &HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-        ExecServerTelemetry::default(),
     )?;
     let (_incoming, incoming_rx) = mpsc::channel(1);
     let (outgoing_tx, _outgoing) = mpsc::channel(1);
@@ -55,7 +53,6 @@ async fn destination_close_is_acknowledged() -> Result<()> {
     let forwarder = Forwarder::new(
         format!("ws://{}", listener.local_addr()?),
         &HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-        ExecServerTelemetry::default(),
     )?;
     let (_incoming, incoming_rx) = mpsc::channel(1);
     let (outgoing_tx, mut outgoing) = mpsc::channel(1);

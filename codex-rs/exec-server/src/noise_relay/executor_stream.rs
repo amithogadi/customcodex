@@ -13,6 +13,7 @@ use tracing::warn;
 
 use crate::ExecServerError;
 use crate::connection::CHANNEL_CAPACITY;
+use crate::connection_metadata::ExecutorRegistration;
 use crate::noise_channel::NoiseTransport;
 use crate::noise_relay::message_framing::MessageDecoder;
 use crate::noise_relay::message_framing::NOISE_RECORD_PLAINTEXT_LEN;
@@ -23,7 +24,6 @@ use crate::noise_relay::take_next_sequence;
 use crate::relay::encode_relay_message_frame;
 use crate::relay_proto::RelayData;
 use crate::relay_proto::RelayMessageFrame;
-use crate::telemetry::ExecutorRegistration;
 
 /// Identifies one completed virtual-stream instance.
 ///
@@ -189,7 +189,3 @@ pub(crate) fn spawn_noise_virtual_stream<H: NoiseStreamHandler>(
 #[cfg(test)]
 #[path = "executor_stream_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "forward_stream_tests.rs"]
-mod forward_tests;

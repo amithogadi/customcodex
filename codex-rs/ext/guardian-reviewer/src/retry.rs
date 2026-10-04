@@ -3,7 +3,7 @@
 
 use crate::GuardianReviewError;
 use crate::GuardianReviewOutcome;
-use codex_analytics::GuardianReviewAnalyticsResult;
+use codex_protocol::guardian_review::GuardianReviewDetails;
 use codex_protocol::protocol::CodexErrorInfo;
 use rand::Rng;
 use std::future::Future;
@@ -25,7 +25,7 @@ pub async fn run_with_retry<Evidence, F, Attempt>(
     mut run_attempt: F,
 ) -> (
     GuardianReviewOutcome,
-    GuardianReviewAnalyticsResult,
+    GuardianReviewDetails,
     Option<Evidence>,
 )
 where
@@ -33,7 +33,7 @@ where
     Attempt: Future<
         Output = (
             GuardianReviewOutcome,
-            GuardianReviewAnalyticsResult,
+            GuardianReviewDetails,
             Option<Evidence>,
         ),
     >,

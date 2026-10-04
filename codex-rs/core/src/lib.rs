@@ -6,14 +6,10 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod apply_patch;
-mod apps;
 mod client;
 mod client_common;
 mod model_request;
-mod realtime_context;
-mod realtime_conversation;
 mod realtime_history;
-mod realtime_prompt;
 mod responses_headers;
 pub use responses_headers::CodexResponsesHeaders;
 mod responses_metadata;
@@ -109,7 +105,6 @@ pub use mcp::McpManager;
 mod original_image_detail;
 pub use codex_mcp::CodexAppsToolsCache;
 pub use codex_mcp::SandboxState;
-mod mcp_openai_file;
 mod mcp_tool_call;
 pub(crate) mod mention_syntax;
 pub(crate) mod utils;
@@ -138,9 +133,6 @@ mod stream_events_utils;
 pub mod test_support;
 mod unified_exec;
 pub mod windows_sandbox;
-#[cfg(windows)]
-mod windows_system_config;
-pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use codex_protocol::config_types::ModelProviderAuthInfo;
 mod event_mapping;
 pub use codex_prompts as review_prompts;
@@ -212,7 +204,6 @@ pub use rollout::parse_cursor;
 pub use rollout::read_head_for_summary;
 pub use rollout::read_session_meta_line;
 pub use rollout::rollout_date_parts;
-mod feedback_config;
 mod function_tool;
 mod state;
 mod tasks;
@@ -242,9 +233,9 @@ pub use exec_policy::format_exec_policy_error_with_source;
 pub use exec_policy::load_exec_policy;
 pub use installation_id::resolve_installation_id;
 pub mod compact;
-mod memory_usage;
-pub mod otel_init;
 
 // Captured environment bindings can be passed back to ThreadManager by internal reviewers.
 pub use environment_selection::TurnEnvironmentSnapshot;
 pub use environment_selection::validate_environment_ids_and_cwds;
+
+mod compaction_state;

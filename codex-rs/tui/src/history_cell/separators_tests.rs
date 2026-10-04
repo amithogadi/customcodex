@@ -4,7 +4,7 @@ use super::*;
 use chrono::NaiveDateTime;
 use chrono::TimeZone;
 use chrono::Timelike;
-use codex_otel::RuntimeMetricTotals;
+use codex_diagnostics::RuntimeMetricTotals;
 use pretty_assertions::assert_eq;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

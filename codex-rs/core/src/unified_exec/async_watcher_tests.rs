@@ -109,11 +109,9 @@ async fn completed_output_preserves_bytes_before_subscription(
         vec!["proof".to_string()],
         cwd,
         /*process_id*/ 123,
-        /*plugin_attribution*/ None,
         output_buffer,
         Instant::now(),
         /*network_denial_monitor*/ None,
-        /*plugin_metrics_sidecar*/ None,
     );
     stdout_tx.send(late_output.to_vec())?;
     drop(stdout_tx);
@@ -325,11 +323,9 @@ async fn exit_watcher_waits_for_late_network_denial_before_classifying_end() -> 
         vec!["proof".to_string()],
         cwd,
         /*process_id*/ 123,
-        /*plugin_attribution*/ None,
         output_buffer,
         Instant::now(),
         Some(network_denial_monitor),
-        /*plugin_metrics_sidecar*/ None,
     );
 
     let exited_at = Instant::now();

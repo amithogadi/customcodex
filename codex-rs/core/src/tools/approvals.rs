@@ -19,10 +19,8 @@ use crate::tools::sandboxing::ApprovalRequestReasons;
 use crate::tools::sandboxing::PermissionRequestPayload;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::with_cached_approval;
-use codex_analytics::GuardianApprovalRequestSource;
 use codex_config::types::AppToolApproval;
 use codex_hooks::PermissionRequestDecision;
-use codex_otel::ToolDecisionSource;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::approvals::ExecApprovalKind;
 use codex_protocol::approvals::ExecPolicyAmendment;
@@ -32,6 +30,7 @@ use codex_protocol::approvals::NetworkApprovalContext;
 use codex_protocol::approvals::NetworkApprovalProtocol;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::error::CodexErr;
+use codex_protocol::guardian_review::GuardianApprovalRequestSource;
 use codex_protocol::models::AdditionalPermissionProfile;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::AskForApproval;
@@ -523,10 +522,6 @@ impl Session {
             },
             None => self.request_reviewer_approval(action, &ctx).await,
         };
-        // Network approvals record their final telemetry after validation and persistence.
-        if !is_network_approval {
-            record_resolution(&ctx, &resolution);
-        }
         if is_mcp_tool_call && resolution.decision == ReviewDecision::ApprovedMcpPolicyAmendment {
             return Ok(resolution.decision);
         }
@@ -621,7 +616,6 @@ impl Session {
         };
         let options = GuardianReviewOptions {
             require_guardian: ctx.strict_auto_review,
-            plugin_attribution_override: None,
             approval_request_source: GuardianApprovalRequestSource::MainTurn,
             external_cancel: ctx.cancellation_token.clone(),
             require_synchronous_review: false,
@@ -724,7 +718,6 @@ impl Session {
                         proposed_execpolicy_amendment.clone(),
                         additional_permissions.clone(),
                         /*available_decisions*/ None,
-                        /*plugin_attribution_override*/ None,
                     )
                     .await
                 })
@@ -759,7 +752,6 @@ impl Session {
                     /*proposed_execpolicy_amendment*/ None,
                     additional_permissions.clone(),
                     Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
-                    /*plugin_attribution_override*/ None,
                 )
                 .await
             }
@@ -786,7 +778,6 @@ impl Session {
                     /*proposed_execpolicy_amendment*/ None,
                     additional_permissions.clone(),
                     Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
-                    /*plugin_attribution_override*/ None,
                 )
                 .await
             }
@@ -859,7 +850,6 @@ impl Session {
                     /*proposed_execpolicy_amendment*/ None,
                     /*additional_permissions*/ None,
                     /*available_decisions*/ None,
-                    /*plugin_attribution_override*/ None,
                 )
                 .await
             }
@@ -868,20 +858,6 @@ impl Session {
             }
         }
     }
-}
-
-fn record_resolution(ctx: &ApprovalContext, resolution: &ApprovalResolution) {
-    let source = match resolution.source {
-        ApprovalResolutionSource::Hook => ToolDecisionSource::Config,
-        ApprovalResolutionSource::Guardian => ToolDecisionSource::AutomatedReviewer,
-        ApprovalResolutionSource::User => ToolDecisionSource::User,
-    };
-    ctx.review_context.turn().session_telemetry.tool_decision(
-        &ctx.tool_name,
-        &ctx.call_id,
-        &resolution.decision,
-        Some(source),
-    );
 }
 
 #[cfg(all(test, unix))]

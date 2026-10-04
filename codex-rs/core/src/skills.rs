@@ -1,22 +1,14 @@
 use crate::config::Config;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
-use codex_analytics::InvocationType;
-use codex_analytics::SkillInvocation;
-use codex_analytics::SkillInvocationLocation;
-use codex_analytics::TrackEventsContext;
-use codex_analytics::build_track_events_context;
 use codex_extension_api::SkillInvocationInput;
 use codex_extension_api::SkillInvocationKind;
-use codex_otel::SkillInvocationEvent;
-use codex_otel::SkillInvocationType;
-use codex_otel::sanitize_metric_tag_value;
 use codex_protocol::protocol::SkillScope;
 use codex_skills::SkillMetadata;
 use codex_skills_extension::HostSkillsLoadInput;
 use codex_skills_extension::InjectedHostSkillPrompts;
+use codex_skills_extension::SkillInvocationLocation;
 use codex_skills_extension::detect_implicit_skill_invocation;
-use codex_skills_extension::record_plugin_turn_usage;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use codex_utils_plugins::PluginSkillRoot;
@@ -40,43 +32,8 @@ pub(crate) fn skills_load_input_from_config(
 pub(crate) async fn emit_explicit_skill_invocations(
     sess: &Session,
     turn_context: &TurnContext,
-    mentioned_skills: &[SkillMetadata],
     injected_skills: &[SkillMetadata],
-    tracking: TrackEventsContext,
 ) {
-    let injected_skill_paths = injected_skills
-        .iter()
-        .map(|skill| &skill.path_to_skills_md)
-        .collect::<HashSet<_>>();
-    let model_slug_tag = sanitize_metric_tag_value(turn_context.model_info().slug.as_str());
-    let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
-    for skill in mentioned_skills {
-        let skill_name_tag = sanitize_metric_tag_value(skill.name.as_str());
-        let plugin_id_tag =
-            sanitize_metric_tag_value(skill.plugin_id.as_deref().unwrap_or("unattributed"));
-        let status = if injected_skill_paths.contains(&skill.path_to_skills_md) {
-            record_plugin_turn_usage(
-                turn_context.extension_data.as_ref(),
-                skill.plugin_id.as_deref(),
-            );
-            "ok"
-        } else {
-            "error"
-        };
-        turn_context.session_telemetry.counter(
-            "codex.skill.injected",
-            /*inc*/ 1,
-            &[
-                ("status", status),
-                ("skill", skill_name_tag.as_str()),
-                ("invoke_type", "explicit"),
-                ("plugin_id", plugin_id_tag.as_str()),
-                ("model_slug", model_slug_tag.as_str()),
-                ("reasoning_effort", reasoning_effort.as_str()),
-            ],
-        );
-    }
-
     let injected_host_skill_prompts = turn_context
         .extension_data
         .get::<InjectedHostSkillPrompts>();
@@ -88,15 +45,6 @@ pub(crate) async fn emit_explicit_skill_invocations(
         {
             continue;
         }
-        turn_context
-            .session_telemetry
-            .skill_invocation(SkillInvocationEvent {
-                turn_id: &turn_context.sub_id,
-                skill_name: &skill.name,
-                scope: Some(skill.scope),
-                plugin_id: skill.plugin_id.as_deref(),
-                invocation_type: SkillInvocationType::Explicit,
-            });
         for contributor in sess.services.extensions.skill_invocation_contributors() {
             contributor
                 .on_skill_invocation(SkillInvocationInput {
@@ -110,23 +58,6 @@ pub(crate) async fn emit_explicit_skill_invocations(
                 .await;
         }
     }
-
-    let invocations = injected_skills
-        .iter()
-        .map(|skill| SkillInvocation {
-            skill_name: skill.name.clone(),
-            location: SkillInvocationLocation::Host {
-                path: skill.path_to_skills_md.to_path_buf(),
-                scope: skill.scope,
-            },
-            plugin_id: skill.plugin_id.clone(),
-            remote_plugin_id: skill.remote_plugin_id.clone(),
-            invocation_type: InvocationType::Explicit,
-        })
-        .collect();
-    sess.services
-        .analytics_events_client
-        .track_skill_invocations(tracking, invocations);
 }
 
 pub(crate) async fn maybe_emit_implicit_skill_invocation(
@@ -171,27 +102,6 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
     if !inserted {
         return;
     }
-    turn_context
-        .session_telemetry
-        .skill_invocation(SkillInvocationEvent {
-            turn_id: &turn_context.sub_id,
-            skill_name: &skill_name,
-            scope: match &invocation.location {
-                SkillInvocationLocation::Host { scope, .. } => Some(*scope),
-                SkillInvocationLocation::Resource { scope, .. } => *scope,
-            },
-            plugin_id: invocation.plugin_id.as_deref(),
-            invocation_type: SkillInvocationType::Implicit,
-        });
-    let skill_name_tag = sanitize_metric_tag_value(skill_name.as_str());
-    let plugin_id_tag =
-        sanitize_metric_tag_value(invocation.plugin_id.as_deref().unwrap_or("unattributed"));
-    let model_slug_tag = sanitize_metric_tag_value(turn_context.model_info().slug.as_str());
-    let reasoning_effort = turn_context.effective_reasoning_effort_for_tracing();
-    record_plugin_turn_usage(
-        turn_context.extension_data.as_ref(),
-        invocation.plugin_id.as_deref(),
-    );
 
     for contributor in sess.services.extensions.skill_invocation_contributors() {
         contributor
@@ -205,29 +115,4 @@ pub(crate) async fn maybe_emit_implicit_skill_invocation(
             })
             .await;
     }
-
-    turn_context.session_telemetry.counter(
-        "codex.skill.injected",
-        /*inc*/ 1,
-        &[
-            ("status", "ok"),
-            ("skill", skill_name_tag.as_str()),
-            ("invoke_type", "implicit"),
-            ("plugin_id", plugin_id_tag.as_str()),
-            ("model_slug", model_slug_tag.as_str()),
-            ("reasoning_effort", reasoning_effort.as_str()),
-        ],
-    );
-    sess.services
-        .analytics_events_client
-        .track_skill_invocations(
-            build_track_events_context(
-                turn_context.model_info().slug.clone(),
-                sess.thread_id.to_string(),
-                turn_context.sub_id.clone(),
-                turn_context.originator.clone(),
-                Some(turn_context.turn_metadata_state.clone()),
-            ),
-            vec![invocation],
-        );
 }

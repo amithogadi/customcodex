@@ -10,11 +10,6 @@ pub enum AllowDenyRequirementToml {
     Deny,
 }
 
-
-
-
-
-
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct ComputerUseMacosRequirementsToml {
     pub bundle_ids: Option<BTreeMap<String, AllowDenyRequirementToml>>,

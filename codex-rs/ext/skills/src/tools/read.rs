@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use codex_analytics::InvocationType;
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::ToolCall;
 use codex_extension_api::ToolExecutor;
@@ -204,14 +203,6 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                             "skill provider returned a different resource".to_string(),
                         ));
                     }
-                    if output_authority == super::SkillToolAuthoritySelector::Cloud
-                        && let Some(state) = self
-                            .context
-                            .thread_state
-                            .shadow_selection_turn(&call.turn_id)
-                    {
-                        state.record_invocation(main_prompt.as_str());
-                    }
                     let start = parse_pagination_cursor(
                         args.cursor.as_deref(),
                         result.contents.as_str(),
@@ -258,18 +249,6 @@ impl<'call> ToolExecutor<ToolCall<'call>> for ReadTool {
                         access,
                         result,
                     });
-            }
-
-            if requested_resource == main_prompt
-                && args.cursor.is_none()
-                && let Some(analytics) = self.context.analytics.as_ref()
-            {
-                analytics.track_skill_invocation(
-                    &skill_entry,
-                    call.model.clone(),
-                    call.turn_id.clone(),
-                    InvocationType::Implicit,
-                );
             }
 
             Ok(output)

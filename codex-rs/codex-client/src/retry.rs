@@ -70,7 +70,7 @@ macro_rules! record_retry {
         };
 
         ::tracing::event!(
-            target: "codex_otel.trace_safe",
+            target: "codex.trace_safe",
             ::tracing::Level::TRACE,
             event.name = "codex.retry",
             retry.attempt = $attempt,

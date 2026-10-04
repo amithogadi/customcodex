@@ -336,13 +336,7 @@ pub(super) async fn start_app_server_for_session_command(
     .await
     .wrap_err("failed to load config.toml")?;
     let config_toml = &bootstrap_config.config_toml;
-    let cloud_config_bundle = super::cloud_config_bundle_for_app_server_target(
-        &app_server_target,
-        &bootstrap_config,
-        codex_home.as_path(),
-        &embedded_network_policy,
-    )
-    .await?;
+    let cloud_config_bundle = CloudConfigBundleLoader::default();
 
     let model_provider = if cli.oss {
         resolve_oss_provider(cli.oss_provider.as_deref(), config_toml)
@@ -399,7 +393,6 @@ pub(super) async fn start_app_server_for_session_command(
         loader_overrides,
         strict_config,
         cloud_config_bundle,
-        codex_feedback::CodexFeedback::new(),
         /*log_db*/ None,
         &mut state_db,
         environment_manager,

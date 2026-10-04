@@ -2,11 +2,9 @@ use anyhow::Result;
 use codex_api::ApiError;
 use codex_context_fragments::RenderedFragment;
 use codex_extension_api::ContextualUserFragment;
-use codex_extension_api::ExtensionMetrics;
 use codex_guardian_context::PreviousReviews;
 use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
-use codex_login::AgentIdentityAuthPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_login::ExternalAuth;
@@ -41,7 +39,6 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use uuid::Uuid;
 
-use super::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use super::INITIAL_WEBSOCKET_CONNECTIONS;
 use super::LunaSampler;
 use super::LunaSamplerConfig;
@@ -204,9 +201,6 @@ pub(in crate::async_scorer) async fn proxy_websocket_servers_with_http(
 
 pub(in crate::async_scorer) fn sampler_config(base_url: String) -> LunaSamplerConfig {
     LunaSamplerConfig {
-        workspace_routing: codex_model_provider::WorkspaceRoutingContext::new(
-            "https://chatgpt.com/backend-api".into(),
-        ),
         provider: create_model_provider(
             ModelProviderInfo::create_openai_provider(Some(base_url)),
             Some(AuthManager::from_auth_for_testing(CodexAuth::from_api_key(
@@ -214,7 +208,6 @@ pub(in crate::async_scorer) fn sampler_config(base_url: String) -> LunaSamplerCo
             ))),
         ),
         http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-        agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
         session_source: SessionSource::Exec,
         session_id: "session-1".to_owned(),
         thread_id: "thread-1".to_owned(),
@@ -223,7 +216,6 @@ pub(in crate::async_scorer) fn sampler_config(base_url: String) -> LunaSamplerCo
         service_tier: None,
         luna_compaction_hash: None,
         max_input_tokens: codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS,
-        metrics: None,
     }
 }
 
@@ -277,122 +269,6 @@ pub(in crate::async_scorer) fn sample_request(parent_turn_id: &str) -> LunaSampl
     }
 }
 
-type RecordedMetric = (String, i64, Vec<(String, String)>);
-
-#[derive(Default)]
-struct RecordingMetrics(Mutex<Vec<RecordedMetric>>);
-
-impl ExtensionMetrics for RecordingMetrics {
-    fn histogram_with_boundaries(
-        &self,
-        name: &str,
-        value: i64,
-        _boundaries: &[f64],
-        tags: &[(&str, &str)],
-    ) {
-        self.histogram(name, value, tags);
-    }
-
-    fn counter(&self, _name: &str, _inc: i64, _tags: &[(&str, &str)]) {}
-
-    fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
-        if name == "codex.guardian_v2.connection.duration_ms" {
-            return;
-        }
-        self.0.lock().unwrap().push((
-            name.to_owned(),
-            value,
-            tags.iter()
-                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                .collect(),
-        ));
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn sampler_records_token_usage_after_returning_an_early_classification() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let events = vec![
-        ev_output_text_delta("low"),
-        ev_completed_with_tokens("response-1", /*total_tokens*/ 37),
-    ];
-    let mut connections = vec![Vec::new(); INITIAL_WEBSOCKET_CONNECTIONS - 1];
-    connections.push(vec![events]);
-    let server = responses::start_websocket_server(connections).await;
-    let metrics = Arc::new(RecordingMetrics::default());
-    let mut config = sampler_config(format!(
-        "http://{}/v1",
-        server.uri().trim_start_matches("ws://")
-    ));
-    config.metrics = Some(metrics.clone());
-    let sampler = connect_sampler(config).await?;
-
-    assert_eq!(sampler.sample(sample_request("turn-1")).await?, "low");
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while metrics
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|metric| metric.0 == CLASSIFICATION_TOKEN_USAGE_METRIC)
-            .count()
-            < 7
-        {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await?;
-
-    assert_eq!(
-        metrics
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|metric| metric.0 == CLASSIFICATION_TOKEN_USAGE_METRIC)
-            .cloned()
-            .collect::<Vec<_>>(),
-        [
-            ("total", 37),
-            ("input", 37),
-            ("cached_input", 0),
-            ("cache_write_input", 0),
-            ("non_cached_input", 37),
-            ("output", 0),
-            ("reasoning_output", 0),
-        ]
-        .map(|(token_type, value)| (
-            CLASSIFICATION_TOKEN_USAGE_METRIC.to_owned(),
-            value,
-            vec![("token_type".to_owned(), token_type.to_owned())],
-        ))
-    );
-
-    let request = server
-        .wait_for_request(
-            /*connection_index*/ INITIAL_WEBSOCKET_CONNECTIONS - 1,
-            /*request_index*/ 0,
-        )
-        .await
-        .body_json();
-    let input: Vec<ResponseItem> = serde_json::from_value(request["input"].clone())?;
-    let estimated = input
-        .iter()
-        .map(codex_guardian_context::estimate_input_tokens)
-        .sum::<usize>();
-    assert!(metrics.0.lock().unwrap().contains(&(
-        codex_guardian_context::REQUEST_TOKENS_METRIC.to_owned(),
-        i64::try_from(estimated)?,
-        vec![
-            ("target".to_owned(), "async".to_owned()),
-            ("component".to_owned(), "total".to_owned()),
-        ],
-    )));
-
-    Ok(())
-}
-
 struct RefreshableAuth(std::sync::Mutex<&'static str>);
 impl ExternalAuth for RefreshableAuth {
     fn resolve(&self) -> ExternalAuthFuture<'_, CodexAuth> {
@@ -405,29 +281,13 @@ impl ExternalAuth for RefreshableAuth {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn classifier_sends_guardian_header_only_with_codex_backend_auth() -> Result<()> {
+async fn classifier_uses_provider_service_tier_without_hosted_auth_headers() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    for (auth, base_path, expected_header, expected_service_tier) in [
-        (
-            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-            "/backend-api/codex",
-            Some("classifier"),
-            None,
-        ),
-        (
-            CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-            "/v1",
-            None,
-            Some("priority"),
-        ),
-        (
-            CodexAuth::from_api_key("test-api-key"),
-            "/v1",
-            None,
-            Some("priority"),
-        ),
-    ] {
+    for base_path in ["/v1", "/backend-api/codex"] {
+        let auth = CodexAuth::from_api_key("test-api-key");
+        let expected_header: Option<&str> = None;
+        let expected_service_tier = Some("priority");
         let events = vec![
             ev_assistant_message("classification", "low"),
             ev_completed("response-1"),
@@ -517,12 +377,8 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
     );
 
     let sampler = connect_sampler(LunaSamplerConfig {
-        workspace_routing: codex_model_provider::WorkspaceRoutingContext::new(
-            "https://chatgpt.com/backend-api".into(),
-        ),
         provider,
         http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-        agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
         session_source: SessionSource::Exec,
         session_id: "session-1".to_owned(),
         thread_id: "thread-1".to_owned(),
@@ -531,7 +387,6 @@ async fn preconnected_sampler_reuses_authenticated_websocket_for_classifications
         service_tier: None,
         luna_compaction_hash: None,
         max_input_tokens: codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS,
-        metrics: None,
     })
     .await?;
 
@@ -770,12 +625,8 @@ async fn sampler_returns_classification_token_before_terminal_response_events() 
         ))),
     );
     let sampler = connect_sampler(LunaSamplerConfig {
-        workspace_routing: codex_model_provider::WorkspaceRoutingContext::new(
-            "https://chatgpt.com/backend-api".into(),
-        ),
         provider,
         http_client_factory: HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-        agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
         session_source: SessionSource::Exec,
         session_id: "session-1".to_owned(),
         thread_id: "thread-1".to_owned(),
@@ -784,7 +635,6 @@ async fn sampler_returns_classification_token_before_terminal_response_events() 
         service_tier: None,
         luna_compaction_hash: None,
         max_input_tokens: codex_guardian_context::DEFAULT_MAX_INPUT_TOKENS,
-        metrics: None,
     })
     .await?;
 
@@ -1208,7 +1058,7 @@ async fn sampler_limits_transient_recovery_attempts() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn parent_response_id_survives_classifier_transport_retry() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    for uses_codex_backend in [false, true] {
+    for uses_codex_backend in [false] {
         let healthy = responses::start_websocket_server(vec![vec![vec![
             ev_assistant_message("resp-review", "low"),
             ev_completed("resp-review"),
@@ -1220,17 +1070,6 @@ async fn parent_response_id_survives_classifier_transport_retry() -> Result<()> 
         })]]]).await;
         let base_url = proxy_websocket_servers(&[&healthy, &expired]).await?;
         let mut config = sampler_config(base_url.clone());
-        if uses_codex_backend {
-            config.provider = create_model_provider(
-                ModelProviderInfo::create_openai_provider(Some(format!(
-                    "{}/backend-api/codex",
-                    base_url.trim_end_matches("/v1")
-                ))),
-                Some(AuthManager::from_auth_for_testing(
-                    CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-                )),
-            );
-        }
         let sampler = connect_sampler(config).await?;
         let parent_response_id = "resp-parent";
         let mut request = sample_request("turn-1");

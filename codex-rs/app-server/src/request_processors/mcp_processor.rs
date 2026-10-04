@@ -7,7 +7,6 @@ use codex_mcp::McpServerSource;
 use codex_mcp::ReadResourceRequestParams;
 use codex_mcp::ema_auth_scope;
 use codex_mcp::resolve_oauth_callback;
-use codex_otel::auth_storage::AuthStorageOriginator;
 use codex_rmcp_client::EnterpriseOAuthLoginRequest;
 use std::future::Future;
 
@@ -297,7 +296,11 @@ impl McpRequestProcessor {
             let oauth_credential_name = server.oauth_credential_name(&name);
             let client_registration = match client_registration.unwrap_or_default() {
                 McpServerOauthClientRegistration::Auto => McpOAuthClientRegistration::Auto,
-                McpServerOauthClientRegistration::Cimd => McpOAuthClientRegistration::Cimd,
+                McpServerOauthClientRegistration::Cimd => {
+                    return Err(invalid_request(
+                        "Client ID metadata registration is unsupported; use auto or dcr.",
+                    ));
+                }
                 McpServerOauthClientRegistration::Dcr => McpOAuthClientRegistration::Dcr,
             };
             let callback_url =
@@ -386,7 +389,7 @@ impl McpRequestProcessor {
                 .await;
             outgoing.send_result(request, result).await;
         };
-        tokio::spawn(AuthStorageOriginator::current().scope(task));
+        tokio::spawn(task);
         Ok(())
     }
 
@@ -614,7 +617,7 @@ impl McpRequestProcessor {
                 Self::send_mcp_resource_read_response(outgoing, request_id, result, origin_call_id)
                     .await;
             };
-            tokio::spawn(AuthStorageOriginator::current().scope(task));
+            tokio::spawn(task);
             return Ok(());
         }
 
@@ -653,7 +656,7 @@ impl McpRequestProcessor {
             )
             .await;
         };
-        tokio::spawn(AuthStorageOriginator::current().scope(task));
+        tokio::spawn(task);
         Ok(())
     }
 
@@ -699,7 +702,7 @@ impl McpRequestProcessor {
                 .map_err(mcp_operation_error);
             outgoing.send_result(request_id, result).await;
         };
-        tokio::spawn(AuthStorageOriginator::current().scope(task));
+        tokio::spawn(task);
         Ok(())
     }
 }

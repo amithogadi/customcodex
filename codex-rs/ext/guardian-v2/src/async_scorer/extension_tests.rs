@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -13,7 +12,6 @@ use codex_core::context::InternalModelContextFragment;
 use codex_core::context::NodeReplReviewEvidence;
 use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionData;
-use codex_extension_api::ExtensionMetrics;
 use codex_extension_api::ExtensionRegistry;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ResponseItem;
@@ -58,7 +56,6 @@ use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TruncationPolicy;
 use codex_protocol::security_risk::SecurityRiskScore;
 use core_test_support::ThreadIdle;
-use core_test_support::apps_test_server::HostedMessagingServer;
 use core_test_support::responses;
 use core_test_support::responses::WebSocketConnectionConfig;
 use core_test_support::responses::ev_assistant_message;
@@ -78,13 +75,6 @@ use crate::async_scorer::config::CLASSIFICATION_OUTPUT_INSTRUCTIONS;
 use crate::async_scorer::config::DEFAULT_PARENT_COMPACTION_TOKENS;
 use crate::async_scorer::config::GuardianV2Config;
 use crate::async_scorer::coverage::scores_tool;
-use crate::async_scorer::metrics::CLASSIFICATION_DURATION_METRIC;
-use crate::async_scorer::metrics::CLASSIFICATION_METRIC;
-use crate::async_scorer::metrics::CLASSIFICATION_RISK_METRIC;
-use crate::async_scorer::metrics::FAST_DECISION_METRIC;
-use crate::async_scorer::metrics::REVIEW_FALLBACK_METRIC;
-use crate::async_scorer::metrics::TOOL_CALL_LAG_METRIC;
-use crate::async_scorer::sampler::CLASSIFICATION_TOKEN_USAGE_METRIC;
 use crate::async_scorer::sampler::INITIAL_WEBSOCKET_CONNECTIONS;
 use crate::async_scorer::sampler::LunaSampler;
 use crate::async_scorer::sampler::MODEL;
@@ -193,7 +183,6 @@ async fn installed_extension_warms_connections_without_blocking_thread_start() -
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
-            extension_metrics: None,
             session_store: &session_store,
             thread_store,
         })
@@ -266,7 +255,6 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
-            extension_metrics: None,
             session_store: &session_store,
             thread_store,
         })
@@ -317,7 +305,6 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
                 &registry,
                 thread_store,
                 r#"{"tool":"mcp_tool_call","server":"node_repl"}"#,
-                /*metrics*/ None,
             )
             .await,
             Some(ReviewDecision::Approved)
@@ -355,69 +342,6 @@ async fn installed_extension_uses_http_after_warm_socket_auth_expires() -> Resul
         requests[1]["client_metadata"]["turn_id"]
     );
     Ok(())
-}
-
-#[derive(Clone, Debug, PartialEq)]
-enum RecordedMetric {
-    Histogram(String, i64, Vec<(String, String)>),
-    Counter(String, i64, Vec<(String, String)>),
-}
-
-fn fast_decision_metric(decision: &str, reason: &str) -> RecordedMetric {
-    RecordedMetric::Counter(
-        FAST_DECISION_METRIC.to_owned(),
-        1,
-        vec![
-            ("decision".to_owned(), decision.to_owned()),
-            ("reason".to_owned(), reason.to_owned()),
-        ],
-    )
-}
-
-#[derive(Default)]
-struct RecordingMetrics(Mutex<Vec<RecordedMetric>>);
-
-impl RecordingMetrics {
-    fn classification_samples(&self) -> Vec<RecordedMetric> {
-        self.0.lock().unwrap().iter().filter(|sample| {
-            !matches!(sample, RecordedMetric::Histogram(name, _, _) if name == codex_guardian_context::SECTION_COST_METRIC || name == codex_guardian_context::REQUEST_TOKENS_METRIC)
-        }).cloned().collect()
-    }
-}
-
-impl ExtensionMetrics for RecordingMetrics {
-    fn histogram_with_boundaries(
-        &self,
-        name: &str,
-        value: i64,
-        _boundaries: &[f64],
-        tags: &[(&str, &str)],
-    ) {
-        self.histogram(name, value, tags);
-    }
-
-    fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
-        self.0.lock().unwrap().push(RecordedMetric::Counter(
-            name.to_owned(),
-            inc,
-            tags.iter()
-                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                .collect(),
-        ));
-    }
-
-    fn histogram(&self, name: &str, value: i64, tags: &[(&str, &str)]) {
-        if name == "codex.guardian_v2.connection.duration_ms" {
-            return;
-        }
-        self.0.lock().unwrap().push(RecordedMetric::Histogram(
-            name.to_owned(),
-            value,
-            tags.iter()
-                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
-                .collect(),
-        ));
-    }
 }
 
 fn user_instruction(text: &str) -> ResponseItem {
@@ -588,7 +512,6 @@ async fn sandboxed_shell_classification_respects_review_scope() -> Result<()> {
                 &fixture.registry,
                 thread_store,
                 r#"{"tool":"exec_command","cmd":"pwd"}"#,
-                /*metrics*/ None,
             )
             .await,
             expected_decision,
@@ -651,7 +574,6 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
             sampled_at: None,
         },
     );
-    thread_store.insert(RecordingMetrics::default());
     let progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should track score progress per thread");
@@ -707,29 +629,13 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
     ] {
         let prompt = action.to_string();
         assert_eq!(
-            cached_approval(
-                &fixture.registry,
-                thread_store,
-                &prompt,
-                thread_store
-                    .get::<RecordingMetrics>()
-                    .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
-            )
-            .await,
+            cached_approval(&fixture.registry, thread_store, &prompt,).await,
             expected,
             "unexpected fast approval for {action}"
         );
     }
     assert_eq!(
-        cached_approval(
-            &fixture.registry,
-            thread_store,
-            "not valid JSON",
-            thread_store
-                .get::<RecordingMetrics>()
-                .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
-        )
-        .await,
+        cached_approval(&fixture.registry, thread_store, "not valid JSON",).await,
         None,
         "malformed approval actions must not reuse a browser score"
     );
@@ -749,36 +655,10 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
             &fixture.registry,
             thread_store,
             &json!({"tool": "mcp_tool_call", "server": "node_repl", "tool_name": "js"}).to_string(),
-            /*metrics*/ None,
         )
         .await,
         None,
         "a score from the previous model policy must not approve a call"
-    );
-    let fast_decisions = thread_store
-        .get::<RecordingMetrics>()
-        .unwrap()
-        .0
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|sample| {
-            matches!(
-                sample,
-                RecordedMetric::Counter(name, 1, _) if name == FAST_DECISION_METRIC
-            )
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    assert_eq!(
-        fast_decisions,
-        vec![
-            fast_decision_metric("approved", "low_risk"),
-            fast_decision_metric("approved", "low_risk"),
-            fast_decision_metric("deferred", "out_of_scope"),
-            fast_decision_metric("deferred", "out_of_scope"),
-            fast_decision_metric("deferred", "out_of_scope"),
-        ]
     );
 
     let mut model = thread_store.get::<ModelInfo>().unwrap().as_ref().clone();
@@ -807,7 +687,6 @@ async fn computer_use_only_scores_cannot_approve_other_actions() -> Result<()> {
                 &fixture.registry,
                 thread_store,
                 r#"{"tool":"mcp_tool_call","server":"node_repl","tool_name":"js"}"#,
-                /*metrics*/ None,
             )
             .await,
             None,
@@ -859,32 +738,25 @@ async fn sample_configured_conversation_history_with_source(
     model_defaults: Option<GuardianV2ModelConfig>,
     source: ToolCallSource,
 ) -> Result<(serde_json::Value, TestCodex, ExtensionRegistry<Config>)> {
-    let (request, test, registry, _) = sample_configured_conversation_history_with_delivery(
+    let (request, test, registry, _) = sample_configured_conversation_history_with_thread_server(
         conversation_history,
         arguments,
         guardian_policy,
         guardian_config,
         model_defaults,
         source,
-        MessagingSetup::Disabled,
     )
     .await?;
     Ok((request, test, registry))
 }
 
-enum MessagingSetup {
-    Disabled,
-    CodeMode(String),
-}
-
-async fn sample_configured_conversation_history_with_delivery(
+async fn sample_configured_conversation_history_with_thread_server(
     conversation_history: Vec<ResponseItem>,
     arguments: &str,
     guardian_policy: Option<&str>,
     guardian_config: &str,
     model_defaults: Option<GuardianV2ModelConfig>,
     source: ToolCallSource,
-    messaging: MessagingSetup,
 ) -> Result<(
     serde_json::Value,
     TestCodex,
@@ -897,16 +769,12 @@ async fn sample_configured_conversation_history_with_delivery(
         "{guardian_config}\n[features.guardianv2.review_scope]\ncomputer_use_only = false\n"
     );
     let has_model_defaults = model_defaults.is_some();
-    let code_mode = matches!(&messaging, MessagingSetup::CodeMode(_));
     let mut extensions = ExtensionRegistryBuilder::new();
     extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
-    if let MessagingSetup::CodeMode(url) = messaging {
-        extensions.mcp_server_contributor(Arc::new(HostedMessagingServer(url)));
-    }
     let builder = test_codex()
         .with_extensions(Arc::new(extensions.build()))
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_model_info_override("codex-auto-review", |model_info| {
+        .with_auth(CodexAuth::from_api_key("test-api-key"))
+        .with_model_info_override("gpt-5.6-luna", |model_info| {
             model_info
                 .model_messages
                 .as_mut()
@@ -920,17 +788,6 @@ async fn sample_configured_conversation_history_with_delivery(
         .with_config(move |config| {
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
             config.guardian_policy_config = guardian_policy;
-            if code_mode {
-                for feature in [
-                    Feature::Apps,
-                    Feature::CodeMode,
-                    Feature::CodeModeInterrupt,
-                    Feature::Collab,
-                    Feature::MultiAgentV2,
-                ] {
-                    config.features.enable(feature).expect("enable Code Mode");
-                }
-            }
         })
         .with_pre_build_hook(move |home| {
             std::fs::write(home.join("config.toml"), guardian_config)
@@ -947,12 +804,7 @@ async fn sample_configured_conversation_history_with_delivery(
     } else {
         builder
     };
-    let mut builder = if code_mode {
-        builder
-            .with_code_mode_host_program(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?)
-    } else {
-        builder
-    };
+    let mut builder = builder;
     let test = builder.build_with_auto_env(&thread_server).await?;
     let mut completed = ev_completed("response-1");
     completed["response"]["usage"] = json!({
@@ -983,8 +835,6 @@ async fn sample_configured_conversation_history_with_delivery(
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
-    thread_store.insert(RecordingMetrics::default());
-    let metrics = thread_store.get::<RecordingMetrics>().unwrap();
     if has_model_defaults {
         let parent_model = test
             .thread_manager
@@ -994,13 +844,7 @@ async fn sample_configured_conversation_history_with_delivery(
         thread_store.insert(parent_model);
     }
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None,
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         None
     );
     registry.thread_lifecycle_contributors()[0]
@@ -1010,7 +854,6 @@ async fn sample_configured_conversation_history_with_delivery(
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
-            extension_metrics: Some(metrics),
             session_store: &session_store,
             thread_store,
         })
@@ -1189,28 +1032,9 @@ impl GuardianFailureFixture {
             }
         })
         .await?;
-        thread_store.insert(RecordingMetrics::default());
         assert_eq!(
-            cached_approval(
-                &self.registry,
-                thread_store,
-                "review action",
-                thread_store
-                    .get::<RecordingMetrics>()
-                    .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
-            )
-            .await,
+            cached_approval(&self.registry, thread_store, "review action",).await,
             None
-        );
-        assert!(
-            thread_store
-                .get::<RecordingMetrics>()
-                .unwrap()
-                .0
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|sample| sample == &fast_decision_metric("deferred", expected_reason))
         );
         Ok(())
     }
@@ -1286,7 +1110,6 @@ async fn contributor_fails_closed_when_luna_classification_fails() -> Result<()>
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
-            extension_metrics: None,
             session_store: &fixture.session_store,
             thread_store: fixture.test.codex.thread_extension_data(),
         })
@@ -1499,28 +1322,16 @@ max_recent_non_user_entries = 8
     let score_progress = thread_store
         .get::<GuardianV2ScoreProgress>()
         .expect("Guardian v2 should track score progress per thread");
-    let metrics = thread_store.get::<RecordingMetrics>().unwrap();
     tokio::time::timeout(ASYNC_TEST_TIMEOUT, async {
         while score_progress
             .inspect(/*call_id*/ None)
             .authorization
             .is_none()
-            || metrics.classification_samples().len() < 10
         {
             tokio::task::yield_now().await;
         }
     })
     .await?;
-    assert!(metrics.0.lock().unwrap().iter().any(|sample| {
-        matches!(sample, RecordedMetric::Histogram(name, value, tags)
-        if name == codex_guardian_context::SECTION_COST_METRIC
-            && *value > 0
-            && tags == &[
-                ("target".to_owned(), "async".to_owned()),
-                ("section".to_owned(), "conversation_transcript".to_owned()),
-                ("measurement".to_owned(), "text_bytes".to_owned()),
-            ])
-    }));
     set_cached_score(
         thread_store,
         SecurityRiskScore {
@@ -1531,15 +1342,7 @@ max_recent_non_user_entries = 8
         },
     );
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            thread_store
-                .get::<RecordingMetrics>()
-                .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         None
     );
     set_cached_score(
@@ -1552,15 +1355,7 @@ max_recent_non_user_entries = 8
         },
     );
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            thread_store
-                .get::<RecordingMetrics>()
-                .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         Some(ReviewDecision::Approved)
     );
 
@@ -1579,13 +1374,7 @@ max_recent_non_user_entries = 8
             json!({"tool": "exec_command", "program": "example", "argv": [argument]}),
         ] {
             assert_eq!(
-                cached_approval(
-                    &registry,
-                    thread_store,
-                    &action.to_string(),
-                    /*metrics*/ None
-                )
-                .await,
+                cached_approval(&registry, thread_store, &action.to_string(),).await,
                 expected
             );
         }
@@ -1594,31 +1383,13 @@ max_recent_non_user_entries = 8
     let first_unscored = observe_unscored_call(&score_progress, thread_store);
     observe_unscored_call(&score_progress, thread_store);
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            thread_store
-                .get::<RecordingMetrics>()
-                .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         Some(ReviewDecision::Approved)
     );
 
-    let initial_metrics = thread_store.get::<RecordingMetrics>().unwrap();
-    thread_store.insert(RecordingMetrics::default());
     observe_unscored_call(&score_progress, thread_store);
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            thread_store
-                .get::<RecordingMetrics>()
-                .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         None
     );
 
@@ -1629,93 +1400,8 @@ max_recent_non_user_entries = 8
         ScoreAuthorization::current(&test.codex, &Default::default()).await,
     );
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            thread_store
-                .get::<RecordingMetrics>()
-                .map(|metrics| metrics as Arc<dyn ExtensionMetrics>),
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         Some(ReviewDecision::Approved)
-    );
-
-    let samples = initial_metrics.classification_samples();
-    let classification_duration_ms = match &samples[9] {
-        RecordedMetric::Histogram(name, duration_ms, _)
-            if name == CLASSIFICATION_DURATION_METRIC =>
-        {
-            *duration_ms
-        }
-        sample => panic!("expected classification duration metric, got {sample:?}"),
-    };
-    assert_eq!(
-        samples,
-        [
-            ("total", 150),
-            ("input", 120),
-            ("cached_input", 40),
-            ("cache_write_input", 20),
-            ("non_cached_input", 80),
-            ("output", 30),
-            ("reasoning_output", 10),
-        ]
-        .into_iter()
-        .map(|(token_type, value)| {
-            RecordedMetric::Histogram(
-                CLASSIFICATION_TOKEN_USAGE_METRIC.to_owned(),
-                value,
-                vec![("token_type".to_owned(), token_type.to_owned())],
-            )
-        })
-        .chain([
-            RecordedMetric::Counter(
-                CLASSIFICATION_RISK_METRIC.to_owned(),
-                1,
-                vec![("risk_level".to_owned(), "high".to_owned())],
-            ),
-            RecordedMetric::Counter(
-                CLASSIFICATION_METRIC.to_owned(),
-                1,
-                vec![
-                    ("outcome".to_owned(), "success".to_owned()),
-                    ("context_mode".to_owned(), "thread_owned".to_owned())
-                ],
-            ),
-            RecordedMetric::Histogram(
-                CLASSIFICATION_DURATION_METRIC.to_owned(),
-                classification_duration_ms,
-                vec![
-                    ("outcome".to_owned(), "success".to_owned()),
-                    ("context_mode".to_owned(), "thread_owned".to_owned())
-                ],
-            ),
-        ])
-        .chain([
-            RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
-            fast_decision_metric("deferred", "elevated_risk"),
-            RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 0, vec![]),
-            fast_decision_metric("approved", "low_risk"),
-            RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 2, vec![]),
-            fast_decision_metric("approved", "low_risk"),
-        ])
-        .collect::<Vec<_>>()
-    );
-    let metrics = thread_store.get::<RecordingMetrics>().unwrap();
-    assert_eq!(
-        *metrics.0.lock().unwrap(),
-        vec![
-            RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 3, vec![]),
-            RecordedMetric::Counter(
-                REVIEW_FALLBACK_METRIC.to_owned(),
-                1,
-                vec![("fallback_reason".to_owned(), "score_lag".to_owned())],
-            ),
-            fast_decision_metric("deferred", "stale_score"),
-            RecordedMetric::Histogram(TOOL_CALL_LAG_METRIC.to_owned(), 2, vec![]),
-            fast_decision_metric("approved", "low_risk"),
-        ]
     );
 
     Ok(())
@@ -1952,13 +1638,7 @@ async fn contributor_uses_model_defaults_and_preserves_local_overrides() -> Resu
         },
     );
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None,
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         Some(ReviewDecision::Approved)
     );
 
@@ -2125,13 +1805,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         "risk scores should not be persisted unless explicitly enabled"
     );
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None,
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         None
     );
     set_cached_score(
@@ -2144,13 +1818,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         },
     );
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None,
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         None
     );
 
@@ -2164,13 +1832,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         },
     );
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None,
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         Some(ReviewDecision::Approved)
     );
 
@@ -2192,13 +1854,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
             ScoreAuthorization::current(&test.codex, &permissions).await,
         );
         assert_eq!(
-            cached_approval(
-                &registry,
-                thread_store,
-                "review action",
-                /*metrics*/ None
-            )
-            .await,
+            cached_approval(&registry, thread_store, "review action",).await,
             None
         );
     }
@@ -2214,13 +1870,7 @@ async fn contributor_samples_tool_calls_with_the_existing_luna_pool() -> Result<
         },
     );
     assert_eq!(
-        cached_approval(
-            &registry,
-            &disabled_thread_store,
-            "review action",
-            /*metrics*/ None
-        )
-        .await,
+        cached_approval(&registry, &disabled_thread_store, "review action",).await,
         None
     );
 
@@ -2334,7 +1984,6 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
-            extension_metrics: None,
             session_store: &session_store,
             thread_store,
         })
@@ -2379,7 +2028,6 @@ async fn contributor_skips_required_models_in_standard_scope() -> Result<()> {
             &registry,
             thread_store,
             r#"{"tool":"mcp_tool_call","server":"node_repl"}"#,
-            /*metrics*/ None,
         )
         .await,
         None
@@ -2472,13 +2120,7 @@ async fn cached_score_survives_compaction_and_internal_context_but_not_user_inpu
     // TurnComplete precedes active-turn cleanup; wait before injecting user input.
     ThreadIdle::wait(&test.codex).await;
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None,
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         Some(ReviewDecision::Approved),
     );
 
@@ -2494,13 +2136,7 @@ async fn cached_score_survives_compaction_and_internal_context_but_not_user_inpu
         }])
         .await?;
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         None,
     );
     Ok(())
@@ -2534,13 +2170,7 @@ async fn stale_review_context_blocks_cached_approval_without_changing_authorizat
     ] {
         seed_cached_score(&progress, store, /*index*/ 0, authorization);
         assert_eq!(
-            cached_approval(
-                &fixture.registry,
-                store,
-                "review action",
-                /*metrics*/ None
-            )
-            .await,
+            cached_approval(&fixture.registry, store, "review action",).await,
             expected,
         );
     }
@@ -2566,13 +2196,7 @@ async fn incompatible_compaction_blocks_cached_score_and_initial_cua_allowance()
         },
     );
     assert_eq!(
-        cached_approval(
-            &fixture.registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None
-        )
-        .await,
+        cached_approval(&fixture.registry, thread_store, "review action",).await,
         Some(ReviewDecision::Approved)
     );
     let authorization = fixture.test.codex.guardian_authorization_version().await;
@@ -2630,13 +2254,7 @@ async fn incompatible_compaction_blocks_cached_score_and_initial_cua_allowance()
             progress.observe_js_execution();
         }
         assert_eq!(
-            cached_approval(
-                &fixture.registry,
-                thread_store,
-                prompt,
-                /*metrics*/ None
-            )
-            .await,
+            cached_approval(&fixture.registry, thread_store, prompt,).await,
             None
         );
     }
@@ -2680,13 +2298,7 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
         },
     );
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None,
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         Some(ReviewDecision::Approved)
     );
 
@@ -2719,13 +2331,7 @@ async fn contributor_counts_failed_thread_lookups_toward_score_lag() -> Result<(
 
     assert_eq!(score_progress.inspect(/*call_id*/ None).lag, 1);
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None,
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         None
     );
 
@@ -3148,7 +2754,6 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
     let registry = builder.build();
     let session_store = ExtensionData::new("session-1");
     let thread_store = test.codex.thread_extension_data();
-    let metrics = Arc::new(RecordingMetrics::default());
     registry.thread_lifecycle_contributors()[0]
         .on_thread_start(ThreadStartInput {
             config: &config,
@@ -3156,7 +2761,6 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
-            extension_metrics: Some(metrics.clone()),
             session_store: &session_store,
             thread_store,
         })
@@ -3273,13 +2877,7 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
     // Raw injection did not attach producer provenance to the live checkpoint.
     // The sample's mock snapshot cannot make that live checkpoint safe for approval.
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None,
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         None,
     );
 
@@ -3327,13 +2925,7 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
         }
     );
     assert_eq!(
-        cached_approval(
-            &registry,
-            thread_store,
-            "review action",
-            /*metrics*/ None,
-        )
-        .await,
+        cached_approval(&registry, thread_store, "review action",).await,
         None
     );
     assert_eq!(
@@ -3341,14 +2933,6 @@ async fn assert_parent_compaction_reuse(parent_context_for_review: bool) -> Resu
         1,
         "an oversized latest compaction must bypass Luna rather than reuse stale context"
     );
-    assert!(metrics.0.lock().unwrap().iter().any(|sample| {
-        matches!(
-            sample,
-            RecordedMetric::Counter(name, 1, tags)
-                if name == CLASSIFICATION_METRIC
-                    && tags.contains(&("outcome".to_owned(), "failure".to_owned()))
-        )
-    }));
 
     Ok(())
 }
@@ -3407,7 +2991,6 @@ async fn cached_approval_discounts_only_its_own_unscored_wrapper() -> Result<()>
             &fixture.registry,
             store,
             &json!({"tool": "mcp_tool_call", "server": "example", "id": call_id}).to_string(),
-            /*metrics*/ None,
         )
         .await
     };
@@ -3475,7 +3058,6 @@ async fn cached_approval(
     registry: &codex_extension_api::ExtensionRegistry<Config>,
     store: &ExtensionData,
     action: &str,
-    metrics: Option<Arc<dyn ExtensionMetrics>>,
 ) -> Option<ReviewDecision> {
     let action = serde_json::from_str(action).unwrap_or(serde_json::Value::Null);
     let category = match review_scope(&action) {
@@ -3488,14 +3070,7 @@ async fn cached_approval(
         {
             codex_protocol::openai_models::GuardianScope::Shell
         }
-        None => {
-            super::super::metrics::record_fast_decision(
-                metrics.as_deref(),
-                "deferred",
-                "out_of_scope",
-            );
-            return None;
-        }
+        None => return None,
     };
     let input = codex_extension_api::ApprovalDecisionInput {
         permissions: Some(&Default::default()),
@@ -3510,7 +3085,6 @@ async fn cached_approval(
         require_guardian: false,
         require_fresh_review: false,
         full_access: false,
-        metrics,
         synchronous_reviewer: &CacheMiss,
     };
     match registry.decide_approval(&input).await {
@@ -3618,6 +3192,3 @@ async fn cached_score_publication_rejects_delayed_results_without_changing_cover
     assert!(!progress.inspect(Some("active-overflow")).oversized);
     Ok(())
 }
-
-#[path = "decisions_lifecycle_tests.rs"]
-mod decisions_lifecycle_tests;

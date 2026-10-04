@@ -12,7 +12,6 @@ use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
 use crate::shell::ShellType;
 use codex_apply_patch::CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR;
-use codex_core_plugins::PLUGIN_METRICS_OUTPUT_ENV_VAR;
 use codex_file_system::WindowsSandboxSelection;
 #[cfg(unix)]
 use codex_install_context::InstallContext;
@@ -355,7 +354,6 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         CODEX_VERSION_ENV_VAR,
         CODEX_PERMISSION_PROFILE_ENV_VAR,
         CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
-        PLUGIN_METRICS_OUTPUT_ENV_VAR,
     ] {
         if let Some(value) = env.get(key) {
             override_env.insert(key.to_string(), value.clone());
@@ -367,7 +365,6 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         &[
             CODEX_PERMISSION_PROFILE_ENV_VAR,
             CODEX_APPLY_PATCH_PRESERVE_LINE_ENDINGS_ENV_VAR,
-            PLUGIN_METRICS_OUTPUT_ENV_VAR,
         ],
     );
     let (proxy_captures, proxy_exports) = build_proxy_env_exports(env);

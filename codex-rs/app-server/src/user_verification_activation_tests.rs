@@ -15,18 +15,11 @@ async fn user_verification_initialize_owns_advertisement_and_eligibility() -> Re
     for (origin, name, opt_in, supported, expected) in [
         (ConnectionOrigin::InProcess, "codex-tui", true, true, true),
         (ConnectionOrigin::WebSocket, "codex-tui", true, true, false),
-        (
-            ConnectionOrigin::RemoteControl,
-            "codex-tui",
-            true,
-            true,
-            false,
-        ),
         (ConnectionOrigin::Stdio, "codex-tui", true, true, false),
         (ConnectionOrigin::InProcess, "other-ui", true, true, false),
         (ConnectionOrigin::InProcess, "codex-tui", false, true, false),
         (ConnectionOrigin::InProcess, "codex-tui", true, false, false),
-        (ConnectionOrigin::Stdio, "Codex Desktop", true, true, true),
+        (ConnectionOrigin::Stdio, "Codex Desktop", true, true, false),
         (
             ConnectionOrigin::InProcess,
             "Codex Desktop",
@@ -36,13 +29,6 @@ async fn user_verification_initialize_owns_advertisement_and_eligibility() -> Re
         ),
         (
             ConnectionOrigin::WebSocket,
-            "Codex Desktop",
-            true,
-            true,
-            false,
-        ),
-        (
-            ConnectionOrigin::RemoteControl,
             "Codex Desktop",
             true,
             true,

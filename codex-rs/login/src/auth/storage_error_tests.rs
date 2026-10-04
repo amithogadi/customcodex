@@ -3,6 +3,12 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
+enum Operation {
+    Load,
+    Save,
+    Delete,
+}
+
 #[test]
 fn secure_storage_errors_display_the_underlying_cause() -> anyhow::Result<()> {
     for kind in [
@@ -41,7 +47,6 @@ fn secure_storage_errors_display_the_underlying_cause() -> anyhow::Result<()> {
                     Operation::Load => storage.load().unwrap_err(),
                     Operation::Save => storage.save(&auth).unwrap_err(),
                     Operation::Delete => storage.delete().unwrap_err(),
-                    Operation::Cleanup | Operation::RefreshPersist => unreachable!(),
                 };
                 let message = error.to_string();
                 assert!(message.starts_with("failed to "), "{message}");

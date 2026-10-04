@@ -7,9 +7,6 @@ use codex_core::TurnInputRequest;
 use codex_core::config::ConfigBuilder;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::auth::AgentIdentityAuthPolicy;
-use codex_model_provider::AgentIdentitySessionFallback;
-use codex_model_provider::ProviderAuthScope;
 use codex_model_provider::create_model_provider;
 use codex_model_provider::test_support::seed_gateway_auth;
 use codex_model_provider_info::GatewayOAuthConfig;
@@ -202,15 +199,7 @@ delivery = { kind = "header", name = "x-gateway-auth" }
         error.to_string(),
         "failed to create provider OAuth HTTP client"
     );
-    let error = provider
-        .api_auth_for_scope(ProviderAuthScope {
-            agent_identity_policy: AgentIdentityAuthPolicy::JwtOnly,
-            session_source: SessionSource::Cli,
-            agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
-        })
-        .await
-        .err()
-        .unwrap();
+    let error = provider.api_auth_for_request().await.err().unwrap();
     assert_eq!(
         error.to_string(),
         "failed to create provider OAuth HTTP client"

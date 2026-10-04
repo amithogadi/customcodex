@@ -1,4 +1,3 @@
-use super::account::McpToolAccountError;
 use super::*;
 use crate::config::ConfigBuilder;
 use crate::config::ManagedFeatures;
@@ -93,85 +92,11 @@ fn approval_metadata(
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     }
 }
 
 fn approval_config(turn_context: &TurnContext) -> codex_mcp::McpConfig {
     (*mcp_config_for_test(&turn_context.config)).clone()
-}
-
-#[test_case::test_case(false, None, Ok(Some("default_link")); "catalog_account")]
-#[test_case::test_case(true, None, Err(McpToolAccountError::InvalidSelector); "required_selector_omitted")]
-#[test_case::test_case(true, Some(serde_json::json!(null)), Err(McpToolAccountError::InvalidSelector); "null_selector")]
-#[test_case::test_case(true, Some(serde_json::json!(42)), Err(McpToolAccountError::InvalidSelector); "invalid_selector")]
-#[test_case::test_case(true, Some(serde_json::json!(" ")), Err(McpToolAccountError::InvalidSelector); "empty_selector")]
-#[test_case::test_case(true, Some(serde_json::json!(" selected_link ")), Ok(Some(" selected_link ")); "opaque_selector")]
-#[test_case::test_case(false, Some(serde_json::json!("selected_link")), Ok(Some("default_link")); "unrelated_link_argument")]
-fn mcp_tool_metadata_resolves_advertised_account_selector(
-    requires_explicit_link_id: bool,
-    selected_link: Option<JsonValue>,
-    expected: Result<Option<&str>, McpToolAccountError>,
-) {
-    let tool_info = serde_json::from_value(serde_json::json!({
-        "server_name": CODEX_APPS_MCP_SERVER_NAME,
-        "tool_name": "events/create",
-        "tool_namespace": "calendar",
-        "connector_id": "calendar",
-        "tool": {
-            "name": "calendar/events/create",
-            "inputSchema": {},
-            "_meta": {
-                "link_id": "default_link",
-                "_codex_apps": {
-                    "requires_explicit_link_id": requires_explicit_link_id,
-                },
-            },
-        },
-    }))
-    .expect("tool info");
-    let arguments = selected_link.map(|link_id| serde_json::json!({ "link_id": link_id }));
-    assert_eq!(
-        mcp_tool_metadata(&tool_info, /*plugin_id*/ None, arguments.as_ref())
-            .map(|metadata| metadata.link_id),
-        expected.map(|link_id| link_id.map(str::to_owned)),
-    );
-}
-
-#[test_case::test_case(None, Ok(None); "no_tool_metadata_uses_legacy_fallback")]
-#[test_case::test_case(Some(serde_json::json!({})), Ok(None); "no_apps_metadata_uses_legacy_fallback")]
-#[test_case::test_case(Some(serde_json::json!({ "_codex_apps": {} })), Ok(None); "missing_selector_flag_uses_legacy_fallback")]
-#[test_case::test_case(Some(serde_json::json!({ "_codex_apps": { "requires_explicit_link_id": false } })), Ok(None); "false_selector_flag_uses_legacy_fallback")]
-#[test_case::test_case(Some(serde_json::json!({ "_codex_apps": { "requires_explicit_link_id": null } })), Ok(None); "null_selector_flag_uses_legacy_fallback")]
-#[test_case::test_case(Some(serde_json::json!({ "_codex_apps": { "requires_explicit_link_id": "true" } })), Ok(None); "string_true_does_not_require_selector")]
-#[test_case::test_case(Some(serde_json::json!({ "_codex_apps": { "requires_explicit_link_id": 1 } })), Ok(None); "numeric_one_does_not_require_selector")]
-#[test_case::test_case(Some(serde_json::json!({ "_codex_apps": [] })), Ok(None); "malformed_apps_metadata_uses_legacy_fallback")]
-#[test_case::test_case(Some(serde_json::json!({ "link_id": null })), Ok(None); "null_catalog_link_uses_legacy_fallback")]
-#[test_case::test_case(Some(serde_json::json!({ "link_id": 42, "_codex_apps": { "requires_explicit_link_id": false } })), Ok(None); "invalid_optional_catalog_link_uses_legacy_fallback")]
-#[test_case::test_case(Some(serde_json::json!({ "link_id": " ", "_codex_apps": { "requires_explicit_link_id": false } })), Ok(None); "empty_optional_catalog_link_uses_legacy_fallback")]
-#[test_case::test_case(Some(serde_json::json!({ "link_id": "default_link" })), Ok(Some("default_link")); "legacy_catalog_link_needs_no_selector_metadata")]
-fn mcp_tool_metadata_preserves_legacy_account_fallback(
-    meta: Option<JsonValue>,
-    expected: Result<Option<&str>, McpToolAccountError>,
-) {
-    let mut tool = serde_json::json!({ "name": "calendar/events/create", "inputSchema": {} });
-    if let Some(meta) = meta {
-        tool["_meta"] = meta;
-    }
-    let tool_info = serde_json::from_value(serde_json::json!({
-        "server_name": CODEX_APPS_MCP_SERVER_NAME,
-        "tool_name": "events/create",
-        "tool_namespace": "calendar",
-        "connector_id": "calendar",
-        "tool": tool,
-    }))
-    .expect("tool info");
-
-    assert_eq!(
-        mcp_tool_metadata(&tool_info, /*plugin_id*/ None, /*arguments*/ None)
-            .map(|metadata| metadata.link_id),
-        expected.map(|link_id| link_id.map(str::to_owned)),
-    );
 }
 
 #[test_case::test_case(serde_json::json!({}); "no_account_metadata")]
@@ -190,6 +115,27 @@ fn non_apps_tool_does_not_require_account_metadata(meta: JsonValue) {
             .map(|metadata| metadata.link_id),
         Ok(None),
     );
+}
+
+#[test]
+fn explicit_codex_apps_metadata_does_not_require_hosted_account_selection() {
+    let tool_info = serde_json::from_value(serde_json::json!({
+        "server_name": CODEX_APPS_MCP_SERVER_NAME,
+        "tool_name": "events/create",
+        "tool_namespace": "mcp__codex_apps",
+        "tool": {
+            "name": "events/create",
+            "inputSchema": {},
+            "_meta": {
+                "link_id": "untrusted-account",
+                "_codex_apps": { "requires_explicit_link_id": true }
+            }
+        }
+    }))
+    .expect("tool info");
+    let metadata = mcp_tool_metadata(&tool_info, None, None).expect("ordinary MCP metadata");
+    assert_eq!(metadata.link_id, None);
+    assert_eq!(metadata.connected_account_email, None);
 }
 
 fn mcp_turn_metadata_context(turn_context: &TurnContext) -> ExecutionMetadata<'_> {
@@ -363,20 +309,6 @@ fn mcp_app_resource_uri_reads_known_tool_meta_keys() {
 }
 
 #[test]
-fn openai_file_params_are_only_honored_for_codex_apps() {
-    let params = HashMap::from([("file".to_string(), Vec::new())]);
-
-    assert_eq!(
-        openai_file_input_optional_fields_for_server(CODEX_APPS_MCP_SERVER_NAME, &params),
-        Some(params.clone())
-    );
-    assert_eq!(
-        openai_file_input_optional_fields_for_server("minimaltest", &params),
-        None
-    );
-}
-
-#[test]
 fn approval_required_when_read_only_false_and_destructive() {
     let annotations = annotations(Some(false), Some(true), /*open_world*/ None);
     assert_eq!(requires_mcp_tool_approval(Some(&annotations)), true);
@@ -446,240 +378,6 @@ fn prompting_modes_do_not_allow_persistent_remember() {
             ReviewDecision::Approved
         );
     }
-}
-
-#[tokio::test]
-async fn mcp_tool_call_span_records_expected_fields() {
-    let buffer: &'static std::sync::Mutex<Vec<u8>> =
-        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
-    let subscriber = tracing_subscriber::fmt()
-        .with_level(true)
-        .with_ansi(false)
-        .with_max_level(Level::TRACE)
-        .with_span_events(FmtSpan::FULL)
-        .with_writer(MockWriter::new(buffer))
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
-
-    let (session, turn_context) = make_session_and_context().await;
-
-    async {}
-        .instrument(mcp_tool_call_span(
-            &session,
-            &turn_context,
-            McpToolCallSpanFields {
-                server_name: "rmcp",
-                tool_name: "echo",
-                call_id: "call-123",
-                server_origin: Some("https://example.com:8443/mcp"),
-                connector_id: Some("calendar"),
-                connector_name: Some("Calendar"),
-            },
-        ))
-        .await;
-
-    let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("utf8 logs");
-    assert!(
-        logs.contains("mcp.tools.call{otel.kind=\"client\"")
-            && logs.contains("rpc.system=\"jsonrpc\"")
-            && logs.contains("rpc.method=\"tools/call\"")
-            && logs.contains("mcp.server.name=\"rmcp\"")
-            && logs.contains("mcp.server.origin=\"https://example.com:8443/mcp\"")
-            && logs.contains("mcp.transport=\"streamable_http\"")
-            && logs.contains("mcp.connector.id=\"calendar\"")
-            && logs.contains("mcp.connector.name=\"Calendar\"")
-            && logs.contains("tool.name=\"echo\"")
-            && logs.contains("tool.call_id=\"call-123\"")
-            && logs.contains("server.address=\"example.com\"")
-            && logs.contains("server.port=8443")
-            && logs.contains("conversation.id=")
-            && logs.contains("session.id=")
-            && logs.contains("turn.id="),
-        "missing MCP tool span fields\nlogs:\n{logs}"
-    );
-}
-
-#[tokio::test]
-async fn mcp_tool_call_span_records_error_type_and_error_code() {
-    let buffer: &'static std::sync::Mutex<Vec<u8>> =
-        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
-    let subscriber = tracing_subscriber::fmt()
-        .with_level(true)
-        .with_ansi(false)
-        .with_max_level(Level::TRACE)
-        .with_span_events(FmtSpan::FULL)
-        .with_writer(MockWriter::new(buffer))
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
-
-    let (session, turn_context) = make_session_and_context().await;
-    let result = Ok(CallToolResult {
-        content: Vec::new(),
-        structured_content: Some(serde_json::json!({"error_code": "RATE_LIMITED"})),
-        is_error: Some(true),
-        meta: None,
-    });
-    let span = mcp_tool_call_span(
-        &session,
-        &turn_context,
-        McpToolCallSpanFields {
-            server_name: CODEX_APPS_MCP_SERVER_NAME,
-            tool_name: "calendar_search",
-            call_id: "call-123",
-            server_origin: Some("https://chatgpt.com/api/codex/ps/mcp"),
-            connector_id: Some("calendar"),
-            connector_name: Some("Calendar"),
-        },
-    );
-
-    async {
-        record_mcp_result_span_telemetry(&Span::current(), &result);
-    }
-    .instrument(span)
-    .await;
-
-    let logs = String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("utf8 logs");
-    assert!(
-        logs.contains("error.type=\"tool_result\"")
-            && logs.contains("codex.mcp.error.code=\"RATE_LIMITED\""),
-        "missing MCP tool error span fields\nlogs:\n{logs}"
-    );
-}
-
-async fn mcp_result_telemetry_span_logs(meta: Option<serde_json::Value>) -> String {
-    let buffer: &'static std::sync::Mutex<Vec<u8>> =
-        Box::leak(Box::new(std::sync::Mutex::new(Vec::new())));
-    let subscriber = tracing_subscriber::fmt()
-        .with_level(true)
-        .with_ansi(false)
-        .with_max_level(Level::TRACE)
-        .with_span_events(FmtSpan::FULL)
-        .with_writer(MockWriter::new(buffer))
-        .finish();
-    let _guard = tracing::subscriber::set_default(subscriber);
-
-    let (session, turn_context) = make_session_and_context().await;
-    let result = Ok(CallToolResult {
-        content: Vec::new(),
-        structured_content: None,
-        is_error: None,
-        meta,
-    });
-
-    {
-        let span = mcp_tool_call_span(
-            &session,
-            &turn_context,
-            McpToolCallSpanFields {
-                server_name: "rmcp",
-                tool_name: "echo",
-                call_id: "call-123",
-                server_origin: None,
-                connector_id: None,
-                connector_name: None,
-            },
-        );
-
-        async {
-            record_mcp_result_span_telemetry(&Span::current(), &result);
-        }
-        .instrument(span)
-        .await;
-    }
-
-    String::from_utf8(buffer.lock().expect("buffer lock").clone()).expect("utf8 logs")
-}
-
-#[tokio::test]
-async fn mcp_result_telemetry_records_allowlisted_span_fields() {
-    let logs = mcp_result_telemetry_span_logs(Some(serde_json::json!({
-        "codex/telemetry": {
-            "span": {
-                "target_id": "com.apple.reminders",
-                "did_trigger_server_user_flow": false,
-                "not_promoted_sentinel_key": "not_promoted_sentinel_value",
-            },
-        },
-    })))
-    .await;
-
-    assert!(
-        logs.contains("codex.mcp.target.id=\"com.apple.reminders\"")
-            && logs.contains("codex.mcp.server_user_flow.triggered=false"),
-        "missing MCP result telemetry span fields\nlogs:\n{logs}"
-    );
-    assert!(
-        !logs.contains("not_promoted_sentinel_key")
-            && !logs.contains("not_promoted_sentinel_value"),
-        "unknown MCP result telemetry keys should be ignored\nlogs:\n{logs}"
-    );
-}
-
-#[tokio::test]
-async fn mcp_result_telemetry_ignores_invalid_and_missing_values() {
-    let invalid_logs = mcp_result_telemetry_span_logs(Some(serde_json::json!({
-        "codex/telemetry": {
-            "span": {
-                "target_id": 123,
-                "did_trigger_server_user_flow": "false",
-            },
-        },
-    })))
-    .await;
-    assert!(
-        !invalid_logs.contains("codex.mcp.target.id=")
-            && !invalid_logs.contains("codex.mcp.server_user_flow.triggered="),
-        "invalid MCP result telemetry values should be ignored\nlogs:\n{invalid_logs}"
-    );
-
-    let missing_logs = mcp_result_telemetry_span_logs(Some(serde_json::json!({
-        "codex/telemetry": {},
-    })))
-    .await;
-    assert!(
-        !missing_logs.contains("codex.mcp.target.id=")
-            && !missing_logs.contains("codex.mcp.server_user_flow.triggered="),
-        "missing MCP result telemetry span object should be ignored\nlogs:\n{missing_logs}"
-    );
-
-    let no_meta_logs = mcp_result_telemetry_span_logs(/*meta*/ None).await;
-    assert!(
-        !no_meta_logs.contains("codex.mcp.target.id=")
-            && !no_meta_logs.contains("codex.mcp.server_user_flow.triggered="),
-        "missing MCP result metadata should be ignored\nlogs:\n{no_meta_logs}"
-    );
-}
-
-#[tokio::test]
-async fn mcp_result_telemetry_truncates_long_target_id() {
-    let truncated = "x".repeat(MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS);
-    let target_id = format!("{truncated}tail");
-    let logs = mcp_result_telemetry_span_logs(Some(serde_json::json!({
-        "codex/telemetry": {
-            "span": {
-                "target_id": target_id,
-            },
-        },
-    })))
-    .await;
-
-    assert!(
-        logs.contains(&format!("codex.mcp.target.id=\"{truncated}\"")) && !logs.contains("tail"),
-        "long MCP result telemetry target_id should be truncated\nlogs:\n{logs}"
-    );
-}
-
-#[test]
-fn truncates_strings_on_char_boundaries() {
-    let prefix = "á".repeat(MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS);
-    let value = format!("{prefix}tail");
-    let truncated = truncate_str_to_char_boundary(&value, MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS);
-
-    assert_eq!(truncated, prefix);
-    assert_eq!(
-        truncate_str_to_char_boundary("short", MCP_RESULT_TELEMETRY_TARGET_ID_MAX_CHARS),
-        "short"
-    );
 }
 
 #[test]
@@ -781,7 +479,7 @@ fn custom_mcp_tool_question_mentions_server_name() {
         /*question_override*/ None,
     );
 
-    assert_eq!(question.header, "Approve app tool call?");
+    assert_eq!(question.header, "Approve MCP tool call?");
     assert_eq!(
         question.question,
         "Allow the custom_server MCP server to run tool \"run_action\"?"
@@ -811,7 +509,7 @@ fn codex_apps_tool_question_uses_fallback_app_label() {
 
     assert_eq!(
         question.question,
-        "Allow this app to run tool \"run_action\"?"
+        "Allow the codex_apps MCP server to run tool \"run_action\"?"
     );
 }
 
@@ -1481,7 +1179,6 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             .cloned()
             .expect("_codex_apps metadata should be an object"),
         ),
-        openai_file_input_optional_fields: None,
     };
 
     assert_eq!(
@@ -1525,225 +1222,6 @@ async fn codex_apps_tool_call_request_meta_includes_call_id_without_existing_cod
                 "call_id": "call_abc123xyz789",
             },
         }))
-    );
-}
-
-fn codex_apps_auth_failure_result() -> CallToolResult {
-    CallToolResult {
-        content: vec![serde_json::json!({
-            "type": "text",
-            "text": "Connector reauthentication required",
-        })],
-        structured_content: None,
-        is_error: Some(true),
-        meta: Some(serde_json::json!({
-            MCP_TOOL_CODEX_APPS_META_KEY: {
-                "connector_auth_failure": {
-                    "is_auth_failure": true,
-                    "auth_reason": "reauthentication_required",
-                    "connector_id": "connector_calendar",
-                    "connector_name": "Untrusted Calendar",
-                    "link_id": "link_123",
-                    "error_code": "UNAUTHORIZED",
-                    "error_http_status_code": 401,
-                    "error_action": "TRIGGER_REAUTHENTICATION",
-                },
-            },
-        })),
-    }
-}
-
-fn codex_apps_auth_failure_metadata() -> McpToolApprovalMetadata {
-    approval_metadata(
-        Some("connector_calendar"),
-        Some("Google Calendar"),
-        Some("Manage events and schedules."),
-        Some("Create Event"),
-        Some("Create a calendar event."),
-    )
-}
-
-#[test]
-fn codex_apps_auth_classification_requires_the_trusted_server_and_connector() {
-    let result = codex_apps_auth_failure_result();
-
-    assert_eq!(
-        mcp_tool_call_auth_elicitation_type(
-            "untrusted_mcp_server",
-            Some("connector_calendar"),
-            &result,
-        ),
-        None
-    );
-    assert_eq!(
-        mcp_tool_call_auth_elicitation_type(
-            CODEX_APPS_MCP_SERVER_NAME,
-            Some("connector_drive"),
-            &result,
-        ),
-        None
-    );
-}
-
-#[tokio::test]
-async fn codex_apps_auth_elicitation_feature_disabled_returns_original_result() {
-    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
-    let mut features = Features::with_defaults();
-    features.disable(Feature::AuthElicitation);
-    let mutable_turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    Arc::make_mut(&mut mutable_turn_context.config).features = ManagedFeatures::from(features);
-    let result = codex_apps_auth_failure_result();
-    let metadata = codex_apps_auth_failure_metadata();
-
-    let returned = maybe_request_codex_apps_auth_elicitation(
-        &session,
-        &turn_context,
-        turn_context.approval_policy(),
-        "call_123",
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&metadata),
-        result.clone(),
-    )
-    .await;
-
-    assert_eq!(returned, result);
-    assert!(rx_event.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn codex_apps_auth_elicitation_disallowed_by_policy_returns_original_result() {
-    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
-    let mut features = Features::with_defaults();
-    features.enable(Feature::AuthElicitation);
-    let mutable_turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    Arc::make_mut(&mut mutable_turn_context.config).features = ManagedFeatures::from(features);
-    let result = codex_apps_auth_failure_result();
-    let metadata = codex_apps_auth_failure_metadata();
-
-    let returned = maybe_request_codex_apps_auth_elicitation(
-        &session,
-        &turn_context,
-        AskForApproval::Never,
-        "call_123",
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&metadata),
-        result.clone(),
-    )
-    .await;
-
-    assert_eq!(returned, result);
-    assert!(rx_event.try_recv().is_err());
-}
-
-#[tokio::test]
-async fn codex_apps_auth_elicitation_granular_mcp_disabled_returns_original_result() {
-    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
-    let mut features = Features::with_defaults();
-    features.enable(Feature::AuthElicitation);
-    let mutable_turn_context = Arc::get_mut(&mut turn_context).expect("single turn context ref");
-    Arc::make_mut(&mut mutable_turn_context.config).features = ManagedFeatures::from(features);
-    Arc::make_mut(&mut mutable_turn_context.config)
-        .permissions
-        .approval_policy
-        .set(AskForApproval::Granular(GranularApprovalConfig {
-            sandbox_approval: true,
-            rules: true,
-            skill_approval: true,
-            request_permissions: true,
-            mcp_elicitations: false,
-        }))
-        .expect("test setup should allow updating approval policy");
-    let result = codex_apps_auth_failure_result();
-    let metadata = codex_apps_auth_failure_metadata();
-
-    let returned = maybe_request_codex_apps_auth_elicitation(
-        &session,
-        &turn_context,
-        turn_context.approval_policy(),
-        "call_123",
-        CODEX_APPS_MCP_SERVER_NAME,
-        Some(&metadata),
-        result.clone(),
-    )
-    .await;
-
-    assert_eq!(returned, result);
-    assert!(rx_event.try_recv().is_err());
-}
-
-#[test_case::test_case(SessionSource::Exec; "root")]
-#[test_case::test_case(SessionSource::SubAgent(SubAgentSource::Review); "subagent")]
-#[test_case::test_case(SessionSource::Internal(InternalSessionSource::Guardian); "guardian")]
-#[tokio::test]
-async fn codex_apps_auth_elicitation_enabled_by_default_requests_elicitation(
-    source: SessionSource,
-) {
-    let (session, mut turn_context, rx_event) = make_session_and_context_with_rx().await;
-    Arc::get_mut(&mut turn_context)
-        .expect("single turn context ref")
-        .session_source = source;
-    *session.active_turn.lock().await = Some(ActiveTurn::default());
-    let result = codex_apps_auth_failure_result();
-    let metadata = codex_apps_auth_failure_metadata();
-
-    let request_task = tokio::spawn({
-        let session = Arc::clone(&session);
-        let turn_context = Arc::clone(&turn_context);
-        async move {
-            maybe_request_codex_apps_auth_elicitation(
-                &session,
-                &turn_context,
-                turn_context.approval_policy(),
-                "call_123",
-                CODEX_APPS_MCP_SERVER_NAME,
-                Some(&metadata),
-                result,
-            )
-            .await
-        }
-    });
-
-    let request = loop {
-        let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx_event.recv())
-            .await
-            .expect("elicitation event timed out")
-            .expect("expected elicitation event");
-        if let EventMsg::ElicitationRequest(request) = event.msg {
-            break request;
-        }
-    };
-    assert_eq!(request.server_name, CODEX_APPS_MCP_SERVER_NAME);
-    assert_eq!(
-        request.id,
-        codex_protocol::mcp::RequestId::String("codex_apps_auth_call_123".to_string())
-    );
-    assert!(matches!(
-        request.request,
-        codex_protocol::approvals::ElicitationRequest::Url { .. }
-    ));
-
-    session
-        .resolve_elicitation(
-            CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            rmcp::model::RequestId::String("codex_apps_auth_call_123".into()),
-            ElicitationResponse {
-                action: ElicitationAction::Accept,
-                content: None,
-                meta: None,
-            },
-        )
-        .await
-        .expect("elicitation should resolve");
-    let returned = tokio::time::timeout(std::time::Duration::from_secs(1), request_task)
-        .await
-        .expect("auth elicitation task timed out")
-        .expect("auth elicitation task failed");
-    assert_eq!(
-        returned.content,
-        vec![serde_json::json!({
-            "type": "text",
-            "text": "Authentication for Google Calendar was requested and accepted. Retry this tool call now.",
-        })]
     );
 }
 
@@ -1932,7 +1410,6 @@ fn guardian_mcp_review_request_includes_annotations_when_present() {
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     };
 
     let request = build_guardian_mcp_tool_review_request("call-1", &invocation, Some(&metadata));
@@ -2133,194 +1610,6 @@ fn accepted_elicitation_without_content_defaults_to_accept() {
 }
 
 #[tokio::test]
-async fn dispatched_mcp_approval_with_closed_response_is_classified_as_approval() {
-    use wiremock::matchers::method;
-    use wiremock::matchers::path;
-
-    let server = wiremock::MockServer::start().await;
-    wiremock::Mock::given(method("POST"))
-        .and(path("/codex/analytics-events/events"))
-        .respond_with(wiremock::ResponseTemplate::new(200))
-        .mount(&server)
-        .await;
-
-    let (mut session, turn_context, rx_event) = make_session_and_context_with_rx().await;
-    let client = codex_analytics::AnalyticsEventsClient::new(
-        crate::test_support::auth_manager_from_auth(
-            codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-        ),
-        server.uri(),
-        /*analytics_enabled*/ Some(true),
-    );
-    Arc::get_mut(&mut session)
-        .expect("session should be uniquely owned")
-        .services
-        .analytics_events_client = client.clone();
-    *session.active_turn.lock().await = Some(ActiveTurn::default());
-
-    let call_id = "modern-missing-response";
-    let thread_id = session.thread_id.to_string();
-    let turn_id = turn_context.sub_id.clone();
-    client.track_initialize(
-        /*connection_id*/ 1,
-        app_server_protocol::InitializeParams::default(),
-        "test-client".to_string(),
-        codex_analytics::AppServerRpcTransport::Stdio,
-    );
-    let response = serde_json::from_value(serde_json::json!({
-        "thread": {
-            "id": thread_id, "sessionId": thread_id, "preview": "", "ephemeral": false,
-            "modelProvider": "openai", "createdAt": 1, "updatedAt": 1,
-            "status": {"type": "idle"}, "cwd": &turn_context.config.cwd,
-            "cliVersion": "0.0.0", "source": "exec", "turns": [],
-        },
-        "model": "test-model", "modelProvider": "openai", "cwd": &turn_context.config.cwd,
-        "approvalPolicy": "on-request", "approvalsReviewer": "user",
-        "sandbox": {"type": "dangerFullAccess"},
-    }))
-    .expect("thread-start response should deserialize");
-    client.track_response(
-        /*connection_id*/ 1,
-        app_server_protocol::RequestId::Integer(1),
-        &app_server_protocol::ClientResponsePayload::ThreadStart(response),
-    );
-    client.track_notification(&app_server_protocol::ServerNotification::TurnStarted(
-        serde_json::from_value(serde_json::json!({
-            "threadId": thread_id,
-            "turn": {"id": turn_id, "items": [], "status": "inProgress"},
-        }))
-        .expect("turn-started notification should deserialize"),
-    ));
-    let mut item = serde_json::json!({
-        "type": "mcpToolCall", "id": call_id, "server": "calendar", "tool": "send",
-        "status": "inProgress", "arguments": {},
-        "appContext": {"connectorId": "calendar"},
-    });
-    client.track_notification(&app_server_protocol::ServerNotification::ItemStarted(
-        serde_json::from_value(serde_json::json!({
-            "threadId": thread_id, "turnId": turn_id, "startedAtMs": 1, "item": item,
-        }))
-        .expect("item-started notification should deserialize"),
-    ));
-
-    let action = ApprovalAction::McpToolCall {
-        id: call_id.to_string(),
-        server: "calendar".to_string(),
-        tool_name: "send".to_string(),
-        arguments: None,
-        connector_id: Some("calendar".to_string()),
-        connector_name: None,
-        connector_description: None,
-        connected_account_email: None,
-        tool_title: None,
-        tool_description: None,
-        annotations: None,
-        hook_tool_name: HookToolName::new("mcp__calendar__send"),
-        approval_policy: AskForApproval::OnRequest,
-        reviewer: ApprovalsReviewer::User,
-        approval_mode: AppToolApproval::Auto,
-        allow_session_remember: true,
-        allow_persistent_approval: true,
-    };
-    let approval = tokio::spawn({
-        let session = Arc::clone(&session);
-        let turn_context = Arc::clone(&turn_context);
-        async move { request_mcp_tool_user_approval(&session, &turn_context, call_id, &action).await }
-    });
-    let event = tokio::time::timeout(std::time::Duration::from_secs(1), rx_event.recv())
-        .await
-        .expect("approval request should be dispatched")
-        .expect("approval request should be received");
-    assert!(matches!(event.msg, EventMsg::ElicitationRequest(_)));
-    *session.active_turn.lock().await = None;
-    assert_eq!(
-        approval.await.expect("approval task should complete"),
-        ReviewDecision::Abort
-    );
-
-    item["status"] = serde_json::json!("failed");
-    client.track_notification(&app_server_protocol::ServerNotification::ItemCompleted(
-        serde_json::from_value(serde_json::json!({
-            "threadId": thread_id, "turnId": turn_id, "completedAtMs": 2, "item": item,
-        }))
-        .expect("item-completed notification should deserialize"),
-    ));
-    client.flush().await;
-    let events = server
-        .received_requests()
-        .await
-        .expect("analytics requests should be recorded")
-        .into_iter()
-        .flat_map(|request| {
-            serde_json::from_slice::<serde_json::Value>(&request.body)
-                .expect("analytics request should deserialize")["events"]
-                .as_array()
-                .expect("analytics events should be an array")
-                .clone()
-        })
-        .collect::<Vec<_>>();
-    let mcp_events = events
-        .iter()
-        .filter(|event| {
-            event["event_type"] == "codex_mcp_tool_call_event"
-                && event["event_params"]["item_id"] == call_id
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(mcp_events.len(), 1);
-    assert_eq!(
-        mcp_events[0]["event_params"]["elicitation_type"],
-        "approval"
-    );
-}
-
-#[tokio::test]
-async fn persist_codex_app_tool_approval_writes_tool_override() {
-    let tmp = tempdir().expect("tempdir");
-    let config = ConfigBuilder::default()
-        .codex_home(tmp.path().to_path_buf())
-        .build()
-        .await
-        .expect("load config");
-
-    persist_codex_app_tool_approval(&config, "calendar", "calendar/list_events")
-        .await
-        .expect("persist approval");
-
-    let contents = std::fs::read_to_string(tmp.path().join(CONFIG_TOML_FILE)).expect("read config");
-    let parsed: ConfigToml = toml::from_str(&contents).expect("parse config");
-
-    assert_eq!(
-        parsed.apps,
-        Some(AppsConfigToml {
-            default: None,
-            apps: HashMap::from([(
-                "calendar".to_string(),
-                AppConfig {
-                    enabled: true,
-                    omit_tools_from: None,
-                    approvals_reviewer: None,
-                    destructive_enabled: None,
-                    open_world_enabled: None,
-                    default_tools_approval_mode: None,
-                    default_tools_enabled: None,
-                    tools: Some(AppToolsConfig {
-                        tools: HashMap::from([(
-                            "calendar/list_events".to_string(),
-                            AppToolConfig {
-                                enabled: None,
-                                approval_mode: Some(AppToolApproval::Approve),
-                            },
-                        )]),
-                    }),
-                    links: None,
-                },
-            )]),
-        })
-    );
-    assert!(contents.contains("[apps.calendar.tools.\"calendar/list_events\"]"));
-}
-
-#[tokio::test]
 async fn persist_custom_mcp_tool_approval_writes_tool_override() {
     let tmp = tempdir().expect("tempdir");
     std::fs::write(
@@ -2487,54 +1776,17 @@ approval_mode = "approve"
 }
 
 #[tokio::test]
-async fn maybe_persist_mcp_tool_approval_reloads_session_config() {
-    let (session, turn_context) = make_session_and_context().await;
-    let codex_home = session.codex_home().await;
-    std::fs::create_dir_all(&codex_home).expect("create codex home");
-    let key = McpToolApprovalKey {
-        server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
-        plugin_id: None,
-        connector_id: Some("calendar".to_string()),
-        link_id: None,
-        tool_name: "calendar/list_events".to_string(),
-    };
-
-    maybe_persist_mcp_tool_approval(&session, &turn_context, key.clone()).await;
-
-    let config = session.get_config().await;
-    let apps_toml = config
-        .config_layer_stack
-        .effective_config()
-        .as_table()
-        .and_then(|table| table.get("apps"))
-        .cloned()
-        .expect("apps table");
-    let apps = AppsConfigToml::deserialize(apps_toml).expect("deserialize apps config");
-    let tool = apps
-        .apps
-        .get("calendar")
-        .and_then(|app| app.tools.as_ref())
-        .and_then(|tools| tools.tools.get("calendar/list_events"))
-        .expect("calendar/list_events tool config exists");
-
-    assert_eq!(
-        tool,
-        &AppToolConfig {
-            enabled: None,
-            approval_mode: Some(AppToolApproval::Approve),
-        }
-    );
-    assert_eq!(mcp_tool_approval_is_remembered(&session, &key).await, true);
-}
-
-#[tokio::test]
-async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_server() {
+#[test_case::test_case("docs"; "ordinary_server")]
+#[test_case::test_case("codex_apps"; "formerly_reserved_name")]
+async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_server(
+    server_name: &str,
+) {
     let (session, mut turn_context) = make_session_and_context().await;
     let codex_home = session.codex_home().await;
     std::fs::create_dir_all(&codex_home).expect("create codex home");
     std::fs::write(
         codex_home.join(CONFIG_TOML_FILE),
-        "[mcp_servers.docs]\ncommand = \"docs-server\"\n",
+        format!("[mcp_servers.{server_name}]\ncommand = \"docs-server\"\n"),
     )
     .expect("seed config");
     let config = ConfigBuilder::without_managed_config_for_tests()
@@ -2544,7 +1796,7 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
         .expect("load config");
     turn_context.config = Arc::new(config);
     let key = McpToolApprovalKey {
-        server: "docs".to_string(),
+        server: server_name.to_string(),
         plugin_id: None,
         connector_id: None,
         link_id: None,
@@ -2564,7 +1816,7 @@ async fn maybe_persist_mcp_tool_approval_reloads_session_config_for_custom_serve
     let mcp_servers = HashMap::<String, McpServerConfig>::deserialize(mcp_servers_toml)
         .expect("deserialize MCP servers");
     let tool = mcp_servers
-        .get("docs")
+        .get(server_name)
         .and_then(|server| server.tools.get("search"))
         .expect("docs/search tool config exists");
 
@@ -2698,7 +1950,6 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -2780,7 +2031,6 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -2844,7 +2094,6 @@ async fn permission_request_hook_allows_mcp_tool_call() {
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     };
 
     let decision = maybe_request_mcp_tool_approval(
@@ -2996,7 +2245,6 @@ async fn permission_request_hook_runs_after_remembered_mcp_approval() {
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     };
     let remembered_key =
         session_mcp_tool_approval_key(&invocation, Some(&metadata), AppToolApproval::Auto)
@@ -3091,7 +2339,6 @@ async fn strict_auto_review_forces_guardian_for_mcp_policy_skip() {
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     };
     let mut captured_mcp_config = approval_config(&turn_context);
     captured_mcp_config
@@ -3177,7 +2424,6 @@ async fn assert_mcp_user_approval_persistence(
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     };
 
     let approval_task = tokio::spawn({
@@ -3264,7 +2510,6 @@ async fn prompt_mode_waits_for_approval_when_annotations_do_not_require_approval
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     };
 
     let mut approval_task = {
@@ -3330,7 +2575,6 @@ async fn full_access_mode_skips_mcp_tool_approval_for_all_approval_modes() {
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     };
 
     for approval_mode in [
@@ -3390,7 +2634,6 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
         mcp_app_resource_uri: None,
         mcp_app_ui: None,
         codex_apps_meta: None,
-        openai_file_input_optional_fields: None,
     };
 
     for approval_policy in [

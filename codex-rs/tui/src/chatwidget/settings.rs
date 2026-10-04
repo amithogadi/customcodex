@@ -132,21 +132,6 @@ impl ChatWidget {
                 self.update_collaboration_mode_indicator();
             }
         }
-        if feature == Feature::RealtimeConversation && !enabled {
-            self.realtime_conversation_available_for_thread = false;
-            self.bottom_pane
-                .set_voice_command_enabled(/*enabled*/ false);
-            self.stop_realtime_conversation();
-        }
-        if feature == Feature::RealtimeConversation
-            && enabled
-            && !self.realtime_conversation_available_for_thread
-        {
-            self.add_info_message(
-                "Voice conversations will be available in new threads.".into(),
-                /*hint*/ None,
-            );
-        }
         if feature == Feature::MentionsV2 {
             self.sync_mentions_v2_enabled();
         }
@@ -213,13 +198,6 @@ impl ChatWidget {
         self.model_catalog.clone()
     }
 
-    pub(crate) fn on_account_email_loaded(&mut self, current_email: Option<String>) {
-        if let Some(StatusAccountDisplay::ChatGpt { email, .. }) = &mut self.status_account_display
-        {
-            *email = current_email;
-        }
-    }
-
     pub(crate) fn current_plan_type(&self) -> Option<PlanType> {
         self.plan_type
     }
@@ -228,32 +206,25 @@ impl ChatWidget {
         self.has_chatgpt_account
     }
 
-    pub(crate) fn has_codex_backend_auth(&self) -> bool {
-        self.has_codex_backend_auth
-    }
-
     pub(crate) fn update_account_state(
         &mut self,
         status_account_display: Option<StatusAccountDisplay>,
         plan_type: Option<PlanType>,
         has_chatgpt_account: bool,
-        has_codex_backend_auth: bool,
     ) {
         // Account-update notifications are the identity boundary. The visible account fields can
         // be identical across two accounts, so always invalidate account-scoped requests and data.
         self.model_popup_request_id = None;
         self.invalidate_permission_discovery();
         self.permission_discovery = None;
-        self.invalidate_connector_scope();
-        self.clear_pending_rate_limit_reset_requests();
         self.clear_backend_banner();
         self.luna_reserve_notice_account_id = None;
         self.automatic_model_switch_state = backend_banners::AutomaticModelSwitchState::default();
         self.input_queue.rate_limit_recovery_pending = false;
-        self.add_credits_nudge_email_in_flight = None;
         self.codex_rate_limit_reached_type = None;
         self.codex_spend_control_reached = None;
         self.rate_limit_warnings = RateLimitWarningState::default();
+        self.rate_limit_snapshots_by_limit_id.clear();
         self.usage_notice_state = usage_notice::UsageNoticeState::default();
         self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
         self.bottom_pane
@@ -266,21 +237,11 @@ impl ChatWidget {
         if had_refreshing_status_outputs {
             self.request_redraw();
         }
-        self.status_line_workspace_headline = None;
-        self.status_line_workspace_headline_pending_request_id = None;
-        self.status_line_workspace_headline_last_requested_at = None;
-        self.status_line_workspace_messages_disabled = false;
-        self.clear_thread_usage_state();
+
         self.status_account_display = status_account_display;
         self.plan_type = plan_type;
         self.has_chatgpt_account = has_chatgpt_account;
         self.set_daybreak_enabled(self.daybreak_enabled);
-        self.has_codex_backend_auth = has_codex_backend_auth;
-        self.bottom_pane
-            .set_connectors_enabled(self.connectors_enabled());
-        self.refresh_connector_mentions(/*force_refresh*/ false);
-        self.bottom_pane
-            .set_token_activity_command_enabled(has_codex_backend_auth);
         self.refresh_status_surfaces();
     }
 
@@ -547,9 +508,7 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(AppEvent::RefreshWindowsSandbox { thread_id });
             }
-            self.invalidate_connector_scope();
             self.refresh_skills_for_current_cwd(/*force_reload*/ true);
-            self.refresh_connector_mentions(/*force_refresh*/ false);
         }
         self.refresh_plugin_mentions();
         self.request_redraw();

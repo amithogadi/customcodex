@@ -45,7 +45,6 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use codex_otel::StatsigMetricsSettings;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -121,8 +120,6 @@ struct Payload {
     proxy_ports: Vec<u16>,
     #[serde(default)]
     allow_local_binding: bool,
-    #[serde(default)]
-    otel: Option<StatsigMetricsSettings>,
     real_user: String,
     #[serde(default)]
     user_profile: Option<PathBuf>,
@@ -764,14 +761,10 @@ fn provision_sandbox(payload: &Payload, log: &mut dyn Write, sbx_dir: &Path) -> 
     })?;
     let offline_sid_str = string_from_sid_bytes(&offline_sid).map_err(anyhow::Error::msg)?;
     configure_offline_sandbox_network(payload, &offline_sid_str, log)?;
-    let wfp_result = install_wfp_filters(
-        &payload.codex_home,
-        &payload.offline_username,
-        payload.otel.as_ref(),
-        |message| {
+    let wfp_result =
+        install_wfp_filters(&payload.codex_home, &payload.offline_username, |message| {
             let _ = log_line(log, message);
-        },
-    );
+        });
     if repairing_disabled_accounts {
         // Ordinary setup keeps its best-effort WFP behavior. Recovery must not reopen logons
         // after cleanup removed protections unless restoring those protections succeeded.
@@ -1241,7 +1234,6 @@ mod tests {
     use crate::path_mask_allows;
     use crate::path_write_aces_need_refresh;
     use crate::workspace_write_cap_sid_for_root;
-    use codex_otel::StatsigMetricsSettings;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::fs;
@@ -1264,13 +1256,6 @@ mod tests {
     }
 
     #[test]
-    fn payload_defaults_otel_absent() {
-        let payload: Payload = serde_json::from_value(payload_json()).expect("payload");
-
-        assert_eq!(payload.otel, None);
-    }
-
-    #[test]
     fn payload_accepts_provision_only_mode() {
         let mut payload = payload_json();
         payload["mode"] = json!("provision-only");
@@ -1286,22 +1271,6 @@ mod tests {
         let payload: Payload = serde_json::from_value(payload).expect("payload");
 
         assert_eq!(payload.mode, super::SetupMode::InteractiveProvision);
-    }
-
-    #[test]
-    fn payload_accepts_otel_settings() {
-        let mut payload = payload_json();
-        payload["otel"] = json!({
-            "environment": "prod",
-        });
-        let payload: Payload = serde_json::from_value(payload).expect("payload");
-
-        assert_eq!(
-            payload.otel,
-            Some(StatsigMetricsSettings {
-                environment: "prod".to_string(),
-            })
-        );
     }
 
     #[test]

@@ -6,7 +6,6 @@ use std::sync::atomic::Ordering;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_exec_server_protocol::RequestId;
 use codex_http_client::HttpClientFactory;
-use opentelemetry::trace::SpanContext;
 use serde_json::to_value;
 use std::collections::HashSet;
 use tokio::sync::Mutex;
@@ -17,6 +16,7 @@ use crate::ExecServerRuntimeOptions;
 use crate::client::http_client::PendingRouteAwareHttpBodyStream;
 use crate::client::http_client::RouteAwareHttpClient;
 use crate::client::http_client::RouteAwareHttpRequestRunner;
+use crate::connection_metadata::ExecutorRegistration;
 use crate::environment_config::ReadEnvironmentConfigError;
 use crate::environment_config::read_environment_config;
 use crate::protocol::CapabilityRootsDiscoverParams;
@@ -74,7 +74,6 @@ use crate::server::build_identity::local_environment_info;
 use crate::server::file_system_handler::FileSystemHandler;
 use crate::server::session_registry::SessionHandle;
 use crate::server::session_registry::SessionRegistry;
-use crate::telemetry::ExecutorRegistration;
 
 pub(crate) struct ExecServerHandler {
     pub(super) executor_registration: Option<Arc<ExecutorRegistration>>,
@@ -180,18 +179,13 @@ impl ExecServerHandler {
         Ok(())
     }
 
-    pub(crate) async fn exec(
-        &self,
-        params: ExecParams,
-        launch_context: Option<SpanContext>,
-    ) -> Result<ExecResponse, JSONRPCErrorError> {
+    pub(crate) async fn exec(&self, params: ExecParams) -> Result<ExecResponse, JSONRPCErrorError> {
         let session = self.require_initialized_for("exec")?;
         session
             .process()
             .exec(
                 params,
-                crate::process_telemetry::ProcessTelemetry {
-                    launch_context,
+                crate::process_log::ProcessLogContext {
                     executor_registration: self.executor_registration.clone(),
                     ..Default::default()
                 },
@@ -298,7 +292,7 @@ impl ExecServerHandler {
         // This response bypasses the dispatcher; record it before body-stream setup.
         tracing::event!(
             name: "codex.exec_server.response_enqueued",
-            target: "codex_otel.trace_safe",
+            target: "codex_exec_server",
             tracing::Level::INFO,
             event.name = "codex.exec_server.response_enqueued",
             rpc.method = HTTP_REQUEST_METHOD,

@@ -625,8 +625,5 @@ fn secrets_keyring_auth_storage_delete_removes_legacy_direct_keyring_entry() -> 
     Ok(())
 }
 
-#[path = "storage_policy_tests.rs"]
-mod policy;
-
 #[path = "storage_error_tests.rs"]
 mod errors;

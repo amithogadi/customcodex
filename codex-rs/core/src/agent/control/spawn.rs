@@ -1,7 +1,5 @@
 use super::residency::is_v2_resident_session_source;
 use super::spawn_guard::PendingSpawn;
-use super::spawn_telemetry::SpawnMeasurements;
-use super::spawn_telemetry::record_spawn_success;
 use super::*;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::role::apply_role_to_config;
@@ -34,20 +32,12 @@ use codex_thread_store::PersistContext;
 use codex_utils_path_uri::PathUri;
 use futures::StreamExt;
 use futures::stream;
-use std::time::Duration;
-use std::time::Instant;
 
 const AGENT_NAMES: &str = include_str!("../../../assets/agent/agent_names.txt");
 
 struct SpawnAgentThreadInheritance {
     environments: Option<TurnEnvironmentSnapshot>,
     exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
-}
-
-struct SpawnedThreadResult {
-    new_thread: crate::thread_manager::NewThread,
-    fork_context: Option<Duration>,
-    child_create: Duration,
 }
 
 /// Initial input delivered after a spawned agent acquires execution capacity.
@@ -641,7 +631,6 @@ impl LocalAgentControl {
         options: SpawnAgentOptions,
     ) -> CodexResult<(LiveAgent, ThreadConfigSnapshot)> {
         let membership = self.runtime.admit_start()?;
-        let spawn_started_at = Instant::now();
         let state = self.runtime.upgrade()?;
         let multi_agent_version = state
             .effective_multi_agent_version_for_spawn(
@@ -652,7 +641,6 @@ impl LocalAgentControl {
                 &config,
             )
             .await;
-        let product_sku = config.apps_mcp_product_sku.clone();
         if let Some(session_source) = session_source.as_ref() {
             self.ensure_execution_capacity(multi_agent_version, session_source)?;
         }
@@ -661,8 +649,7 @@ impl LocalAgentControl {
             && session_source
                 .as_ref()
                 .is_some_and(is_v2_resident_session_source);
-        let (residency_slot, residency_reservation) = if spawn_uses_v2_residency {
-            let residency_reservation_started_at = Instant::now();
+        let residency_slot = if spawn_uses_v2_residency {
             let residency_slot = self
                 .reserve_v2_residency_slot(
                     &state,
@@ -671,12 +658,9 @@ impl LocalAgentControl {
                     /*protected_thread_id*/ None,
                 )
                 .await?;
-            (
-                Some(residency_slot),
-                Some(residency_reservation_started_at.elapsed()),
-            )
+            Some(residency_slot)
         } else {
-            (None, None)
+            None
         };
         let reservation_max_threads = if spawn_uses_v2_residency {
             None
@@ -723,11 +707,7 @@ impl LocalAgentControl {
         let notification_source = session_source.clone();
 
         // The same `LocalAgentControl` is sent to spawn the thread.
-        let SpawnedThreadResult {
-            new_thread,
-            fork_context,
-            child_create,
-        } = match (session_source, options.fork_mode.as_ref(), inheritance) {
+        let new_thread = match (session_source, options.fork_mode.as_ref(), inheritance) {
             (Some(session_source), Some(_), inheritance) => {
                 Box::pin(self.spawn_forked_thread(
                     &state,
@@ -764,7 +744,6 @@ impl LocalAgentControl {
                     .environments
                     .as_ref()
                     .map(TurnEnvironmentSnapshot::inheritable_selections);
-                let child_create_started_at = Instant::now();
                 let new_thread = Box::pin(state.spawn_new_thread_with_source(
                     config.clone(),
                     self.clone(),
@@ -774,65 +753,22 @@ impl LocalAgentControl {
                     options.parent_thread_id,
                     /*forked_from_thread_id*/ None,
                     /*thread_source*/ Some(ThreadSource::Subagent),
-                    /*metrics_service_name*/ None,
                     inheritance.environments,
                     inheritance.exec_policy,
                     environments,
                 ))
                 .await?;
-                SpawnedThreadResult {
-                    new_thread,
-                    fork_context: None,
-                    child_create: child_create_started_at.elapsed(),
-                }
+                new_thread
             }
             (None, _, _) => {
-                let child_create_started_at = Instant::now();
                 let new_thread =
                     Box::pin(state.spawn_new_thread(config.clone(), self.clone())).await?;
-                SpawnedThreadResult {
-                    new_thread,
-                    fork_context: None,
-                    child_create: child_create_started_at.elapsed(),
-                }
+                new_thread
             }
         };
         agent_metadata.agent_id = Some(new_thread.thread_id);
         let mut pending_spawn =
             PendingSpawn::new(Arc::clone(&state), new_thread.thread_id, membership);
-
-        if let Some(SessionSource::SubAgent(
-            subagent_source @ SubAgentSource::ThreadSpawn {
-                parent_thread_id, ..
-            },
-        )) = notification_source.as_ref()
-        {
-            let client_metadata = match state.get_thread(*parent_thread_id).await {
-                Ok(parent_thread) => parent_thread.session.app_server_client_metadata().await,
-                Err(error) => {
-                    tracing::warn!(
-                        error = %error,
-                        parent_thread_id = %parent_thread_id,
-                        "skipping subagent thread analytics: failed to load parent thread metadata"
-                    );
-                    crate::session::session::AppServerClientMetadata {
-                        client_name: None,
-                        client_version: None,
-                    }
-                }
-            };
-            let thread_config = new_thread.thread.config_snapshot().await;
-            let parent_thread_id = thread_config.parent_thread_id;
-            emit_subagent_session_started(
-                &new_thread.thread.session.services.analytics_events_client,
-                client_metadata,
-                new_thread.thread.session.session_id(),
-                new_thread.thread_id,
-                parent_thread_id,
-                thread_config,
-                subagent_source.clone(),
-            );
-        }
 
         let control = self.clone();
         let child = Arc::clone(&new_thread.thread);
@@ -847,7 +783,6 @@ impl LocalAgentControl {
                 )
                 .await;
         }));
-        let durability_wait_started_at = Instant::now();
         if options.fork_mode.is_some() {
             tokio::join!(
                 new_thread
@@ -859,7 +794,6 @@ impl LocalAgentControl {
         } else {
             pending_spawn.wait_for_edge().await;
         }
-        let durability_wait = durability_wait_started_at.elapsed();
 
         let start_options = TurnStartOptions {
             parent_turn_id: options.parent_turn_id,
@@ -868,7 +802,6 @@ impl LocalAgentControl {
             cyber_access_program: options.cyber_access_program,
             ..Default::default()
         };
-        let input_admission_started_at = Instant::now();
         match initial_input {
             SpawnInitialInput::UserInput(input) => {
                 self.send_input(new_thread.thread_id, input, start_options)
@@ -885,7 +818,6 @@ impl LocalAgentControl {
                 .await?;
             }
         }
-        let input_admission = input_admission_started_at.elapsed();
         reservation.commit(agent_metadata.clone());
         if let Some(residency_slot) = residency_slot {
             residency_slot.commit(new_thread.thread_id);
@@ -916,24 +848,6 @@ impl LocalAgentControl {
             status: self.get_status(new_thread.thread_id).await,
         };
         let config = new_thread.thread.config_snapshot().await;
-        let session_telemetry = new_thread
-            .thread
-            .session_telemetry()
-            .with_product_sku(product_sku.as_deref());
-        record_spawn_success(
-            &session_telemetry,
-            options.fork_mode.as_ref(),
-            multi_agent_version,
-            SpawnMeasurements {
-                history_mode: config.history_mode,
-                residency_reservation,
-                fork_context,
-                child_create,
-                durability_wait,
-                input_admission,
-                total: spawn_started_at.elapsed(),
-            },
-        );
         Ok((agent, config))
     }
 
@@ -945,7 +859,7 @@ impl LocalAgentControl {
         options: &SpawnAgentOptions,
         inheritance: SpawnAgentThreadInheritance,
         multi_agent_version: MultiAgentVersion,
-    ) -> CodexResult<SpawnedThreadResult> {
+    ) -> CodexResult<crate::thread_manager::NewThread> {
         let SpawnAgentThreadInheritance {
             environments: inherited_environments,
             exec_policy: inherited_exec_policy,
@@ -969,7 +883,6 @@ impl LocalAgentControl {
             ));
         };
 
-        let fork_context_started_at = Instant::now();
         let parent_thread_id = *parent_thread_id;
         let parent_thread = state.get_thread(parent_thread_id).await?;
         let (subagent_developer_instructions, parent_developer_instructions) = match (
@@ -1247,8 +1160,6 @@ impl LocalAgentControl {
         let mut thread_extension_init = ExtensionDataInit::new();
         thread_extension_init.insert(selected_capability_roots);
 
-        let fork_context = fork_context_started_at.elapsed();
-        let child_create_started_at = Instant::now();
         let new_thread = state
             .fork_thread_with_source(
                 config.clone(),
@@ -1265,12 +1176,7 @@ impl LocalAgentControl {
                 thread_extension_init,
             )
             .await?;
-        let child_create = child_create_started_at.elapsed();
-        Ok(SpawnedThreadResult {
-            new_thread,
-            fork_context: Some(fork_context),
-            child_create,
-        })
+        Ok(new_thread)
     }
 
     /// Resume an existing agent thread from a recorded rollout file.

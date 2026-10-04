@@ -1,5 +1,4 @@
 mod agents_md;
-mod apps_instructions;
 mod collaboration_mode;
 mod compact_permissions;
 mod context_window_guidance;
@@ -38,7 +37,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 pub(crate) use agents_md::AgentsMdState;
-pub(crate) use apps_instructions::AppsInstructionsState;
 pub(crate) use collaboration_mode::CollaborationModeState;
 pub(crate) use compact_permissions::CompactPermissionsState;
 pub(crate) use context_window_guidance::ContextWindowGuidanceState;

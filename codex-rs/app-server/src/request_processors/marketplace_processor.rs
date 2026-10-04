@@ -1,5 +1,4 @@
 use super::*;
-use crate::plugin_config_reload;
 
 #[derive(Clone)]
 pub(crate) struct MarketplaceRequestProcessor {
@@ -39,15 +38,6 @@ impl MarketplaceRequestProcessor {
             .map(|response| Some(response.into()))
     }
 
-    pub(crate) async fn marketplace_upgrade(
-        &self,
-        params: MarketplaceUpgradeParams,
-    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.marketplace_upgrade_response_inner(params)
-            .await
-            .map(|response| Some(response.into()))
-    }
-
     async fn marketplace_remove_inner(
         &self,
         params: MarketplaceRemoveParams,
@@ -68,49 +58,6 @@ impl MarketplaceRequestProcessor {
         .map_err(|err| match err {
             MarketplaceRemoveError::InvalidRequest(message) => invalid_request(message),
             MarketplaceRemoveError::Internal(message) => internal_error(message),
-        })
-    }
-
-    async fn marketplace_upgrade_response_inner(
-        &self,
-        params: MarketplaceUpgradeParams,
-    ) -> Result<MarketplaceUpgradeResponse, JSONRPCErrorError> {
-        let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
-        let plugins_manager = self.thread_manager.plugins_manager();
-        let MarketplaceUpgradeParams { marketplace_name } = params;
-        let plugins_input = config.plugins_config_input();
-        let reload_config =
-            plugin_config_reload::for_cwd(self.config_manager.clone(), config.cwd.clone());
-
-        let outcome = tokio::task::spawn_blocking(move || {
-            plugins_manager.upgrade_configured_marketplaces_for_config(
-                &plugins_input,
-                marketplace_name.as_deref(),
-                &reload_config,
-            )
-        })
-        .await
-        .map_err(|err| internal_error(format!("failed to upgrade marketplaces: {err}")))?
-        .map_err(invalid_request)?;
-
-        if !outcome.upgraded_roots.is_empty() {
-            self.thread_manager.plugins_manager().clear_cache();
-            self.thread_manager.skills_service().clear_cache();
-            self.thread_manager.invalidate_mcp_runtimes().await;
-            self.thread_manager.refresh_hook_runtimes().await;
-        }
-
-        Ok(MarketplaceUpgradeResponse {
-            selected_marketplaces: outcome.selected_marketplaces,
-            upgraded_roots: outcome.upgraded_roots,
-            errors: outcome
-                .errors
-                .into_iter()
-                .map(|err| MarketplaceUpgradeErrorInfo {
-                    marketplace_name: err.marketplace_name,
-                    message: err.message,
-                })
-                .collect(),
         })
     }
 

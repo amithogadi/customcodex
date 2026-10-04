@@ -314,64 +314,6 @@ async fn notice_redraws_when_only_limit_blockers_change() {
 }
 
 #[tokio::test]
-async fn overlapping_reads_keep_older_success_when_newer_read_fails() -> color_eyre::Result<()> {
-    let mut app = crate::app::test_support::make_test_app().await;
-    let mut session = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
-    let mut tui = crate::tui::test_support::make_test_tui()?;
-    let low = snapshot(/*used_percent*/ 92);
-    let healthy = snapshot(/*used_percent*/ 10);
-    for (first_id, rolling, update, expected) in [
-        (
-            1,
-            None,
-            low.clone(),
-            Some((low.primary.clone().unwrap(), false)),
-        ),
-        (
-            3,
-            Some(low.clone()),
-            healthy.clone(),
-            Some((low.primary.clone().unwrap(), false)),
-        ),
-        (5, None, healthy, None),
-    ] {
-        for request_id in first_id..=first_id + 1 {
-            app.chat_widget
-                .add_status_output(/*refreshing_rate_limits*/ true, Some(request_id));
-            app.refresh_rate_limits(
-                &session,
-                RateLimitRefreshOrigin::StatusCommand { request_id },
-            );
-        }
-        if let Some(rolling) = rolling {
-            app.chat_widget.on_rolling_rate_limit_snapshot(rolling);
-        }
-        let before = app.chat_widget.usage_notice_state.current();
-        for (request_id, result, expected) in [
-            (first_id + 1, Err("transient failure".into()), before),
-            (first_id, Ok(update), expected),
-        ] {
-            app.handle_event(
-                &mut tui,
-                &mut session,
-                AppEvent::RateLimitsLoaded {
-                    request_id,
-                    origin: RateLimitRefreshOrigin::StatusCommand { request_id },
-                    hard_stop_generation: 0,
-                    result: result.map(|update| {
-                        serde_json::from_value(serde_json::json!({"rateLimits": update})).unwrap()
-                    }),
-                },
-            )
-            .await?;
-            assert_eq!(app.chat_widget.usage_notice_state.current(), expected);
-        }
-    }
-    session.shutdown().await?;
-    Ok(())
-}
-
-#[tokio::test]
 async fn rolling_updates_invalidate_only_reads_already_started() {
     let (mut chat, _, _, _) = make_chatwidget_manual_with_sender().await;
     let mut low = snapshot(/*used_percent*/ 50);
@@ -419,7 +361,7 @@ async fn notice_follows_threads_and_clears_on_account_change() {
     );
     chat.update_account_state(
         /*status_account_display*/ None, /*plan_type*/ None,
-        /*has_chatgpt_account*/ true, /*has_codex_backend_auth*/ true,
+        /*has_chatgpt_account*/ true,
     );
     assert_eq!(chat.usage_notice_state.current(), None);
 }

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::process_telemetry::ProcessTelemetry;
+use crate::process_log::ProcessLogContext;
 use codex_exec_server_protocol::JSONRPCErrorError;
 use codex_file_system::WindowsSandboxSelection;
 use codex_network_proxy::CUSTOM_CA_ENV_KEYS;
@@ -40,7 +40,7 @@ use codex_utils_path_uri::PathUri;
 #[cfg(unix)]
 use crate::CODEX_ARG0_EXEC_HELPER_ARG1;
 use crate::ExecServerRuntimeOptions;
-use crate::process_telemetry::trace_process_id;
+use crate::process_log::trace_process_id;
 use crate::protocol::ExecParams;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_params;
@@ -87,13 +87,13 @@ impl PreparedExecRequest {
     skip_all,
     fields(process.id = trace_process_id(params.process_id.as_str())),
 )]
-pub(crate) async fn prepare_exec_request_with_telemetry(
+pub(crate) async fn prepare_exec_request_with_log_context(
     params: &ExecParams,
     env: HashMap<String, String>,
     runtime_paths: Option<&ExecServerRuntimeOptions>,
     network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     network_policy_audit_observer: Option<NetworkPolicyAuditObserver>,
-    telemetry: &ProcessTelemetry,
+    telemetry: &ProcessLogContext,
 ) -> Result<PreparedExecRequest, JSONRPCErrorError> {
     if let Some(sandbox) = params.sandbox.as_ref()
         && sandbox.windows_sandbox_selection == WindowsSandboxSelection::Mxc
@@ -350,7 +350,7 @@ async fn prepare_managed_network(
     env: HashMap<String, String>,
     network_policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
     network_policy_audit_observer: Option<NetworkPolicyAuditObserver>,
-    telemetry: &ProcessTelemetry,
+    telemetry: &ProcessLogContext,
 ) -> Result<
     (
         HashMap<String, String>,
@@ -379,9 +379,6 @@ async fn prepare_managed_network(
     state.set_proxy_private_ips_via_upstream(proxy_private_ips_via_upstream);
     if let Some(observer) = network_policy_audit_observer {
         state.set_policy_audit_observer(observer);
-    }
-    if let Some(launch_context) = &telemetry.launch_context {
-        state.set_launch_span_context(launch_context.clone());
     }
     state.set_process_log_metadata(codex_network_proxy::NetworkProxyProcessLogMetadata {
         thread_id: telemetry.thread_id.clone(),

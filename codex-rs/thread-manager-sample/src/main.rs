@@ -39,12 +39,9 @@ use codex_core_api::MultiAgentV2Config;
 use codex_core_api::NewThread;
 use codex_core_api::Notice;
 use codex_core_api::OPENAI_PROVIDER_ID;
-use codex_core_api::OtelConfig;
 use codex_core_api::PermissionProfile;
 use codex_core_api::Permissions;
 use codex_core_api::ProjectConfig;
-use codex_core_api::RealtimeAudioConfig;
-use codex_core_api::RealtimeConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
 use codex_core_api::SqliteConfig;
@@ -155,7 +152,6 @@ async fn run_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         environment_manager,
         Arc::new(extensions.build()),
         user_instructions_provider,
-        /*analytics_events_client*/ None,
         passthrough_image_store(),
         Arc::clone(&thread_store),
         local_agent_graph_store_from_state_db(state_db.as_ref()),
@@ -228,11 +224,16 @@ async fn new_config(
             .feature_requirements
             .as_ref(),
     )?;
-    let model_provider_id = OPENAI_PROVIDER_ID.to_string();
-    let model_providers = built_in_model_providers(/*openai_base_url*/ None);
+    let model_provider_id = bootstrap
+        .config_toml
+        .model_provider
+        .clone()
+        .unwrap_or_else(|| OPENAI_PROVIDER_ID.to_string());
+    let mut model_providers = built_in_model_providers(/*openai_base_url*/ None);
+    model_providers.extend(bootstrap.config_toml.model_providers.clone());
     let model_provider = model_providers
         .get(&model_provider_id)
-        .context("OpenAI model provider should be available")?
+        .with_context(|| format!("unknown configured model provider: {model_provider_id}"))?
         .clone();
 
     let mut config = Config {
@@ -241,7 +242,7 @@ async fn new_config(
         config_layer_stack,
         startup_warnings: Vec::new(),
         bypass_hook_trust: false,
-        model,
+        model: model.or_else(|| bootstrap.config_toml.model.clone()),
         daybreak_enabled: false,
         service_tier: None,
         review_model: None,
@@ -351,16 +352,7 @@ async fn new_config(
             .clone()
             .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string()),
         respect_system_proxy,
-        apps_mcp_product_sku: None,
         responses_api_metadata: BTreeMap::new(),
-        realtime_audio: RealtimeAudioConfig::default(),
-        experimental_realtime_ws_base_url: None,
-        experimental_realtime_webrtc_call_base_url: None,
-        experimental_realtime_ws_model: None,
-        realtime: RealtimeConfig::default(),
-        experimental_realtime_ws_backend_prompt: None,
-        experimental_realtime_ws_startup_context: None,
-        experimental_realtime_start_instructions: None,
         experimental_thread_store: ThreadStoreConfig::Local,
         forced_chatgpt_workspace_id: auth_config.forced_chatgpt_workspace_id.clone(),
         forced_login_method: auth_config.forced_login_method,
@@ -387,12 +379,8 @@ async fn new_config(
         suppress_unstable_features_warning: false,
         active_project: ProjectConfig { trust_level: None },
         notices: Notice::default(),
-        check_for_update_on_startup: false,
         disable_paste_burst: false,
-        analytics_enabled: Some(false),
-        feedback_enabled: false,
         tool_suggest: ToolSuggestConfig::default(),
-        otel: OtelConfig::default(),
     };
     config
         .features

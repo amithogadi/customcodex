@@ -42,10 +42,6 @@ pub(crate) use vim_search::VimSearchKeymap;
 mod conflict_tests;
 
 #[cfg(test)]
-#[path = "keymap/voice_tests.rs"]
-mod voice_tests;
-
-#[cfg(test)]
 #[path = "keymap/global_find_tests.rs"]
 mod global_find_tests;
 
@@ -128,10 +124,6 @@ pub(crate) struct AppKeymap {
 /// handler code, not here.
 #[derive(Clone, Debug)]
 pub(crate) struct ChatKeymap {
-    /// Start or stop a voice conversation.
-    pub(crate) toggle_voice: Vec<KeyBinding>,
-    /// Toggle capture in the active voice session.
-    pub(crate) toggle_voice_mute: Vec<KeyBinding>,
     chord_hints: Arc<RuntimeChordKeymap>,
     /// Interrupt the active turn.
     pub(crate) interrupt_turn: Vec<KeyBinding>,
@@ -151,13 +143,7 @@ pub(crate) struct ChatKeymap {
     pub(crate) skip_question: Vec<KeyBinding>,
 }
 
-impl ChatKeymap {
-    pub(crate) fn voice_mute_hint(&self) -> Option<ShortcutHint> {
-        let action = keymap_action_id("chat", "toggle_voice_mute")?;
-        self.chord_hints
-            .primary_hint(action, &self.toggle_voice_mute)
-    }
-}
+impl ChatKeymap {}
 
 /// Composer-level keybindings validated in the second app-scope conflict pass.
 ///
@@ -646,13 +632,6 @@ impl RuntimeKeymap {
             });
 
         // Preserve existing Ctrl+X shortcuts and chord prefixes when adding this default.
-        let voice_mute_default_is_shadowed = keymap.chat.toggle_voice_mute.is_none()
-            && (configured_main_surface_alias_is_used(keymap, "ctrl-x")
-                || chords.bindings.iter().any(|binding| {
-                    binding.action.context.overlaps(KeymapContext::Voice)
-                        && binding.chord.prefix.parts()
-                            == key_hint::ctrl(KeyCode::Char('x')).parts()
-                }));
 
         // New activity defaults yield to existing custom keys and chord prefixes.
         let focus_activity_defaults: Vec<_> = defaults
@@ -745,33 +724,8 @@ impl RuntimeKeymap {
         };
 
         // Voice yields to explicitly configured shortcuts and chord prefixes.
-        let voice_toggle_default_is_shadowed = keymap.chat.toggle_voice.is_none()
-            && (configured_main_surface_alias_is_used(keymap, "f8")
-                || configured_context_alias_is_used(&keymap.vim_search, "f8")
-                || chords.bindings.iter().any(|binding| {
-                    binding.action.context.overlaps(KeymapContext::Chat)
-                        && binding.chord.prefix.parts() == key_hint::plain(KeyCode::F(8)).parts()
-                }));
 
         let mut chat = ChatKeymap {
-            toggle_voice: if voice_toggle_default_is_shadowed {
-                Vec::new()
-            } else {
-                resolve_bindings(
-                    keymap.chat.toggle_voice.as_ref(),
-                    &defaults.chat.toggle_voice,
-                    "tui.keymap.chat.toggle_voice",
-                )?
-            },
-            toggle_voice_mute: if voice_mute_default_is_shadowed {
-                Vec::new()
-            } else {
-                resolve_bindings(
-                    keymap.chat.toggle_voice_mute.as_ref(),
-                    &defaults.chat.toggle_voice_mute,
-                    "tui.keymap.chat.toggle_voice_mute",
-                )?
-            },
             chord_hints: Arc::clone(&chords),
             interrupt_turn: resolve_bindings(
                 keymap.chat.interrupt_turn.as_ref(),
@@ -1657,8 +1611,6 @@ impl RuntimeKeymap {
             },
             chords: Arc::default(),
             chat: ChatKeymap {
-                toggle_voice: default_bindings![plain(KeyCode::F(8))],
-                toggle_voice_mute: default_bindings![ctrl(KeyCode::Char('x'))],
                 chord_hints: Arc::default(),
                 interrupt_turn: default_bindings![plain(KeyCode::Esc)],
                 decrease_reasoning_effort: default_bindings![
@@ -1954,7 +1906,6 @@ impl RuntimeKeymap {
     ///    backtracking, intentionally stay outside this configurable keymap.
     fn validate_conflicts(&self) -> Result<(), String> {
         for (action, bindings) in [
-            ("toggle_voice", &self.chat.toggle_voice),
             (
                 "previous_permission_mode",
                 &self.chat.previous_permission_mode,
@@ -1974,10 +1925,7 @@ impl RuntimeKeymap {
             }
         }
         #[cfg(unix)]
-        for (action, bindings) in [
-            ("global.open_agents", &self.app.open_agents),
-            ("chat.toggle_voice", &self.chat.toggle_voice),
-        ] {
+        for (action, bindings) in [("global.open_agents", &self.app.open_agents)] {
             if bindings.contains(&key_hint::ctrl(KeyCode::Char('z'))) {
                 return Err(format!(
                     "tui.keymap.{action}: ctrl-z is reserved for suspend"
@@ -2018,11 +1966,6 @@ impl RuntimeKeymap {
             ("toggle_fast_mode", self.app.toggle_fast_mode.as_slice()),
             ("toggle_raw_output", self.app.toggle_raw_output.as_slice()),
             ("toggle_side_conversation", side_toggle_bindings.as_slice()),
-            ("chat.toggle_voice", self.chat.toggle_voice.as_slice()),
-            (
-                "chat.toggle_voice_mute",
-                self.chat.toggle_voice_mute.as_slice(),
-            ),
             ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
             (
                 "chat.decrease_reasoning_effort",
@@ -2179,11 +2122,6 @@ impl RuntimeKeymap {
                 ),
                 ("copy", self.app.copy.as_slice()),
                 ("clear_terminal", self.app.clear_terminal.as_slice()),
-                ("chat.toggle_voice", self.chat.toggle_voice.as_slice()),
-                (
-                    "chat.toggle_voice_mute",
-                    self.chat.toggle_voice_mute.as_slice(),
-                ),
                 ("chat.interrupt_turn", self.chat.interrupt_turn.as_slice()),
                 (
                     "chat.decrease_reasoning_effort",

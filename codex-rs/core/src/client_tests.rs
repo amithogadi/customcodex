@@ -1,8 +1,5 @@
-use super::AuthRequestTelemetryContext;
 use super::ModelClient;
-use super::PendingUnauthorizedRetry;
 use super::Prompt;
-use super::UnauthorizedRecoveryExecution;
 use super::X_CODEX_INSTALLATION_ID_HEADER;
 use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
@@ -16,8 +13,6 @@ use crate::responses_metadata::MAX_MCP_ATTRIBUTION_BYTES;
 use crate::responses_metadata::MCP_ATTRIBUTION_CLIENT_METADATA_KEY;
 use crate::test_support::TestCodexResponsesRequestKind;
 use crate::test_support::responses_metadata as test_responses_metadata;
-use base64::Engine;
-use codex_api::AgentIdentityTelemetry;
 use codex_api::ApiError;
 use codex_api::ResponseEvent;
 use codex_api::TransportError;
@@ -25,7 +20,6 @@ use codex_http_client::HttpClientFactory;
 use codex_http_client::OutboundProxyPolicy;
 use codex_login::AuthManager;
 use codex_login::CodexAuth;
-use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider::BearerAuthProvider;
 use codex_model_provider::ModelProvider;
 use codex_model_provider::ModelProviderFuture;
@@ -34,12 +28,10 @@ use codex_model_provider::ProviderAuthRecoveryMessages;
 use codex_model_provider::ProviderUnauthorizedRecovery;
 use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
-use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_models_manager::manager::SharedModelsManager;
-use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
@@ -86,14 +78,6 @@ use std::task::Poll;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::Notify;
-use tracing::Event;
-use tracing::Subscriber;
-use tracing::field::Visit;
-use tracing_subscriber::Layer;
-use tracing_subscriber::layer::Context as LayerContext;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::registry::LookupSpan;
-use tracing_subscriber::util::SubscriberInitExt;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -112,24 +96,19 @@ fn test_model_client_with_thread_id(
 ) -> ModelClient {
     let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     ModelClient::new(
-        /*auth_manager*/ None,
-        AgentIdentityAuthPolicy::JwtOnly,
+        None,
         thread_id,
         provider,
         session_source,
         "test_originator".to_string(),
-        /*model_verbosity*/ None,
-        /*content_item_kinds_enabled*/ true,
-        /*reasoning_effort_override_enabled*/ false,
-        /*enable_request_compression*/ false,
-        /*include_timing_metrics*/ false,
-        /*beta_features_header*/ None,
-        /*concurrent_reasoning_summaries_enabled*/ false,
-        /*attestation_provider*/ None,
+        None,
+        true,
+        false,
+        false,
+        None,
+        false,
+        None,
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-        codex_model_provider::WorkspaceRoutingContext::new(
-            "https://chatgpt.com/backend-api".into(),
-        ),
         Vec::new(),
     )
 }
@@ -138,108 +117,9 @@ fn test_model_provider() -> SharedModelProvider {
     test_model_client(SessionSource::Cli).state.provider.clone()
 }
 
-#[tokio::test]
-async fn workspace_routed_http_rejects_redirects_without_a_routing_header() {
-    use codex_client::HttpTransport;
-    use codex_login::WorkspaceRouting;
-    use codex_login::WorkspaceRoutingRequest;
-    use codex_login::WorkspaceRoutingResolver;
-
-    struct Routing(Option<&'static str>);
-    impl WorkspaceRoutingResolver for Routing {
-        fn resolve(
-            &self,
-            _request: WorkspaceRoutingRequest,
-        ) -> Pin<
-            Box<
-                dyn std::future::Future<Output = std::io::Result<Option<WorkspaceRouting>>>
-                    + Send
-                    + '_,
-            >,
-        > {
-            Box::pin(async move {
-                Ok(self.0.map(|override_value| WorkspaceRouting {
-                    chatgpt_account_id: "account_id".into(),
-                    backend_origin: "https://gov.chatgpt.com".into(),
-                    account_routing_override: override_value.into(),
-                }))
-            })
-        }
-    }
-
-    for routing_override in [Some("NO_CONSTRAINT"), Some("us_cr"), None] {
-        let origin = MockServer::start().await;
-        let destination = MockServer::start().await;
-        Mock::given(method("POST"))
-            .respond_with(
-                ResponseTemplate::new(/*status*/ 307)
-                    .insert_header("location", format!("{}/responses", destination.uri())),
-            )
-            .mount(&origin)
-            .await;
-        Mock::given(method("POST"))
-            .respond_with(ResponseTemplate::new(/*status*/ 200))
-            .mount(&destination)
-            .await;
-        let manager =
-            AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-        let resolver: Arc<dyn WorkspaceRoutingResolver> = Arc::new(Routing(routing_override));
-        manager.set_workspace_routing_resolver(Arc::downgrade(&resolver));
-        let mut client = test_model_client(SessionSource::Exec);
-        Arc::get_mut(&mut client.state).unwrap().provider = create_model_provider(
-            ModelProviderInfo::create_openai_provider(/*base_url*/ None),
-            Some(manager),
-        );
-        let mut setup = client
-            .current_client_setup(super::ClientRouting::Workspace)
-            .await
-            .unwrap();
-        if routing_override.is_some() {
-            assert_eq!(
-                setup.api_provider.base_url,
-                "https://gov.chatgpt.com/backend-api/codex"
-            );
-        }
-        // Exercise the resolved route's redirect policy against loopback HTTP servers.
-        setup.api_provider.base_url = origin.uri();
-        let transport = client
-            .build_api_transport(&setup.api_provider, "/responses", setup.redirect_policy)
-            .unwrap();
-        let request = setup
-            .api_provider
-            .build_request(http::Method::POST, "/responses")
-            .with_json(&json!({"input": "workspace content"}));
-        let result = transport.execute(request).await;
-        if routing_override.is_some() {
-            assert!(
-                matches!(
-                    result,
-                    Err(TransportError::Http {
-                        retry_after: None,
-                        status: http::StatusCode::TEMPORARY_REDIRECT,
-                        ..
-                    })
-                ),
-                "workspace redirect must be rejected: {routing_override:?}"
-            );
-        } else {
-            assert_eq!(result.unwrap().status, http::StatusCode::OK);
-        }
-        assert_eq!(
-            destination.received_requests().await.unwrap().len(),
-            usize::from(routing_override.is_none())
-        );
-    }
-}
-
 #[derive(Debug)]
 enum SetupRefresh {
     Command(PathBuf),
-    ChatGpt {
-        home: PathBuf,
-        token: String,
-        workspace: String,
-    },
 }
 
 #[derive(Debug)]
@@ -279,16 +159,6 @@ impl ModelProvider for SetupRefreshProvider {
                         .refresh_token_from_authority()
                         .await
                         .expect("refresh command token");
-                }
-                SetupRefresh::ChatGpt {
-                    home,
-                    token,
-                    workspace,
-                } => {
-                    codex_login::auth::login_with_chatgpt_auth_tokens(
-                        home, token, workspace, /*chatgpt_plan_type*/ None,
-                    )?;
-                    manager.reload().await;
                 }
             }
             self.inner.api_provider().await
@@ -356,69 +226,6 @@ async fn client_setup_accepts_command_credential_refresh() {
             ),
         );
         assert_ne!(setup.auth_owner_generation, client.auth_owner_generation());
-    }
-}
-
-#[tokio::test]
-async fn client_setup_rebuilds_chatgpt_refresh_but_rejects_account_switches() {
-    for (user, workspace, expected_calls) in [
-        ("user-a", "workspace-a", 2),
-        ("user-b", "workspace-a", 1),
-        ("user-a", "workspace-b", 1),
-    ] {
-        let token = |user: &str, revision: &str| {
-            let claims =
-                json!({"jti": revision, "https://api.openai.com/auth": {"chatgpt_user_id": user}});
-            let payload =
-                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string());
-            format!("header.{payload}.signature")
-        };
-        let home = TempDir::new().unwrap();
-        let initial = CodexAuth::from_external_chatgpt_tokens(
-            &token("user-a", "initial"),
-            "workspace-a",
-            /*chatgpt_plan_type*/ None,
-        )
-        .unwrap();
-        let manager =
-            AuthManager::from_auth_for_testing_with_home(initial, home.path().to_path_buf());
-        let refreshed_token = token(user, "refreshed");
-        let mut info = test_model_provider().info().clone();
-        info.requires_openai_auth = true;
-        let provider = Arc::new(SetupRefreshProvider {
-            inner: create_model_provider(info, Some(manager.clone())),
-            refresh: SetupRefresh::ChatGpt {
-                home: home.path().to_path_buf(),
-                token: refreshed_token.clone(),
-                workspace: workspace.into(),
-            },
-            setup_calls: AtomicUsize::new(/*v*/ 0),
-        });
-        let mut client = test_model_client(SessionSource::Exec);
-        Arc::get_mut(&mut client.state).unwrap().provider = provider.clone();
-        let result = client
-            .current_client_setup(super::ClientRouting::ConfiguredProvider)
-            .await;
-        if expected_calls == 2 {
-            let setup = result.unwrap();
-            let mut headers = http::HeaderMap::new();
-            setup.api_auth.add_auth_headers(&mut headers);
-            assert_eq!(
-                headers.get(http::header::AUTHORIZATION).unwrap(),
-                &format!("Bearer {refreshed_token}")
-            );
-            assert_eq!(setup.auth.unwrap().get_token().unwrap(), refreshed_token);
-            assert_eq!(
-                (setup.auth_revision, setup.auth_owner_generation),
-                (Some(*manager.auth_change_receiver().borrow()), Some(0))
-            );
-        } else {
-            assert_eq!(
-                result.err().expect("account switch must fail").to_string(),
-                "account changed while preparing model request"
-            );
-        }
-        assert_eq!(provider.setup_calls.load(Ordering::SeqCst), expected_calls);
     }
 }
 
@@ -987,7 +794,6 @@ async fn responses_http_preserves_raw_tool_metadata_for_openai_custom_endpoint()
         .stream(
             &prompt,
             &test_model_info(),
-            &test_session_telemetry(),
             /*effort*/ None,
             codex_protocol::config_types::ReasoningSummary::None,
             /*service_tier*/ None,
@@ -1078,21 +884,6 @@ fn responses_lite_prefix_ids_track_thread_and_payload() -> anyhow::Result<()> {
     assert_ne!(independent.input[0].id(), changed_tools.input[0].id());
     assert_ne!(independent.input[1].id(), changed_tools.input[1].id());
     Ok(())
-}
-
-fn test_session_telemetry() -> SessionTelemetry {
-    SessionTelemetry::new(
-        ThreadId::new(),
-        "gpt-test",
-        "gpt-test",
-        /*account_id*/ None,
-        /*account_email*/ None,
-        /*auth_mode*/ None,
-        "test-originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test-terminal".to_string(),
-        SessionSource::Cli,
-    )
 }
 
 #[test]
@@ -1266,42 +1057,6 @@ fn reasoning_effort_for_requests_preserves_non_ultra_and_persistent_behavior() {
             ReasoningEffort::Custom("disabled".to_string()),
         )
     );
-}
-
-#[derive(Default)]
-struct TagCollectorVisitor {
-    tags: BTreeMap<String, String>,
-}
-
-impl Visit for TagCollectorVisitor {
-    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        self.tags
-            .insert(field.name().to_string(), value.to_string());
-    }
-
-    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        self.tags
-            .insert(field.name().to_string(), format!("{value:?}"));
-    }
-}
-
-#[derive(Clone)]
-struct TagCollectorLayer {
-    tags: Arc<Mutex<BTreeMap<String, String>>>,
-}
-
-impl<S> Layer<S> for TagCollectorLayer
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    fn on_event(&self, event: &Event<'_>, _ctx: LayerContext<'_, S>) {
-        if event.metadata().target() != "feedback_tags" {
-            return;
-        }
-        let mut visitor = TagCollectorVisitor::default();
-        event.record(&mut visitor);
-        self.tags.lock().unwrap().extend(visitor.tags);
-    }
 }
 
 fn started_inference_attempt(temp: &TempDir) -> anyhow::Result<InferenceTraceAttempt> {
@@ -1507,15 +1262,9 @@ fn build_ws_client_metadata_includes_window_lineage_and_turn_metadata() {
 async fn summarize_memories_returns_empty_for_empty_input() {
     let client = test_model_client(SessionSource::Cli);
     let model_info = test_model_info();
-    let session_telemetry = test_session_telemetry();
 
     let output = client
-        .summarize_memories(
-            Vec::new(),
-            &model_info,
-            /*effort*/ None,
-            &session_telemetry,
-        )
+        .summarize_memories(Vec::new(), &model_info, /*effort*/ None)
         .await
         .expect("empty summarize request should succeed");
     assert_eq!(output.len(), 0);
@@ -1536,7 +1285,6 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
     let (mut stream, _) = super::map_response_events(
         /*upstream_request_id*/ None,
         api_stream,
-        test_session_telemetry(),
         attempt,
         test_model_provider(),
     );
@@ -1569,43 +1317,6 @@ async fn dropped_response_stream_traces_cancelled_partial_output() -> anyhow::Re
 }
 
 #[tokio::test]
-async fn response_stream_records_last_model_feedback_ids() {
-    let tags = Arc::new(Mutex::new(BTreeMap::new()));
-    let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
-        .set_default();
-
-    let api_stream = futures::stream::iter([
-        Ok(ResponseEvent::Created { response_id: None }),
-        Ok(ResponseEvent::Completed {
-            response_id: "resp-123".to_string(),
-            token_usage: None,
-            usage_metadata: None,
-            end_turn: Some(true),
-        }),
-    ]);
-    let (mut stream, _) = super::map_response_events(
-        Some("req-123".to_string()),
-        api_stream,
-        test_session_telemetry(),
-        InferenceTraceAttempt::disabled(),
-        test_model_provider(),
-    );
-
-    while stream.next().await.is_some() {}
-
-    let tags = tags.lock().unwrap().clone();
-    assert_eq!(
-        tags.get("last_model_request_id").map(String::as_str),
-        Some("\"req-123\"")
-    );
-    assert_eq!(
-        tags.get("last_model_response_id").map(String::as_str),
-        Some("\"resp-123\"")
-    );
-}
-
-#[tokio::test]
 async fn bedrock_unauthorized_error_uses_provider_mapping() {
     let provider = create_model_provider(
         ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
@@ -1627,7 +1338,6 @@ async fn bedrock_unauthorized_error_uses_provider_mapping() {
         },
         &mut auth_recovery,
         &mut provider_auth_recovery_attempted,
-        &test_session_telemetry(),
         &provider,
         /*event_sender*/ None,
         /*turn_id*/ None,
@@ -1718,13 +1428,11 @@ async fn provider_owned_auth_recovery_is_bounded_and_preserves_unauthorized_fail
         };
         let mut auth_recovery = None;
         let mut provider_auth_recovery_attempted = false;
-        let telemetry = test_session_telemetry();
         let (event_sender, event_receiver) = async_channel::unbounded();
         let result = super::handle_unauthorized(
             unauthorized(),
             &mut auth_recovery,
             &mut provider_auth_recovery_attempted,
-            &telemetry,
             &provider,
             Some(&event_sender),
             Some("turn-1"),
@@ -1734,16 +1442,11 @@ async fn provider_owned_auth_recovery_is_bounded_and_preserves_unauthorized_fail
         let error = if should_fail {
             result.expect_err("failed provider recovery should return the original error")
         } else {
-            let recovered = result.expect("provider recovery should succeed without AuthManager");
-            assert_eq!(
-                (recovered.mode, recovered.phase),
-                ("provider", "provider_refresh")
-            );
+            result.expect("provider recovery should succeed without AuthManager");
             super::handle_unauthorized(
                 unauthorized(),
                 &mut auth_recovery,
                 &mut provider_auth_recovery_attempted,
-                &telemetry,
                 &provider,
                 Some(&event_sender),
                 Some("turn-1"),
@@ -1810,7 +1513,6 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
     let (stream, _) = super::map_response_events(
         /*upstream_request_id*/ None,
         api_stream,
-        test_session_telemetry(),
         attempt,
         test_model_provider(),
     );
@@ -1836,50 +1538,7 @@ async fn dropped_backpressured_response_stream_traces_cancelled_partial_output()
     Ok(())
 }
 
-#[test]
-fn auth_request_telemetry_context_tracks_attached_auth_and_retry_phase() {
-    let auth_context = AuthRequestTelemetryContext::new(
-        Some(AuthMode::Chatgpt),
-        &BearerAuthProvider::for_test(Some("access-token"), Some("workspace-123")),
-        /*agent_identity_telemetry*/ None,
-        PendingUnauthorizedRetry::from_recovery(UnauthorizedRecoveryExecution {
-            mode: "managed",
-            phase: "refresh_token",
-        }),
-    );
-
-    assert_eq!(auth_context.auth_mode, Some("Chatgpt"));
-    assert!(auth_context.auth_header_attached);
-    assert_eq!(auth_context.auth_header_name, Some("authorization"));
-    assert!(auth_context.retry_after_unauthorized);
-    assert_eq!(auth_context.recovery_mode, Some("managed"));
-    assert_eq!(auth_context.recovery_phase, Some("refresh_token"));
-}
-
-#[test]
-fn auth_request_telemetry_context_tracks_agent_identity_ids() {
-    let auth_context = AuthRequestTelemetryContext::new(
-        Some(AuthMode::Chatgpt),
-        &BearerAuthProvider::for_test(/*token*/ None, /*account_id*/ None),
-        Some(AgentIdentityTelemetry {
-            agent_id: "agent-runtime-context".to_string(),
-            task_id: "task-run-context".to_string(),
-        }),
-        PendingUnauthorizedRetry::default(),
-    );
-
-    assert_eq!(
-        auth_context.agent_identity_telemetry(),
-        Some(&AgentIdentityTelemetry {
-            agent_id: "agent-runtime-context".to_string(),
-            task_id: "task-run-context".to_string(),
-        })
-    );
-}
-
-fn model_client_with_counting_attestation(
-    include_attestation: bool,
-) -> (ModelClient, Arc<AtomicUsize>) {
+fn model_client_with_counting_attestation() -> (ModelClient, Arc<AtomicUsize>) {
     #[derive(Debug)]
     struct CountingAttestationProvider {
         calls: Arc<AtomicUsize>,
@@ -1899,142 +1558,32 @@ fn model_client_with_counting_attestation(
     }
 
     let attestation_calls = Arc::new(AtomicUsize::new(0));
-    let (auth_manager, provider) = if include_attestation {
-        (
-            Some(AuthManager::from_auth_for_testing(
-                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-            )),
-            ModelProviderInfo::create_openai_provider(Some(CHATGPT_CODEX_BASE_URL.to_string())),
-        )
-    } else {
-        (
-            None,
-            create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses),
-        )
-    };
+    let auth_manager = None;
+    let provider = create_oss_provider_with_base_url("https://example.com/v1", WireApi::Responses);
     let model_client = ModelClient::new(
         auth_manager,
-        AgentIdentityAuthPolicy::JwtOnly,
         ThreadId::new(),
         provider,
         SessionSource::Exec,
         "test_originator".to_string(),
-        /*model_verbosity*/ None,
-        /*content_item_kinds_enabled*/ true,
-        /*reasoning_effort_override_enabled*/ false,
-        /*enable_request_compression*/ false,
-        /*include_timing_metrics*/ false,
-        /*beta_features_header*/ None,
-        /*concurrent_reasoning_summaries_enabled*/ false,
+        None,
+        true,
+        false,
+        false,
+        None,
+        false,
         Some(Arc::new(CountingAttestationProvider {
             calls: attestation_calls.clone(),
         })),
         HttpClientFactory::new(OutboundProxyPolicy::ReqwestDefault),
-        codex_model_provider::WorkspaceRoutingContext::new(
-            "https://chatgpt.com/backend-api".into(),
-        ),
         Vec::new(),
     );
     (model_client, attestation_calls)
 }
 
-#[test]
-fn thread_responses_headers_are_scoped_to_model_and_backend_auth() {
-    let (mut model_client, _) =
-        model_client_with_counting_attestation(/*include_attestation*/ true);
-    let headers = http::HeaderMap::from_iter([(
-        http::HeaderName::from_static("x-custom-request"),
-        http::HeaderValue::from_static("example"),
-    )]);
-    model_client.codex_responses_headers = Some(Arc::new(crate::CodexResponsesHeaders {
-        model: "selected-model".to_owned(),
-        headers: headers.clone(),
-    }));
-    let chatgpt_auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-    let api_key_auth = CodexAuth::from_api_key("test-api-key");
-    for (auth, model, expected) in [
-        (Some(&chatgpt_auth), "selected-model", headers),
-        (Some(&chatgpt_auth), "other-model", http::HeaderMap::new()),
-        (
-            Some(&api_key_auth),
-            "selected-model",
-            http::HeaderMap::new(),
-        ),
-        (None, "selected-model", http::HeaderMap::new()),
-    ] {
-        assert_eq!(model_client.responses_headers(auth, model), expected);
-    }
-
-    Arc::get_mut(&mut model_client.state)
-        .expect("test client should have unique session state")
-        .provider = create_model_provider(
-        ModelProviderInfo::create_openai_provider(Some("https://proxy.example.com/v1".to_owned())),
-        Some(AuthManager::from_auth_for_testing(chatgpt_auth.clone())),
-    );
-    assert_eq!(
-        model_client.responses_headers(Some(&chatgpt_auth), "selected-model"),
-        http::HeaderMap::new(),
-    );
-}
-
-#[test_case::test_case(/*cache_key*/ None; "own_cache")]
-#[test_case::test_case(Some("parent-session"); "inherited_cache")]
-#[tokio::test]
-async fn websocket_handshake_includes_attestation_for_chatgpt_codex_responses(
-    cache_key: Option<&str>,
-) {
-    let (mut model_client, attestation_calls) =
-        model_client_with_counting_attestation(/*include_attestation*/ true);
-    let responses_metadata = test_responses_metadata_for_client(
-        &model_client,
-        /*turn_id*/ None,
-        format!("{}:0", model_client.state.thread_id),
-        /*parent_thread_id*/ None,
-        TestCodexResponsesRequestKind::WebsocketConnection,
-    );
-
-    model_client.prompt_cache_key_override = cache_key.map(str::to_string);
-    let headers = model_client
-        .build_websocket_headers(&responses_metadata)
-        .await;
-
-    assert_eq!(
-        headers
-            .get(crate::attestation::X_OAI_ATTESTATION_HEADER)
-            .and_then(|value| value.to_str().ok()),
-        Some("v1.header-1"),
-    );
-    assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
-    assert_eq!(
-        headers["session-id"],
-        cache_key.unwrap_or(&responses_metadata.session_id)
-    );
-    assert_eq!(headers["thread-id"], responses_metadata.thread_id);
-}
-
-#[tokio::test]
-async fn existing_call_sideband_headers_include_attestation() {
-    let (model_client, attestation_calls) =
-        model_client_with_counting_attestation(/*include_attestation*/ true);
-
-    let headers = model_client
-        .realtime_sideband_headers(http::HeaderMap::new())
-        .await
-        .expect("existing call sideband headers should build");
-
-    assert_eq!(
-        headers
-            .get(crate::attestation::X_OAI_ATTESTATION_HEADER)
-            .and_then(|value| value.to_str().ok()),
-        Some("v1.header-1"),
-    );
-    assert_eq!(attestation_calls.load(Ordering::Relaxed), 1);
-}
-
 #[tokio::test]
 async fn non_chatgpt_codex_endpoints_omit_attestation_generation() {
-    let (model_client, attestation_calls) =
-        model_client_with_counting_attestation(/*include_attestation*/ false);
+    let (model_client, attestation_calls) = model_client_with_counting_attestation();
     let mut response_headers = http::HeaderMap::new();
 
     if let Some(header_value) = model_client.generate_attestation_header_for().await {
@@ -2106,7 +1655,6 @@ async fn intercepted_output_reaches_trace_and_websocket_bookkeeping() -> anyhow:
             upstream_request_id: None,
             interrupt: None,
         },
-        test_session_telemetry(),
         attempt,
         test_model_provider(),
         vec![Box::new(ReplaceOutput)],

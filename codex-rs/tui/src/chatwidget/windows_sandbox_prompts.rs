@@ -20,12 +20,6 @@ impl ChatWidget {
     ) {
         use ratatui_macros::line;
 
-        self.session_telemetry.counter(
-            "codex.windows_sandbox.elevated_prompt_shown",
-            /*inc*/ 1,
-            &[],
-        );
-
         let allow_unelevated = self
             .windows_sandbox_config
             .allows(WindowsSandboxSetupMode::Unelevated);
@@ -46,22 +40,14 @@ impl ChatWidget {
             .wrap(Wrap { trim: false }),
         ));
 
-        let accept_otel = self.session_telemetry.clone();
-        let legacy_otel = self.session_telemetry.clone();
         let legacy_preset = preset.clone();
         let legacy_profile_selection = profile_selection.clone();
-        let quit_otel = self.session_telemetry.clone();
         let retry_preset = preset.clone();
         let retry_profile_selection = profile_selection.clone();
         let elevated_item = SelectionItem {
             name: "Set up default sandbox (requires Administrator permissions)".to_string(),
             description: None,
             actions: vec![Box::new(move |tx| {
-                accept_otel.counter(
-                    "codex.windows_sandbox.elevated_prompt_accept",
-                    /*inc*/ 1,
-                    &[],
-                );
                 tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                     preset: preset.clone(),
                     profile_selection: profile_selection.clone(),
@@ -83,11 +69,6 @@ impl ChatWidget {
                 name: "Use non-admin sandbox (higher risk if prompt injected)".to_string(),
                 description: None,
                 actions: vec![Box::new(move |tx| {
-                    legacy_otel.counter(
-                        "codex.windows_sandbox.elevated_prompt_use_legacy",
-                        /*inc*/ 1,
-                        &[],
-                    );
                     tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                         preset: legacy_preset.clone(),
                         profile_selection: legacy_profile_selection.clone(),
@@ -102,11 +83,6 @@ impl ChatWidget {
             name: "Quit".to_string(),
             description: None,
             actions: vec![Box::new(move |tx| {
-                quit_otel.counter(
-                    "codex.windows_sandbox.elevated_prompt_quit",
-                    /*inc*/ 1,
-                    &[],
-                );
                 tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
             })],
             dismiss_on_select: true,
@@ -178,19 +154,12 @@ impl ChatWidget {
         let retry_profile_selection = profile_selection.clone();
         let elevated_profile_selection = profile_selection.clone();
         let legacy_profile_selection = profile_selection;
-        let quit_otel = self.session_telemetry.clone();
         let elevated_item = SelectionItem {
             name: "Try setting up admin sandbox again".to_string(),
             description: None,
             actions: vec![Box::new({
-                let otel = self.session_telemetry.clone();
                 let preset = elevated_preset;
                 move |tx| {
-                    otel.counter(
-                        "codex.windows_sandbox.fallback_retry_elevated",
-                        /*inc*/ 1,
-                        &[],
-                    );
                     tx.send(AppEvent::BeginWindowsSandboxElevatedSetup {
                         preset: preset.clone(),
                         profile_selection: elevated_profile_selection.clone(),
@@ -213,14 +182,8 @@ impl ChatWidget {
                 name: "Use Codex with non-admin sandbox".to_string(),
                 description: None,
                 actions: vec![Box::new({
-                    let otel = self.session_telemetry.clone();
                     let preset = legacy_preset;
                     move |tx| {
-                        otel.counter(
-                            "codex.windows_sandbox.fallback_use_legacy",
-                            /*inc*/ 1,
-                            &[],
-                        );
                         tx.send(AppEvent::BeginWindowsSandboxLegacySetup {
                             preset: preset.clone(),
                             profile_selection: legacy_profile_selection.clone(),
@@ -236,11 +199,6 @@ impl ChatWidget {
             name: "Quit".to_string(),
             description: None,
             actions: vec![Box::new(move |tx| {
-                quit_otel.counter(
-                    "codex.windows_sandbox.fallback_prompt_quit",
-                    /*inc*/ 1,
-                    &[],
-                );
                 tx.send(AppEvent::Exit(ExitMode::ShutdownFirst));
             })],
             dismiss_on_select: true,

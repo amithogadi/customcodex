@@ -14,14 +14,9 @@ use std::sync::atomic::AtomicBool;
 use tokio_util::sync::CancellationToken;
 
 use crate::inline_visualization::InlineVisualizationContext;
-use codex_app_server_protocol::AddCreditsNudgeCreditType;
-use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
-use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::DynamicToolCallResponse;
-use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
-use codex_app_server_protocol::MarketplaceUpgradeResponse;
 use codex_app_server_protocol::McpServerOauthLoginResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::McpServerStatusDetail;
@@ -36,7 +31,6 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadItemsListResponse;
-use codex_connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_message_history::HistoryBatchCursor;
 use codex_protocol::ThreadId;
@@ -53,8 +47,6 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::TerminalTitleItem;
 use crate::chatwidget::AstraModelPickerAction;
-use crate::chatwidget::ConnectorScopeGeneration;
-use crate::chatwidget::ThreadUsageOutcome;
 use crate::chatwidget::UserMessage;
 use crate::experimental_features::FeatureWriteResult;
 use crate::goal_files::GoalDraft;
@@ -64,17 +56,8 @@ use codex_features::Feature;
 use codex_plugin::PluginCapabilitySummary;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::models::ActivePermissionProfile;
-use codex_realtime_webrtc::StartedRealtimeWebrtcSession;
 
 use crate::history_cell::HistoryCell;
-
-/// Global voice controls always apply to the one call's owner.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum VoiceControl {
-    Toggle,
-    Stop,
-    Mute,
-}
 
 /// Confirmed server lifecycle operations available from the agents dashboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,32 +157,17 @@ pub(crate) enum WindowsSandboxEnableMode {
     Legacy,
 }
 
-#[derive(Debug, Clone)]
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub(crate) struct ConnectorsSnapshot {
-    pub(crate) connectors: Vec<AppInfo>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PluginLocation {
     Local { marketplace_path: AbsolutePathBuf },
-    Remote { marketplace_name: String },
 }
 
 impl PluginLocation {
     pub(crate) fn into_request_params(self) -> (Option<AbsolutePathBuf>, Option<String>) {
         match self {
             PluginLocation::Local { marketplace_path } => (Some(marketplace_path), None),
-            PluginLocation::Remote { marketplace_name } => (None, Some(marketplace_name)),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PluginRemoteSectionError {
-    pub(crate) section_id: String,
-    pub(crate) label: String,
-    pub(crate) message: String,
 }
 
 /// Distinguishes why a rate-limit refresh was requested so the completion
@@ -285,18 +253,7 @@ pub(crate) struct AgentPickerThreadRefresh {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, IntoStaticStr)]
 pub(crate) enum AppEvent {
-    AccountEmailLoaded {
-        request_id: uuid::Uuid,
-        email: Option<String>,
-    },
-    SecuritySetupLoaded {
-        request_id: uuid::Uuid,
-        identity: crate::security_setup::Identity,
-        notice: crate::security_setup::Notice,
-    },
     OpenDaemonMenu,
-    ConfirmDaemonUpdate(crate::update_action::DaemonUpdateSource),
-    RunDaemonUpdate(crate::update_action::DaemonUpdateSource),
     ReviewMisalignment(Arc<crate::chatwidget::MisalignmentReview>),
     ContinueMisalignment(Arc<crate::chatwidget::MisalignmentReview>),
     CloseMisalignmentReview,
@@ -693,11 +650,6 @@ pub(crate) enum AppEvent {
         matches: Vec<crate::task_mentions::TaskMention>,
     },
 
-    /// Refresh account rate limits in the background.
-    RefreshRateLimits {
-        origin: RateLimitRefreshOrigin,
-    },
-
     /// Reconcile inherited account usage with an attached task before its queued input runs.
     ApplyBackendBannerFallback {
         thread_id: ThreadId,
@@ -731,118 +683,14 @@ pub(crate) enum AppEvent {
         thread_id: ThreadId,
     },
 
-    /// Result of refreshing rate limits.
-    RateLimitsLoaded {
-        request_id: u64,
-        origin: RateLimitRefreshOrigin,
-        hard_stop_generation: u64,
-        result: Result<GetAccountRateLimitsResponse, String>,
-    },
-
-    /// Open the authenticated account analytics dashboard.
-    OpenAnalytics {
-        view: Option<crate::analytics::TokenActivityView>,
-    },
-
-    /// Open the reset-credit flow selected from the `/usage` menu.
-    OpenRateLimitResetCredits,
-
-    /// Confirm the reset credit selected from the reset-credit picker.
-    OpenRateLimitResetConfirmation {
-        picker_request_id: u64,
-        confirmation_gate: Arc<AtomicBool>,
-        credit_id: Option<String>,
-        reset_title: String,
-        reset_detail: Option<String>,
-        reset_description: String,
-    },
-
-    /// Consume one reset credit using a stable idempotency key.
-    ConsumeRateLimitResetCredit {
-        idempotency_key: String,
-        credit_id: Option<String>,
-    },
-
-    /// Result of consuming one reset credit.
-    RateLimitResetCreditConsumed {
-        request_id: u64,
-        idempotency_key: String,
-        credit_id: Option<String>,
-        result: Result<ConsumeAccountRateLimitResetCreditResponse, String>,
-    },
-
-    /// Fetch backend-estimated usage for the currently visible enterprise thread.
-    RefreshThreadUsage {
-        thread_id: ThreadId,
-        request_id: u64,
-    },
-
-    /// Result of fetching backend-estimated usage for a specific thread.
-    ThreadUsageLoaded {
-        thread_id: ThreadId,
-        request_id: u64,
-        result: Result<ThreadUsageOutcome, String>,
-    },
-
-    /// Result of fetching usage for the selected dashboard task.
-    AgentsOverviewUsageLoaded {
-        thread_id: ThreadId,
-        request_id: Uuid,
-        result: Result<ThreadUsageOutcome, String>,
-    },
-
-    /// Fetch workspace messages for the status-line headline item.
-    RefreshStatusLineWorkspaceHeadline {
-        request_id: u64,
-    },
-
-    /// Commit settled asynchronous usage output after active-output barriers clear.
-    CommitPendingUsageOutput,
-
-    /// Commit settled asynchronous usage output after stream shutdown.
-    CommitPendingUsageOutputAfterStreamShutdown,
-
-    /// Send a user-confirmed request to notify the workspace owner.
-    SendAddCreditsNudgeEmail {
-        credit_type: AddCreditsNudgeCreditType,
-    },
-
-    /// Result of notifying the workspace owner.
-    AddCreditsNudgeEmailFinished {
-        request_id: Uuid,
-        result: Result<AddCreditsNudgeEmailStatus, String>,
-    },
-
     /// Result of prefetching connectors.
-    ConnectorsLoaded {
-        thread_id: Option<ThreadId>,
-        cwd: PathBuf,
-        generation: ConnectorScopeGeneration,
-        result: Result<ConnectorsSnapshot, String>,
-        is_final: bool,
-    },
 
     /// Thread-scoped installed applications that may actually be mentioned.
-    InstalledConnectorMentionsLoaded {
-        thread_id: Option<ThreadId>,
-        cwd: PathBuf,
-        generation: ConnectorScopeGeneration,
-        result: Result<ConnectorsSnapshot, String>,
-    },
 
     /// Result of computing a `/diff` command.
     DiffResult(PathBuf, String),
 
     /// Open the app link view in the bottom pane.
-    OpenAppLink {
-        app_id: String,
-        title: String,
-        description: Option<String>,
-        instructions: String,
-        url: String,
-        is_installed: bool,
-        is_enabled: bool,
-    },
 
     /// Open the provided URL in the user's browser.
     OpenUrlInBrowser {
@@ -882,21 +730,10 @@ pub(crate) enum AppEvent {
     },
 
     /// Refresh app connector state and mention bindings.
-    RefreshConnectors {
-        force_refetch: bool,
-    },
 
     /// Fetch apps only while the originating account, workspace, and thread remain current.
-    FetchConnectorsList {
-        force_refetch: bool,
-        generation: ConnectorScopeGeneration,
-    },
 
     /// Refresh callable installed applications without loading the app directory.
-    FetchInstalledConnectorMentions {
-        force_refresh: bool,
-        generation: ConnectorScopeGeneration,
-    },
 
     /// Fetch plugin marketplace state for the provided working directory.
     FetchPluginsList {
@@ -921,11 +758,6 @@ pub(crate) enum AppEvent {
     },
 
     /// Result of explicitly fetching remote-backed plugin sections.
-    PluginRemoteSectionsLoaded {
-        cwd: PathBuf,
-        marketplaces: Vec<PluginMarketplaceEntry>,
-        section_errors: Vec<PluginRemoteSectionError>,
-    },
 
     /// Result of fetching lifecycle hook inventory.
     HooksLoaded {
@@ -981,21 +813,10 @@ pub(crate) enum AppEvent {
     },
 
     /// Replace the plugins popup with a marketplace-upgrade loading state.
-    OpenMarketplaceUpgradeLoading {
-        marketplace_name: Option<String>,
-    },
 
     /// Upgrade configured Git marketplaces.
-    FetchMarketplaceUpgrade {
-        cwd: PathBuf,
-        marketplace_name: Option<String>,
-    },
 
     /// Result of upgrading configured Git marketplaces.
-    MarketplaceUpgradeLoaded {
-        cwd: PathBuf,
-        result: Result<MarketplaceUpgradeResponse, String>,
-    },
 
     /// Replace the plugins popup with a plugin-detail loading state.
     OpenPluginDetailLoading {
@@ -1081,12 +902,8 @@ pub(crate) enum AppEvent {
     },
 
     /// Advance the post-install plugin app-auth flow.
-    PluginInstallAuthAdvance {
-        refresh_connectors: bool,
-    },
 
     /// Abandon the post-install plugin app-auth flow.
-    PluginInstallAuthAbandon,
 
     /// Fetch MCP inventory via app-server RPCs and render it into history.
     FetchMcpInventory {
@@ -1142,10 +959,6 @@ pub(crate) enum AppEvent {
     /// Move visible completed voice captions into history in one app event.
     CommitRealtimeTranscriptHistory,
 
-    VoiceControl {
-        thread_id: Option<ThreadId>,
-        control: VoiceControl,
-    },
     RealtimeConversationStateChanged,
     BackgroundVoiceError {
         thread_id: ThreadId,
@@ -1206,25 +1019,6 @@ pub(crate) enum AppEvent {
         action: AstraModelPickerAction,
     },
 
-    /// Result of creating a TUI-owned WebRTC offer for an active thread.
-    RealtimeWebrtcOfferCreated {
-        thread_id: ThreadId,
-        attempt_id: u64,
-        result: Result<StartedRealtimeWebrtcSession, String>,
-    },
-
-    /// Result of establishing the WebRTC connection for an active voice attempt.
-    RealtimeWebrtcConnected {
-        thread_id: ThreadId,
-        attempt_id: u64,
-        result: Result<(), codex_realtime_webrtc::ConnectionError>,
-    },
-
-    /// Stop voice on its original thread after its chat widget is replaced.
-    StopRealtimeConversation {
-        thread_id: ThreadId,
-    },
-
     /// Finish a settings selection after its preceding update events have been applied.
     SettingsSelectionClosed,
     /// Run after any nested settings events emitted while handling the close event.
@@ -1244,34 +1038,6 @@ pub(crate) enum AppEvent {
 
     /// Show the cyber auto-review notice after the model selection confirmation.
     CyberModelAutoReviewNotice,
-
-    /// Read the owning server preference before showing the voice picker.
-    OpenRealtimeSettings,
-    OpenRealtimeSoundDevices,
-    OpenRealtimeVoices,
-    OpenRealtimeDevicePicker {
-        kind: codex_realtime_webrtc::AudioDeviceKind,
-    },
-    OpenRealtimeInputChannels {
-        device: codex_realtime_webrtc::AudioDevice,
-    },
-    RealtimeDevicesListed {
-        origin: Option<ThreadId>,
-        kind: codex_realtime_webrtc::AudioDeviceKind,
-        result: Result<Vec<codex_realtime_webrtc::AudioDevice>, String>,
-    },
-    PersistRealtimeDevice {
-        kind: codex_realtime_webrtc::AudioDeviceKind,
-        name: Option<String>,
-    },
-    PersistRealtimeInputChannel {
-        channel: Option<codex_config::config_toml::MicrophoneChannels>,
-    },
-
-    /// Save the voice for subsequent conversations through the app server.
-    PersistRealtimeVoiceSelection {
-        voice: codex_protocol::protocol::RealtimeVoice,
-    },
 
     /// Persist the selected service tier to the appropriate config.
     PersistServiceTierSelection {
@@ -1463,10 +1229,6 @@ pub(crate) enum AppEvent {
     },
 
     /// Enable or disable an app by connector ID.
-    SetAppEnabled {
-        id: String,
-        enabled: bool,
-    },
 
     /// Enable or disable a hook by stable hook key.
     SetHookEnabled {
@@ -1526,33 +1288,6 @@ pub(crate) enum AppEvent {
         crate::bottom_pane::user_verification::UserVerificationRequest,
     ),
 
-    /// Open the feedback note entry overlay after the user selects a category.
-    OpenFeedbackNote {
-        category: FeedbackCategory,
-        include_logs: bool,
-    },
-
-    /// Open the upload consent popup for feedback after selecting a category.
-    OpenFeedbackConsent {
-        category: FeedbackCategory,
-    },
-
-    /// Submit feedback for the current thread via the app-server feedback RPC.
-    SubmitFeedback {
-        category: FeedbackCategory,
-        reason: Option<String>,
-        turn_id: Option<String>,
-        include_logs: bool,
-    },
-
-    /// Result of a feedback upload request initiated by the TUI.
-    FeedbackSubmitted {
-        origin_thread_id: Option<ThreadId>,
-        category: FeedbackCategory,
-        include_logs: bool,
-        result: Result<String, String>,
-    },
-
     /// Launch the external editor after a normal draw has completed.
     LaunchExternalEditor,
 
@@ -1565,11 +1300,6 @@ pub(crate) enum AppEvent {
     StatusLineGitSummaryUpdated {
         cwd: PathBuf,
         summary: crate::chatwidget::StatusLineGitSummary,
-    },
-    /// Async update of the workspace notification headline for status line rendering.
-    StatusLineWorkspaceHeadlineUpdated {
-        request_id: u64,
-        result: Result<crate::workspace_messages::WorkspaceHeadlineFetchResult, String>,
     },
     /// Apply a user-confirmed status-line item ordering/selection.
     StatusLineSetup {
@@ -1706,13 +1436,4 @@ pub(crate) enum RunningTaskExitAction {
     CancelTask,
     RunInBackground,
     Exit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FeedbackCategory {
-    BadResult,
-    GoodResult,
-    Bug,
-    SafetyCheck,
-    Other,
 }

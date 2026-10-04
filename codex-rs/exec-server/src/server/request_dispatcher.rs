@@ -31,7 +31,6 @@ use crate::rpc::invalid_request;
 use crate::rpc::method_not_found;
 use crate::rpc_server_requests::RpcServerRequestSender;
 use crate::server::ExecServerHandler;
-use crate::telemetry::ExecServerTelemetry;
 
 pub(super) struct RequestDispatcher {
     router: Arc<RpcRouter<ExecServerHandler>>,
@@ -39,7 +38,6 @@ pub(super) struct RequestDispatcher {
     outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>,
     disconnected_rx: watch::Receiver<bool>,
     requests: RpcServerRequestSender,
-    telemetry: ExecServerTelemetry,
     lanes: Option<RequestLanes>,
     tasks: JoinSet<RequestTaskResult>,
     initialized: bool,
@@ -52,7 +50,6 @@ impl RequestDispatcher {
         outgoing_tx: mpsc::Sender<RpcServerOutboundMessage>,
         disconnected_rx: watch::Receiver<bool>,
         requests: RpcServerRequestSender,
-        telemetry: ExecServerTelemetry,
         mode: RequestDispatchMode,
     ) -> Self {
         let lanes = match mode {
@@ -71,7 +68,6 @@ impl RequestDispatcher {
             outgoing_tx,
             disconnected_rx,
             requests,
-            telemetry,
             lanes,
             tasks: JoinSet::new(),
             initialized: false,
@@ -176,11 +172,9 @@ impl RequestDispatcher {
         request_span: tracing::Span,
         queued_at: Instant,
     ) -> RequestTaskResult {
-        let started_at = Instant::now();
+        let _started_at = Instant::now();
         let Some((method, route)) = self.router.request_route(request.method.as_str()) else {
             let method = "unknown";
-            self.telemetry
-                .request_queue_completed(method, queued_at.elapsed());
             request_span.record("otel.name", method);
             request_span.record(
                 "rpc.dispatch_offset_ns",
@@ -199,12 +193,6 @@ impl RequestDispatcher {
                 .is_err()
             {
                 request_span.record("result", "disconnected");
-                self.telemetry.request_completed(
-                    method,
-                    "disconnected",
-                    started_at.elapsed(),
-                    queued_at.elapsed(),
-                );
                 return RequestTaskResult::ConnectionClosed;
             }
             request_span.record(
@@ -212,41 +200,24 @@ impl RequestDispatcher {
                 i64::try_from(queued_at.elapsed().as_nanos()).unwrap_or(i64::MAX),
             );
             request_span.record("result", "error");
-            self.telemetry.request_completed(
-                method,
-                "error",
-                started_at.elapsed(),
-                queued_at.elapsed(),
-            );
             return RequestTaskResult::Completed;
         };
 
         request_span.record("otel.name", method);
         let route_setup_started_at = Instant::now();
         let route = route(Arc::clone(&self.handler), request);
-        let route_setup_duration = route_setup_started_at.elapsed();
+        let _route_setup_duration = route_setup_started_at.elapsed();
         let outgoing_tx = self.outgoing_tx.clone();
         let mut disconnected_rx = self.disconnected_rx.clone();
-        let telemetry = self.telemetry.clone();
         let task = async move {
             request_span.record(
                 "rpc.dispatch_offset_ns",
                 i64::try_from(queued_at.elapsed().as_nanos()).unwrap_or(i64::MAX),
             );
-            telemetry.request_queue_completed(
-                method,
-                queued_at.elapsed().saturating_sub(route_setup_duration),
-            );
             let message = tokio::select! {
                 message = route.instrument(request_span.clone()) => message,
                 _ = disconnected_rx.changed() => {
                     request_span.record("result", "disconnected");
-                    telemetry.request_completed(
-                        method,
-                        "disconnected",
-                        started_at.elapsed(),
-                        queued_at.elapsed(),
-                    );
                     return RequestTaskResult::ConnectionClosed;
                 }
             };
@@ -269,16 +240,9 @@ impl RequestDispatcher {
             };
             if !response_sent {
                 request_span.record("result", "disconnected");
-                telemetry.request_completed(
-                    method,
-                    "disconnected",
-                    started_at.elapsed(),
-                    queued_at.elapsed(),
-                );
                 return RequestTaskResult::ConnectionClosed;
             }
             request_span.record("result", result);
-            telemetry.request_completed(method, result, started_at.elapsed(), queued_at.elapsed());
             RequestTaskResult::Completed
         };
 

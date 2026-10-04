@@ -28,26 +28,6 @@ fn user_layer(path: AbsolutePathBuf, config: &str) -> ConfigLayerEntry {
 }
 
 #[tokio::test]
-async fn agent_plugin_overlay_apps_are_not_runtime_active() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let plugin_root = temp_dir.path().join("plugin");
-    write_file(
-        &plugin_root.join("plugin.json"),
-        &format!(r#"{{"$schema":"{AGENT_PLUGIN_SCHEMA_URI}","name":"plugin"}}"#),
-    );
-    write_file(
-        &plugin_root.join(".codex-plugin/plugin.json"),
-        r#"{"name":"plugin","apps":"./.app.json"}"#,
-    );
-    write_file(
-        &plugin_root.join(".app.json"),
-        r#"{"apps":{"example":{"id":"connector_example"}}}"#,
-    );
-
-    assert!(load_plugin_apps(&plugin_root).await.is_empty());
-}
-
-#[tokio::test]
 async fn agent_plugin_codex_mcp_overlay_only_forwards_matching_stdio_server_env_vars() {
     let temp_dir = TempDir::new().expect("tempdir");
     let plugin_root = temp_dir.path().join("plugin");
@@ -278,11 +258,9 @@ async fn installed_agent_plugin_uses_isolated_data_root_for_stdio_mcp() {
 
     let plugins = load_plugins_from_layer_stack(
         &stack,
-        RemoteInstalledPluginsSnapshot::default(),
         &store,
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
-        /*remote_global_catalog_active*/ false,
         test_skill_root_loader().as_ref(),
     )
     .await;
@@ -536,22 +514,14 @@ enabled = true
 
     let full = load_plugins_from_layer_stack(
         &stack,
-        RemoteInstalledPluginsSnapshot::default(),
         &store,
         /*plugin_skill_snapshots*/ None,
         Some(Product::Codex),
-        /*remote_global_catalog_active*/ false,
         test_skill_root_loader().as_ref(),
     )
     .await;
-    let hooks_only = load_plugins_from_layer_stack_with_scope(
-        &stack,
-        HashMap::new(),
-        &store,
-        /*remote_global_catalog_active*/ false,
-        PluginLoadScope::HooksOnly,
-    )
-    .await;
+    let hooks_only =
+        load_plugins_from_layer_stack_with_scope(&stack, &store, PluginLoadScope::HooksOnly).await;
 
     let validation_state = |plugins: &[LoadedPlugin<McpServerConfig>]| {
         plugins
@@ -577,7 +547,7 @@ enabled = true
     assert!(full_valid.manifest_name.is_some());
     assert!(!full_valid.skill_roots.is_empty());
     assert!(!full_valid.mcp_servers.is_empty());
-    assert!(!full_valid.apps.is_empty());
+    assert!(full_valid.apps.is_empty());
 
     let hooks_only_valid = hooks_only
         .iter()
@@ -587,23 +557,6 @@ enabled = true
     assert!(hooks_only_valid.skill_roots.is_empty());
     assert!(hooks_only_valid.mcp_servers.is_empty());
     assert!(hooks_only_valid.apps.is_empty());
-}
-
-#[test]
-fn curated_plugin_cache_version_shortens_full_git_sha() {
-    assert_eq!(
-        curated_plugin_cache_version("0123456789abcdef0123456789abcdef01234567"),
-        "01234567"
-    );
-}
-
-#[test]
-fn curated_plugin_cache_version_preserves_non_git_sha_versions() {
-    assert_eq!(
-        curated_plugin_cache_version("export-backup"),
-        "export-backup"
-    );
-    assert_eq!(curated_plugin_cache_version("0123456"), "0123456");
 }
 
 fn plugin_id() -> PluginId {
@@ -830,101 +783,4 @@ fn load_plugin_hooks_supports_inline_manifest_hook_list() {
 
     assert_eq!(warnings, Vec::<String>::new());
     assert_sources(&sources, &["plugin.json#hooks[0]", "plugin.json#hooks[1]"]);
-}
-
-#[test]
-fn materialize_git_subdir_uses_sparse_checkout() {
-    let run_git = |args: &[&str], cwd| super::run_git(args, cwd, PluginGitMode::Manual);
-    let run_git_output =
-        |args: &[&str], cwd| super::run_git_output(args, cwd, PluginGitMode::Manual);
-    let codex_home = tempfile::tempdir().expect("create codex home");
-    let repo = tempfile::tempdir().expect("create git repo");
-    let plugin_dir = repo.path().join("plugins/toolkit");
-    fs::create_dir_all(&plugin_dir).expect("create plugin directory");
-    fs::create_dir_all(repo.path().join("plugins/other")).expect("create other plugin");
-    fs::write(plugin_dir.join("marker.txt"), "toolkit").expect("write plugin marker");
-    fs::write(repo.path().join("plugins/other/marker.txt"), "other").expect("write other marker");
-    fs::write(repo.path().join("root.txt"), "root").expect("write root marker");
-
-    run_git(&["init"], Some(repo.path())).expect("init git repo");
-    run_git(
-        &["config", "user.email", "test@example.com"],
-        Some(repo.path()),
-    )
-    .expect("configure git email");
-    run_git(&["config", "user.name", "Test User"], Some(repo.path())).expect("configure git name");
-    run_git(&["add", "."], Some(repo.path())).expect("stage git repo");
-    run_git(&["commit", "-m", "init"], Some(repo.path())).expect("commit git repo");
-    let sha = run_git_output(&["rev-parse", "HEAD"], Some(repo.path())).expect("resolve commit");
-
-    let materialized = materialize_marketplace_plugin_source(
-        codex_home.path(),
-        &MarketplacePluginSource::Git {
-            url: repo.path().display().to_string(),
-            path: Some("plugins/toolkit".to_string()),
-            ref_name: None,
-            sha: Some(sha),
-        },
-    )
-    .expect("materialize git source");
-
-    assert_eq!(
-        plugin_dir.file_name(),
-        materialized.path.as_path().file_name()
-    );
-    assert!(materialized.path.as_path().join("marker.txt").is_file());
-    let checkout_root = materialized
-        .path
-        .as_path()
-        .parent()
-        .and_then(Path::parent)
-        .expect("materialized path should be nested under checkout root");
-    assert!(!checkout_root.join("root.txt").exists());
-    assert!(!checkout_root.join("plugins/other/marker.txt").exists());
-}
-
-#[test]
-fn materialize_git_source_rejects_sha_that_resolves_to_hostile_default_branch() {
-    let run_git = |args: &[&str], cwd| super::run_git(args, cwd, PluginGitMode::Manual);
-    let run_git_output =
-        |args: &[&str], cwd| super::run_git_output(args, cwd, PluginGitMode::Manual);
-    let codex_home = tempfile::tempdir().expect("create codex home");
-    let repo = tempfile::tempdir().expect("create git repo");
-    run_git(&["init"], Some(repo.path())).expect("init git repo");
-    run_git(
-        &["config", "user.email", "test@example.com"],
-        Some(repo.path()),
-    )
-    .expect("configure git email");
-    run_git(&["config", "user.name", "Test User"], Some(repo.path())).expect("configure git name");
-
-    fs::write(repo.path().join("marker.txt"), "benign").expect("write benign marker");
-    run_git(&["add", "."], Some(repo.path())).expect("stage git repo");
-    run_git(&["commit", "-m", "benign"], Some(repo.path())).expect("commit benign revision");
-    let benign_sha =
-        run_git_output(&["rev-parse", "HEAD"], Some(repo.path())).expect("resolve commit A");
-
-    fs::write(repo.path().join("marker.txt"), "malicious").expect("write malicious marker");
-    run_git(&["add", "."], Some(repo.path())).expect("stage malicious revision");
-    run_git(&["commit", "-m", "malicious"], Some(repo.path())).expect("commit malicious revision");
-    let malicious_sha =
-        run_git_output(&["rev-parse", "HEAD"], Some(repo.path())).expect("resolve commit B");
-    run_git(&["branch", "-m", &benign_sha], Some(repo.path()))
-        .expect("name default branch after commit A");
-
-    let err = materialize_marketplace_plugin_source(
-        codex_home.path(),
-        &MarketplacePluginSource::Git {
-            url: repo.path().display().to_string(),
-            path: None,
-            ref_name: None,
-            sha: Some(benign_sha.clone()),
-        },
-    )
-    .expect_err("hostile default branch must not satisfy SHA pinning");
-
-    assert_eq!(
-        err,
-        format!("checked out Git SHA {malicious_sha} does not match requested SHA {benign_sha}")
-    );
 }

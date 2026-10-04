@@ -161,15 +161,6 @@ pub struct ToolsV2 {
     pub web_search: Option<WebSearchToolConfig>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export_to = "v2/")]
-pub struct AnalyticsConfig {
-    pub enabled: Option<bool>,
-    #[serde(default, flatten)]
-    pub additional: HashMap<String, JsonValue>,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
@@ -303,7 +294,6 @@ pub struct Config {
     pub model_reasoning_summary: Option<ReasoningSummary>,
     pub model_verbosity: Option<Verbosity>,
     pub service_tier: Option<String>,
-    pub analytics: Option<AnalyticsConfig>,
     #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
@@ -430,7 +420,6 @@ pub struct ConfigRequirements {
     pub allow_managed_hooks_only: Option<bool>,
     pub allow_browser_and_computer_use: Option<bool>,
     pub allow_appshots: Option<bool>,
-    pub allow_remote_control: Option<bool>,
     pub computer_use: Option<ComputerUseRequirements>,
     pub feature_requirements: Option<BTreeMap<String, bool>>,
     #[experimental("configRequirements/read.hooks")]
@@ -448,9 +437,7 @@ pub struct ConfigRequirements {
     pub log_dir: Option<PathUri>,
     #[schemars(with = "Option<String>")]
     pub model_catalog_json: Option<PathUri>,
-    pub check_for_update_on_startup: Option<bool>,
     pub allow_login_shell: Option<bool>,
-    pub feedback: Option<FeedbackRequirements>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -490,13 +477,6 @@ pub struct NewThreadModelDefaults {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-pub struct FeedbackRequirements {
-    pub enabled: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export_to = "v2/")]
 pub struct ComputerUseRequirements {
     pub allow_locked_computer_use: Option<bool>,
     pub allow_persistent_approval: Option<bool>,
@@ -505,8 +485,6 @@ pub struct ComputerUseRequirements {
     pub windows: Option<ComputerUseWindowsRequirements>,
 }
 
-
-
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[ts(rename_all = "lowercase", export_to = "v2/")]
@@ -514,7 +492,6 @@ pub enum AllowDenyRequirement {
     Allow,
     Deny,
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -540,7 +517,6 @@ pub struct ComputerUseWindowsExeRequirement {
     pub binary_name: Option<String>,
     pub access: AllowDenyRequirement,
 }
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

@@ -32,8 +32,6 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::unified_exec::generate_chunk_id;
 use codex_features::Feature;
-use codex_otel::SessionTelemetry;
-use codex_otel::TOOL_CALL_UNIFIED_EXEC_METRIC;
 use codex_sandboxing::SandboxManager;
 use codex_sandboxing::SandboxType;
 use codex_sandboxing::SandboxablePreference;
@@ -402,7 +400,6 @@ impl ExecCommandHandler {
             }));
         }
 
-        emit_unified_exec_tty_metric(&step_context.session_telemetry, tty);
         crate::tools::lifecycle::notify_command_start(
             context.session.as_ref(),
             context.step_context.turn.as_ref(),
@@ -556,12 +553,4 @@ impl CoreToolRuntime for ExecCommandHandler {
     ) -> Option<PostToolUsePayload> {
         post_unified_exec_tool_use_payload(invocation, result)
     }
-}
-
-fn emit_unified_exec_tty_metric(session_telemetry: &SessionTelemetry, tty: bool) {
-    session_telemetry.counter(
-        TOOL_CALL_UNIFIED_EXEC_METRIC,
-        /*inc*/ 1,
-        &[("tty", if tty { "true" } else { "false" })],
-    );
 }

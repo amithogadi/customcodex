@@ -44,7 +44,7 @@ pub(crate) fn received(
     };
     tracing::event!(
         name: "codex.tool_call_received",
-        target: "codex_otel.trace_safe",
+        target: "codex.trace_safe",
         tracing::Level::INFO,
         event.name = "codex.tool_call_received",
         conversation.id = %thread_id,
@@ -67,7 +67,7 @@ pub(crate) fn result_ready(
 ) {
     tracing::event!(
         name: "codex.tool_result_ready",
-        target: "codex_otel.trace_safe",
+        target: "codex.trace_safe",
         tracing::Level::INFO,
         event.name = "codex.tool_result_ready",
         conversation.id = %thread_id,

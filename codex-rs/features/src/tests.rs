@@ -473,8 +473,6 @@ fn remote_control_config_is_ignored() {
 
     let mut features = Features::with_defaults();
     features.apply_map(&entries);
-
-    assert_eq!(features.enabled(Feature::RemoteControl), false);
 }
 
 #[test]

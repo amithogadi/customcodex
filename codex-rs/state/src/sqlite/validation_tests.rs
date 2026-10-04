@@ -14,36 +14,6 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
-#[derive(Debug, Eq, PartialEq)]
-struct CorruptionEvent {
-    count: i64,
-    tags: BTreeMap<String, String>,
-}
-
-#[derive(Default)]
-struct CorruptionTelemetry(Mutex<Vec<CorruptionEvent>>);
-
-impl crate::DbTelemetry for CorruptionTelemetry {
-    fn counter(&self, name: &str, inc: i64, tags: &[(&str, &str)]) {
-        if name == crate::DB_CORRUPTION_METRIC {
-            self.0
-                .lock()
-                .expect("telemetry lock")
-                .push(CorruptionEvent {
-                    count: inc,
-                    tags: tags
-                        .iter()
-                        .map(|(key, value)| (key.to_string(), value.to_string()))
-                        .collect(),
-                });
-        }
-    }
-
-    fn histogram(&self, _name: &str, _value: i64, _tags: &[(&str, &str)]) {}
-
-    fn record_duration(&self, _name: &str, _duration: Duration, _tags: &[(&str, &str)]) {}
-}
-
 #[tokio::test]
 async fn runtime_opens_recover_or_report_corruption_by_database_policy() -> anyhow::Result<()> {
     let root = unique_temp_dir();
@@ -75,15 +45,11 @@ async fn runtime_opens_recover_or_report_corruption_by_database_policy() -> anyh
         tokio::fs::rename(&fixture, &path).await?;
 
         if path == sqlite.thread_history_db_path() {
-            let telemetry = CorruptionTelemetry::default();
             // Unrelated corruption must not disable lazy history reads when the
             // caller has no recovery path. Exercise both migration and reopening.
             for _ in 0..2 {
                 let pool = sqlite
-                    .open_thread_history_db(
-                        &crate::migrations::runtime_thread_history_migrator(),
-                        Some(&telemetry),
-                    )
+                    .open_thread_history_db(&crate::migrations::runtime_thread_history_migrator())
                     .await?;
                 assert_eq!(
                     sqlx::query_scalar::<_, i64>("SELECT count(*) FROM thread_turns")
@@ -97,13 +63,6 @@ async fn runtime_opens_recover_or_report_corruption_by_database_policy() -> anyh
                 );
                 pool.close().await;
             }
-            assert_eq!(
-                *telemetry.0.lock().expect("telemetry lock"),
-                vec![CorruptionEvent {
-                    count: 1,
-                    tags: BTreeMap::from([("db".to_string(), "thread_history".to_string())]),
-                }]
-            );
             continue;
         }
 
@@ -145,14 +104,8 @@ async fn quick_check_failure_is_recovered_before_runtime_init_returns() -> anyho
     let _cleanup = scopeguard::guard(home.clone(), |home| {
         let _ = std::fs::remove_dir_all(home);
     });
-    let telemetry = CorruptionTelemetry::default();
     let sqlite = SqliteConfig::new_for_testing(home.as_path().abs());
-    let runtime = StateRuntime::init_with_telemetry_for_tests(
-        sqlite.clone(),
-        "openai".to_string(),
-        &telemetry,
-    )
-    .await?;
+    let runtime = StateRuntime::init(sqlite.clone(), "openai".to_string()).await?;
     runtime.close().await;
     let state_pool = sqlite.open_read_write_pool(&sqlite.state_db_path()).await?;
     sqlx::query("CREATE TABLE preserved(value); INSERT INTO preserved VALUES ('keep me')")
@@ -161,10 +114,7 @@ async fn quick_check_failure_is_recovered_before_runtime_init_returns() -> anyho
     state_pool.close().await;
     let logs_path = sqlite.logs_db_path();
     sqlite
-        .open_logs_db(
-            &crate::migrations::runtime_logs_migrator(),
-            /*telemetry_override*/ None,
-        )
+        .open_logs_db(&crate::migrations::runtime_logs_migrator())
         .await?
         .close()
         .await;
@@ -188,27 +138,10 @@ async fn quick_check_failure_is_recovered_before_runtime_init_returns() -> anyho
     // Replacing an already-validated file must trigger a new check at the same path.
     tokio::fs::remove_file(&logs_path).await?;
     tokio::fs::rename(&fixture, &logs_path).await?;
-    let runtime = StateRuntime::init_with_telemetry_for_tests(
-        sqlite.clone(),
-        "openai".to_string(),
-        &telemetry,
-    )
-    .await?;
+    let runtime = StateRuntime::init(sqlite.clone(), "openai".to_string()).await?;
     runtime.close().await;
-    let runtime = StateRuntime::init_with_telemetry_for_tests(
-        sqlite.clone(),
-        "openai".to_string(),
-        &telemetry,
-    )
-    .await?;
+    let runtime = StateRuntime::init(sqlite.clone(), "openai".to_string()).await?;
     runtime.close().await;
-    assert_eq!(
-        *telemetry.0.lock().expect("telemetry lock"),
-        vec![CorruptionEvent {
-            count: 1,
-            tags: BTreeMap::from([("db".to_string(), "logs".to_string())]),
-        }]
-    );
     let backups =
         std::fs::read_dir(home.join("db-backups"))?.collect::<std::io::Result<Vec<_>>>()?;
     assert_eq!(backups.len(), 1);
@@ -272,9 +205,7 @@ async fn repeated_pool_opens_share_completed_and_incomplete_attempts() -> anyhow
         pool.close().await;
 
         let migrator = crate::migrations::runtime_logs_migrator();
-        let pool = sqlite
-            .open_logs_db(&migrator, /*telemetry_override*/ None)
-            .await?;
+        let pool = sqlite.open_logs_db(&migrator).await?;
         sqlx::raw_sql(
             "UPDATE sample SET value=NULL WHERE value=1;
              PRAGMA writable_schema=ON;
@@ -287,8 +218,8 @@ async fn repeated_pool_opens_share_completed_and_incomplete_attempts() -> anyhow
         // Corruption introduced after the first attempt exposes any repeated scan.
         let cloned_sqlite = sqlite.clone();
         let (first, second) = tokio::join!(
-            sqlite.open_logs_db(&migrator, /*telemetry_override*/ None),
-            cloned_sqlite.open_logs_db(&migrator, /*telemetry_override*/ None),
+            sqlite.open_logs_db(&migrator),
+            cloned_sqlite.open_logs_db(&migrator),
         );
         let first = first?;
         let second = second?;
@@ -302,9 +233,7 @@ async fn repeated_pool_opens_share_completed_and_incomplete_attempts() -> anyhow
 
         // A separately constructed configuration must check and recover the file.
         let independent_sqlite = SqliteConfig::new_for_testing(home.as_path().abs());
-        let repaired = independent_sqlite
-            .open_logs_db(&migrator, /*telemetry_override*/ None)
-            .await?;
+        let repaired = independent_sqlite.open_logs_db(&migrator).await?;
         assert_eq!(
             quick_check(&repaired, Instant::now() + Duration::from_secs(/*secs*/ 5)).await?,
             QuickCheckOutcome::Complete

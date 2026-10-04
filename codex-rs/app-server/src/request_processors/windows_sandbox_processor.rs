@@ -190,7 +190,6 @@ impl WindowsSandboxRequestProcessor {
                     };
                     if let Some((settings, listeners)) = provisioning {
                         let service_setup_request = setup_request.clone();
-                        let service_setup_start = Instant::now();
                         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                             if matches!(
                                 &service_setup_request.permission_profile,
@@ -231,14 +230,7 @@ impl WindowsSandboxRequestProcessor {
                                 "Windows sandbox service provisioning task failed: {error}"
                             )
                         })
-                        .and_then(std::convert::identity)
-                        .inspect_err(|error| {
-                            codex_core::windows_sandbox::emit_windows_sandbox_setup_failure_metrics(
-                                setup_mode,
-                                service_setup_start.elapsed(),
-                                error,
-                            );
-                        })?;
+                        .and_then(std::convert::identity)?;
                     }
                 }
                 codex_core::windows_sandbox::run_windows_sandbox_setup(setup_request).await

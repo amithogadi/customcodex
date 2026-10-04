@@ -51,8 +51,6 @@ const EXPERIMENTAL_CLIENT_METHOD_DEPENDENCY_TYPES: &[&str] = &[
     "BedrockEnvironmentCredential",
     "EnvironmentShellInfo",
     "EnvironmentStatusKind",
-    "RemoteControlClient",
-    "RemoteControlClientsListOrder",
     "ThreadBackgroundTerminal",
     "ThreadSearchOccurrence",
     "ThreadSearchTextRange",
@@ -2189,22 +2187,13 @@ mod tests {
             client_request_ts.contains("MockExperimentalMethodParams"),
             false
         );
-        const LEGACY_ACCOUNT_USAGE_REQUEST: &str = concat!(
-            "{ \"method\": \"account/usage/read\", id: RequestId, ",
-            "params?: GetAccountTokenUsageParams | undefined, }"
-        );
-        assert!(client_request_ts.contains(LEGACY_ACCOUNT_USAGE_REQUEST));
-        const LEGACY_ACCOUNT_RATE_LIMITS_REQUEST: &str = concat!(
-            "{ \"method\": \"account/rateLimits/read\", id: RequestId, ",
-            "params?: GetAccountRateLimitsParams | undefined, }"
-        );
-        assert!(client_request_ts.contains(LEGACY_ACCOUNT_RATE_LIMITS_REQUEST));
-        let account_usage_response_ts = std::str::from_utf8(
-            fixture_tree
-                .get(Path::new("v2/GetAccountTokenUsageResponse.ts"))
-                .ok_or_else(|| anyhow::anyhow!("missing account usage response fixture"))?,
-        )?;
-        assert!(account_usage_response_ts.contains("threadUsage?: ThreadUsage | null"));
+        for removed_method in [
+            "account/usage/read",
+            "account/rateLimits/read",
+            "remoteControl/",
+        ] {
+            assert!(!client_request_ts.contains(removed_method));
+        }
         let mcp_login_completion_ts = std::str::from_utf8(
             fixture_tree
                 .get(Path::new("v2/McpServerOauthLoginCompletedNotification.ts"))
@@ -2283,16 +2272,7 @@ mod tests {
                 });
 
             let contents = std::str::from_utf8(contents)?;
-            // Both stable usage RPCs originally required `params: undefined`. Preserve that
-            // source compatibility only for these exact envelopes, not arbitrary new fields.
-            let checked_contents = if path == Path::new("ClientRequest.ts") {
-                contents
-                    .replace(LEGACY_ACCOUNT_USAGE_REQUEST, "")
-                    .replace(LEGACY_ACCOUNT_RATE_LIMITS_REQUEST, "")
-            } else {
-                contents.to_owned()
-            };
-            if checked_contents.contains("| undefined") {
+            if contents.contains("| undefined") {
                 undefined_offenders.push(path.clone());
             }
 
@@ -2406,11 +2386,9 @@ mod tests {
                 // optional field with a nullable type (i.e., "?: T | null").
                 // These are only allowed in *Params types, except additive stable fields
                 // that older servers omit and newer servers may return as null.
-                let legacy_optional_nullable_field = (path
-                    == Path::new("v2/GetAccountTokenUsageResponse.ts")
-                    && field_prefix.trim() == "threadUsage?")
-                    || (path == Path::new("v2/McpServerOauthLoginCompletedNotification.ts")
-                        && field_prefix.trim() == "loginId?");
+                let legacy_optional_nullable_field = path
+                    == Path::new("v2/McpServerOauthLoginCompletedNotification.ts")
+                    && field_prefix.trim() == "loginId?";
                 if field_prefix.chars().rev().find(|c| !c.is_whitespace()) == Some('?')
                     && !allow_optional_nullable
                     && !legacy_optional_nullable_field
@@ -3014,7 +2992,6 @@ permissionProfile?: string | null};
             .collect();
         let missing_client_request_methods: Vec<String> = [
             "account/logout",
-            "account/rateLimits/read",
             "config/mcpServer/reload",
             "configRequirements/read",
             "fuzzyFileSearch",
@@ -3077,34 +3054,6 @@ permissionProfile?: string | null};
                 .exists(),
             false
         );
-
-        let _cleanup = fs::remove_dir_all(&output_dir);
-        Ok(())
-    }
-
-    #[test]
-    fn generate_json_includes_remote_control_methods_with_experimental_api() -> Result<()> {
-        let output_dir = std::env::temp_dir().join(format!("codex_schema_{}", Uuid::now_v7()));
-        fs::create_dir(&output_dir)?;
-        generate_json_with_experimental(&output_dir, /*experimental_api*/ true)?;
-
-        let client_request_json = fs::read_to_string(output_dir.join("ClientRequest.json"))?;
-        assert!(client_request_json.contains("remoteControl/pairing/start"));
-        assert!(client_request_json.contains("remoteControl/pairing/status"));
-        assert!(client_request_json.contains("remoteControl/client/list"));
-        assert!(client_request_json.contains("remoteControl/client/revoke"));
-        for schema in [
-            "RemoteControlPairingStartParams.json",
-            "RemoteControlPairingStartResponse.json",
-            "RemoteControlPairingStatusParams.json",
-            "RemoteControlPairingStatusResponse.json",
-            "RemoteControlClientsListParams.json",
-            "RemoteControlClientsListResponse.json",
-            "RemoteControlClientsRevokeParams.json",
-            "RemoteControlClientsRevokeResponse.json",
-        ] {
-            assert!(output_dir.join("v2").join(schema).exists());
-        }
 
         let _cleanup = fs::remove_dir_all(&output_dir);
         Ok(())

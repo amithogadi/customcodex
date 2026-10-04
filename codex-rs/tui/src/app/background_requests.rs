@@ -1,29 +1,18 @@
 //! Background app-server requests launched by the TUI app.
 //!
-//! This module owns fire-and-forget fetch/write helpers for MCP inventory, skills, plugins, rate
-//! limits, add-credit nudges, and feedback uploads. Results are routed back through `AppEvent` so
+//! This module owns background fetch/write helpers for MCP inventory, skills, and plugins.
+//! Results are routed back through `AppEvent` so
 //! the main event loop remains single-threaded.
 
-use super::feedback_upload::fetch_feedback_upload;
 use super::plugin_mentions::fetch_plugin_mentions;
 use super::*;
-use crate::app_event::ConnectorsSnapshot;
-use crate::app_info::app_info_from_api;
-use crate::chatwidget::ThreadUsageOutcome;
 use crate::config_update::format_config_error;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
-use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditParams;
-use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
-use codex_app_server_protocol::GetAccountRateLimitsParams;
-use codex_app_server_protocol::GetAccountTokenUsageParams;
-use codex_app_server_protocol::GetAccountTokenUsageResponse;
 use codex_app_server_protocol::MarketplaceAddParams;
 use codex_app_server_protocol::MarketplaceAddResponse;
 use codex_app_server_protocol::MarketplaceRemoveParams;
 use codex_app_server_protocol::MarketplaceRemoveResponse;
-use codex_app_server_protocol::MarketplaceUpgradeParams;
-use codex_app_server_protocol::MarketplaceUpgradeResponse;
 use codex_app_server_protocol::McpServerOauthLoginParams;
 use codex_app_server_protocol::RequestId;
 
@@ -31,13 +20,6 @@ use crate::hooks_rpc::fetch_hooks_list;
 use crate::hooks_rpc::write_hook_trust;
 use crate::hooks_rpc::write_hook_trusts;
 use codex_utils_absolute_path::AbsolutePathBuf;
-
-pub(super) const THREAD_USAGE_FETCH_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(/*secs*/ 65);
-const RATE_LIMIT_RESET_REQUEST_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_secs(/*secs*/ 15);
-const WORKSPACE_HEADLINE_FETCH_TIMEOUT: std::time::Duration =
-    std::time::Duration::from_millis(/*millis*/ 2000);
 
 impl App {
     pub(super) fn start_mcp_login(
@@ -98,153 +80,6 @@ impl App {
         })
     }
 
-    /// Spawns a background task to fetch account rate limits and deliver the
-    /// result as a `RateLimitsLoaded` event.
-    ///
-    /// Recovery requests are coalesced and bounded by the reset-request timeout. The origin
-    /// also identifies command-specific completion work, such as finalizing a `/status` card,
-    /// without confusing sparse inference notifications with authoritative usage responses.
-    pub(crate) fn refresh_rate_limits(
-        &mut self,
-        app_server: &AppServerSession,
-        origin: RateLimitRefreshOrigin,
-    ) {
-        if matches!(
-            origin,
-            RateLimitRefreshOrigin::Recovery | RateLimitRefreshOrigin::ResetConsume { .. }
-        ) {
-            self.chat_widget.invalidate_ordinary_usage_recovery();
-            self.chat_widget.hold_rate_limit_recovery();
-        }
-        let Some((request_id, hard_stop_generation)) = self
-            .rate_limit_refresh_state
-            .start(origin, &mut self.rate_limit_hard_stop_generation)
-        else {
-            return;
-        };
-        self.chat_widget.start_usage_notice_read(request_id);
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let request = fetch_account_rate_limits(request_handle, origin);
-            let result = match origin {
-                RateLimitRefreshOrigin::Recovery
-                | RateLimitRefreshOrigin::Periodic
-                | RateLimitRefreshOrigin::ResetConsume { .. }
-                | RateLimitRefreshOrigin::ResetPicker { .. } => {
-                    tokio::time::timeout(RATE_LIMIT_RESET_REQUEST_TIMEOUT, request)
-                        .await
-                        .map_err(|_| "account/rateLimits/read timed out in TUI".to_string())
-                        .and_then(|result| result.map_err(|err| err.to_string()))
-                }
-                RateLimitRefreshOrigin::StartupPrefetch { .. }
-                | RateLimitRefreshOrigin::StatusCommand { .. }
-                | RateLimitRefreshOrigin::UsageMenu { .. } => {
-                    request.await.map_err(|err| err.to_string())
-                }
-            };
-            app_event_tx.send(AppEvent::RateLimitsLoaded {
-                request_id,
-                origin,
-                hard_stop_generation,
-                result,
-            });
-        });
-    }
-
-    pub(super) fn refresh_thread_usage(
-        &mut self,
-        app_server: &AppServerSession,
-        thread_id: ThreadId,
-        request_id: u64,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                THREAD_USAGE_FETCH_TIMEOUT,
-                fetch_thread_usage(request_handle, thread_id),
-            )
-            .await
-            .map_err(|_| "thread usage request timed out in TUI".to_string())
-            .and_then(|result| result.map_err(|err| err.to_string()));
-            app_event_tx.send(AppEvent::ThreadUsageLoaded {
-                thread_id,
-                request_id,
-                result,
-            });
-        });
-    }
-
-    pub(super) fn consume_rate_limit_reset_credit(
-        &mut self,
-        app_server: &AppServerSession,
-        request_id: u64,
-        idempotency_key: String,
-        credit_id: Option<String>,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                RATE_LIMIT_RESET_REQUEST_TIMEOUT,
-                consume_rate_limit_reset_credit_request(
-                    request_handle,
-                    idempotency_key.clone(),
-                    credit_id.clone(),
-                ),
-            )
-            .await
-            .map_err(|_| "account/rateLimitResetCredit/consume timed out in TUI".to_string())
-            .and_then(|result| result.map_err(|err| err.to_string()));
-            app_event_tx.send(AppEvent::RateLimitResetCreditConsumed {
-                request_id,
-                idempotency_key,
-                credit_id,
-                result,
-            });
-        });
-    }
-
-    pub(super) fn refresh_status_line_workspace_headline(
-        &mut self,
-        app_server: &AppServerSession,
-        request_id: u64,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = tokio::time::timeout(
-                WORKSPACE_HEADLINE_FETCH_TIMEOUT,
-                fetch_workspace_messages(request_handle),
-            )
-            .await
-            .map_err(|_| "account/workspaceMessages/read timed out in TUI".to_string())
-            .and_then(|result| {
-                result
-                    .map(crate::workspace_messages::workspace_headline_from_response)
-                    .map_err(|err| err.to_string())
-            });
-            app_event_tx.send(AppEvent::StatusLineWorkspaceHeadlineUpdated { request_id, result });
-        });
-    }
-
-    pub(super) fn send_add_credits_nudge_email(
-        &mut self,
-        app_server: &AppServerSession,
-        request_id: Uuid,
-        credit_type: AddCreditsNudgeCreditType,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = send_add_credits_nudge_email(request_handle, credit_type)
-                .await
-                .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::AddCreditsNudgeEmailFinished { request_id, result });
-        });
-    }
-
     /// Starts the initial skills refresh without delaying the first interactive frame.
     ///
     /// Startup only needs skill metadata to populate skill mentions and the skills UI; the prompt can be
@@ -264,63 +99,15 @@ impl App {
         });
     }
 
-    pub(super) fn fetch_connectors_list(
-        &mut self,
-        app_server: &AppServerSession,
-        force_refetch: bool,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        let thread_id = self.current_displayed_thread_id();
-        let cwd = self.chat_widget.config_ref().cwd.to_path_buf();
-        let generation = self.chat_widget.connector_scope_generation();
-        tokio::spawn(async move {
-            let result = fetch_connectors_list(
-                request_handle,
-                force_refetch,
-                thread_id.map(|thread_id| thread_id.to_string()),
-            )
-            .await
-            .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::ConnectorsLoaded {
-                thread_id,
-                cwd,
-                generation,
-                result,
-                is_final: true,
-            });
-        });
-    }
-
     pub(super) fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
         self.chat_widget.on_plugins_list_fetch_started(cwd.clone());
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
-        let plugin_sharing_enabled = self.config.features.enabled(Feature::PluginSharing);
-        let remote_plugin_enabled = self.config.features.enabled(Feature::RemotePlugin);
         tokio::spawn(async move {
-            let result = fetch_plugins_list(request_handle.clone(), cwd.clone())
+            let result = fetch_plugins_list(request_handle, cwd.clone())
                 .await
                 .map_err(|err| err.to_string());
-            let should_fetch_additional_remote_sections = result.is_ok();
-            app_event_tx.send(AppEvent::PluginsLoaded {
-                cwd: cwd.clone(),
-                result,
-            });
-            if should_fetch_additional_remote_sections {
-                let (marketplaces, section_errors) = fetch_additional_plugin_remote_sections(
-                    request_handle,
-                    cwd.clone(),
-                    plugin_sharing_enabled,
-                    remote_plugin_enabled,
-                )
-                .await;
-                app_event_tx.send(AppEvent::PluginRemoteSectionsLoaded {
-                    cwd,
-                    marketplaces,
-                    section_errors,
-                });
-            }
+            app_event_tx.send(AppEvent::PluginsLoaded { cwd, result });
         });
     }
 
@@ -392,26 +179,6 @@ impl App {
                 cwd: cwd_for_event,
                 marketplace_name: marketplace_name_for_event,
                 marketplace_display_name,
-                result,
-            });
-        });
-    }
-
-    pub(super) fn fetch_marketplace_upgrade(
-        &mut self,
-        app_server: &AppServerSession,
-        cwd: PathBuf,
-        marketplace_name: Option<String>,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let cwd_for_event = cwd.clone();
-            let result = fetch_marketplace_upgrade(request_handle, marketplace_name)
-                .await
-                .map_err(|err| format!("Failed to upgrade marketplace: {err}"));
-            app_event_tx.send(AppEvent::MarketplaceUpgradeLoaded {
-                cwd: cwd_for_event,
                 result,
             });
         });
@@ -609,118 +376,6 @@ impl App {
         });
     }
 
-    pub(super) fn submit_feedback(
-        &mut self,
-        app_server: &AppServerSession,
-        category: FeedbackCategory,
-        reason: Option<String>,
-        turn_id: Option<String>,
-        include_logs: bool,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        let origin_thread_id = self.chat_widget.thread_id();
-        let rollout_path = if include_logs {
-            self.chat_widget.rollout_path()
-        } else {
-            None
-        };
-        let params = build_feedback_upload_params(
-            origin_thread_id,
-            rollout_path,
-            category,
-            reason,
-            turn_id,
-            include_logs,
-        );
-        let codex_home = app_server.codex_home_path(&self.config.codex_home);
-        let feedback = self.feedback.clone();
-        tokio::spawn(async move {
-            let result = fetch_feedback_upload(request_handle, codex_home, params, feedback)
-                .await
-                .map(|response| response.thread_id)
-                .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::FeedbackSubmitted {
-                origin_thread_id,
-                category,
-                include_logs,
-                result,
-            });
-        });
-    }
-
-    pub(super) fn handle_feedback_thread_event(&mut self, event: FeedbackThreadEvent) {
-        match event.result {
-            Ok(thread_id) => {
-                self.chat_widget
-                    .add_to_history(crate::bottom_pane::feedback_success_cell(
-                        event.category,
-                        event.include_logs,
-                        &thread_id,
-                        event.feedback_audience,
-                    ))
-            }
-            Err(err) => self
-                .chat_widget
-                .add_to_history(history_cell::new_error_event(format!(
-                    "Failed to upload feedback: {err}"
-                ))),
-        }
-    }
-
-    pub(super) async fn enqueue_thread_feedback_event(
-        &mut self,
-        thread_id: ThreadId,
-        event: FeedbackThreadEvent,
-    ) {
-        let (sender, store) = {
-            let channel = self.ensure_thread_channel(thread_id);
-            (channel.sender.clone(), Arc::clone(&channel.store))
-        };
-
-        let should_send = {
-            let mut guard = store.lock().await;
-            guard.push_buffered_event(ThreadBufferedEvent::FeedbackSubmission(event.clone()));
-            guard.active
-        };
-
-        if should_send {
-            match sender.try_send(ThreadBufferedEvent::FeedbackSubmission(event)) {
-                Ok(()) => {}
-                Err(TrySendError::Full(event)) => {
-                    tokio::spawn(async move {
-                        if let Err(err) = sender.send(event).await {
-                            tracing::warn!("thread {thread_id} event channel closed: {err}");
-                        }
-                    });
-                }
-                Err(TrySendError::Closed(_)) => {
-                    tracing::warn!("thread {thread_id} event channel closed");
-                }
-            }
-        }
-    }
-
-    pub(super) async fn handle_feedback_submitted(
-        &mut self,
-        origin_thread_id: Option<ThreadId>,
-        category: FeedbackCategory,
-        include_logs: bool,
-        result: Result<String, String>,
-    ) {
-        let event = FeedbackThreadEvent {
-            category,
-            include_logs,
-            feedback_audience: self.feedback_audience,
-            result,
-        };
-        if let Some(thread_id) = origin_thread_id {
-            self.enqueue_thread_feedback_event(thread_id, event).await;
-        } else {
-            self.handle_feedback_thread_event(event);
-        }
-    }
-
     /// Process the completed MCP inventory fetch: clear the loading spinner, then
     /// render either the full tool/resource listing or an error into chat history.
     ///
@@ -812,105 +467,6 @@ pub(super) async fn fetch_all_mcp_server_statuses(
     Ok(statuses)
 }
 
-pub(super) async fn fetch_account_rate_limits(
-    request_handle: AppServerRequestHandle,
-    origin: RateLimitRefreshOrigin,
-) -> Result<GetAccountRateLimitsResponse> {
-    let request_id = RequestId::String(format!("account-rate-limits-{}", Uuid::new_v4()));
-    let result = request_handle
-        .request_typed(ClientRequest::GetAccountRateLimits {
-            request_id: request_id.clone(),
-            params: Some(GetAccountRateLimitsParams {
-                supports_luna_reserve: true,
-                exclude_reset_credit_details: origin == RateLimitRefreshOrigin::Periodic,
-            }),
-        })
-        .await;
-    // Older remote app servers accept only null params. Keep their usage reads working
-    // without opting them into exposure or pretending that they support the new capability.
-    if matches!(
-        &result,
-        Err(codex_app_server_client::TypedRequestError::Server { source, .. })
-            if matches!(source.code, -32600 | -32602)
-    ) {
-        return request_handle
-            .request_typed(ClientRequest::GetAccountRateLimits {
-                request_id,
-                params: None,
-            })
-            .await
-            .wrap_err("account/rateLimits/read failed in TUI");
-    }
-    result.wrap_err("account/rateLimits/read failed in TUI")
-}
-
-pub(super) async fn fetch_thread_usage(
-    request_handle: AppServerRequestHandle,
-    thread_id: ThreadId,
-) -> Result<ThreadUsageOutcome> {
-    let request_id = RequestId::String(format!("thread-usage-{}", Uuid::new_v4()));
-    let response: GetAccountTokenUsageResponse = request_handle
-        .request_typed(ClientRequest::GetAccountTokenUsage {
-            request_id,
-            params: Some(GetAccountTokenUsageParams {
-                thread_id: Some(thread_id.to_string()),
-            }),
-        })
-        .await
-        .wrap_err("account/usage/read failed for thread usage in TUI")?;
-    Ok(response
-        .thread_usage
-        .map(ThreadUsageOutcome::Available)
-        .unwrap_or(ThreadUsageOutcome::Disabled))
-}
-
-pub(super) async fn consume_rate_limit_reset_credit_request(
-    request_handle: AppServerRequestHandle,
-    idempotency_key: String,
-    credit_id: Option<String>,
-) -> Result<ConsumeAccountRateLimitResetCreditResponse> {
-    let request_id = RequestId::String(format!("consume-rate-limit-reset-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::ConsumeAccountRateLimitResetCredit {
-            request_id,
-            params: ConsumeAccountRateLimitResetCreditParams {
-                idempotency_key,
-                credit_id,
-            },
-        })
-        .await
-        .wrap_err("account/rateLimitResetCredit/consume failed in TUI")
-}
-
-pub(super) async fn fetch_workspace_messages(
-    request_handle: AppServerRequestHandle,
-) -> Result<codex_app_server_protocol::GetWorkspaceMessagesResponse> {
-    let request_id = RequestId::String(format!("workspace-messages-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::GetWorkspaceMessages {
-            request_id,
-            params: None,
-        })
-        .await
-        .wrap_err("account/workspaceMessages/read failed in TUI")
-}
-
-pub(super) async fn send_add_credits_nudge_email(
-    request_handle: AppServerRequestHandle,
-    credit_type: AddCreditsNudgeCreditType,
-) -> Result<codex_app_server_protocol::AddCreditsNudgeEmailStatus> {
-    let request_id = RequestId::String(format!("add-credits-nudge-{}", Uuid::new_v4()));
-    let response: codex_app_server_protocol::SendAddCreditsNudgeEmailResponse = request_handle
-        .request_typed(ClientRequest::SendAddCreditsNudgeEmail {
-            request_id,
-            params: SendAddCreditsNudgeEmailParams { credit_type },
-        })
-        .await
-        .wrap_err("account/sendAddCreditsNudgeEmail failed in TUI")?;
-
-    Ok(response.status)
-}
-
 pub(super) async fn fetch_skills_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
@@ -930,154 +486,13 @@ pub(super) async fn fetch_skills_list(
         .wrap_err("skills/list failed in TUI")
 }
 
-pub(super) async fn fetch_connectors_list(
-    request_handle: AppServerRequestHandle,
-    force_refetch: bool,
-    thread_id: Option<String>,
-) -> Result<ConnectorsSnapshot> {
-    let request_id = RequestId::String(format!("apps-list-{}", Uuid::new_v4()));
-    let response: AppsListResponse = request_handle
-        .request_typed(ClientRequest::AppsList {
-            request_id,
-            params: AppsListParams {
-                cursor: None,
-                limit: None,
-                thread_id,
-                force_refetch,
-            },
-        })
-        .await
-        .wrap_err("app/list failed in TUI")?;
-    Ok(ConnectorsSnapshot {
-        connectors: response.data.into_iter().map(app_info_from_api).collect(),
-    })
-}
-
 pub(super) async fn fetch_plugins_list(
     request_handle: AppServerRequestHandle,
     cwd: PathBuf,
 ) -> Result<PluginListResponse> {
-    let mut response = request_plugin_list(request_handle, cwd)
+    request_plugin_list(request_handle, cwd)
         .await
-        .wrap_err("plugin/list failed while loading the plugins menu")?;
-    hide_cli_only_plugin_marketplaces(&mut response);
-    Ok(response)
-}
-
-pub(super) async fn fetch_additional_plugin_remote_sections(
-    request_handle: AppServerRequestHandle,
-    cwd: PathBuf,
-    plugin_sharing_enabled: bool,
-    remote_plugin_enabled: bool,
-) -> (Vec<PluginMarketplaceEntry>, Vec<PluginRemoteSectionError>) {
-    let mut marketplaces = Vec::new();
-    let mut section_errors = Vec::new();
-    let mut sections = Vec::new();
-    if !remote_plugin_enabled {
-        sections.push((
-            "vertical",
-            "OpenAI Curated",
-            vec![PluginListMarketplaceKind::Vertical],
-        ));
-    }
-    sections.push((
-        "workspace",
-        "Workspace",
-        vec![PluginListMarketplaceKind::WorkspaceDirectory],
-    ));
-    if plugin_sharing_enabled {
-        sections.push((
-            "shared-with-me",
-            "Shared with me",
-            vec![PluginListMarketplaceKind::SharedWithMe],
-        ));
-    } else {
-        section_errors.push(plugin_sharing_disabled_remote_section_error());
-    }
-
-    for (section_id, label, marketplace_kinds) in sections {
-        match request_plugin_list_for_kinds(request_handle.clone(), cwd.clone(), marketplace_kinds)
-            .await
-        {
-            Ok(mut response) => {
-                hide_cli_only_plugin_marketplaces(&mut response);
-                marketplaces.extend(response.marketplaces);
-            }
-            Err(err) => {
-                let message = format!("{err:#}");
-                section_errors.push(PluginRemoteSectionError {
-                    section_id: section_id.to_string(),
-                    label: label.to_string(),
-                    message: plugin_remote_section_error_message(label, &message),
-                });
-            }
-        }
-    }
-
-    (marketplaces, section_errors)
-}
-
-fn plugin_remote_section_error_message(label: &str, err: &str) -> String {
-    let next_step = plugin_remote_section_error_next_step(label, err);
-    if next_step.is_empty() {
-        err.to_string()
-    } else {
-        format!("{err} {next_step}")
-    }
-}
-
-fn plugin_remote_section_error_next_step(label: &str, err: &str) -> &'static str {
-    let err = err.to_ascii_lowercase();
-    if err.contains("api key auth is not supported") {
-        "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs"
-    } else if err.contains("authentication required")
-        || err.contains("not signed in")
-        || err.contains("not logged in")
-    {
-        "Sign in to ChatGPT, then try loading this section again"
-    } else if err.contains("codex plugins are disabled")
-        || err.contains("plugin sharing is disabled")
-        || err.contains("plugin sharing is not enabled")
-        || err.contains("feature disabled")
-    {
-        "Ask a workspace admin to enable Codex plugins or plugin sharing"
-    } else if err.contains("workspace") && (err.contains("access") || err.contains("mismatch")) {
-        "Switch to the matching workspace or ask the sharer for access"
-    } else if err.contains("not found") || err.contains("status 404") {
-        "Check that you are signed in to the correct workspace and still have access"
-    } else if err.contains("old build") || err.contains("update codex") || err.contains("stale") {
-        "Update Codex, then try opening the shared plugin again"
-    } else if err.contains("service unavailable")
-        || err.contains("temporarily unavailable")
-        || err.contains("status 503")
-        || err.contains("failed to send")
-        || err.contains("request")
-        || err.contains("status")
-    {
-        "Try again later; local plugin functionality is still available"
-    } else if err.contains("disabled by admin") || err.contains("admin disabled") {
-        "Ask a workspace admin to confirm plugin access"
-    } else if label == "Shared with me" && err.contains("plugin") && err.contains("disabled") {
-        "Ask the sharer or a workspace admin to confirm plugin access"
-    } else {
-        ""
-    }
-}
-
-fn plugin_sharing_disabled_remote_section_error() -> PluginRemoteSectionError {
-    PluginRemoteSectionError {
-        section_id: "shared-with-me".to_string(),
-        label: "Shared with me".to_string(),
-        message: "Enable plugin sharing for this Codex session to load shared plugins".to_string(),
-    }
-}
-
-const CLI_HIDDEN_PLUGIN_MARKETPLACES: &[&str] = &["openai-bundled"];
-
-pub(super) fn hide_cli_only_plugin_marketplaces(response: &mut PluginListResponse) {
-    response
-        .marketplaces
-        .retain(|marketplace| !CLI_HIDDEN_PLUGIN_MARKETPLACES.contains(&marketplace.name.as_str()));
+        .wrap_err("plugin/list failed while loading the plugins menu")
 }
 
 pub(super) async fn request_plugin_list(
@@ -1086,14 +501,6 @@ pub(super) async fn request_plugin_list(
 ) -> Result<PluginListResponse> {
     request_plugin_list_with_marketplace_kinds(request_handle, cwd, /*marketplace_kinds*/ None)
         .await
-}
-
-pub(super) async fn request_plugin_list_for_kinds(
-    request_handle: AppServerRequestHandle,
-    cwd: PathBuf,
-    marketplace_kinds: Vec<PluginListMarketplaceKind>,
-) -> Result<PluginListResponse> {
-    request_plugin_list_with_marketplace_kinds(request_handle, cwd, Some(marketplace_kinds)).await
 }
 
 async fn request_plugin_list_with_marketplace_kinds(
@@ -1189,19 +596,6 @@ pub(super) async fn fetch_marketplace_remove(
         .wrap_err("marketplace/remove failed in TUI")
 }
 
-pub(super) async fn fetch_marketplace_upgrade(
-    request_handle: AppServerRequestHandle,
-    marketplace_name: Option<String>,
-) -> Result<MarketplaceUpgradeResponse> {
-    let request_id = RequestId::String(format!("marketplace-upgrade-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::MarketplaceUpgrade {
-            request_id,
-            params: MarketplaceUpgradeParams { marketplace_name },
-        })
-        .await
-        .wrap_err("marketplace/upgrade failed in TUI")
-}
 pub(super) async fn fetch_plugin_install(
     request_handle: AppServerRequestHandle,
     location: PluginLocation,
@@ -1286,30 +680,6 @@ pub(super) async fn write_hook_enabled(
         .wrap_err("config/batchWrite failed while updating hook enablement in TUI")
 }
 
-pub(super) fn build_feedback_upload_params(
-    origin_thread_id: Option<ThreadId>,
-    rollout_path: Option<PathBuf>,
-    category: FeedbackCategory,
-    reason: Option<String>,
-    turn_id: Option<String>,
-    include_logs: bool,
-) -> FeedbackUploadParams {
-    let extra_log_files = if include_logs {
-        rollout_path.map(|rollout_path| vec![rollout_path])
-    } else {
-        None
-    };
-    let tags = turn_id.map(|turn_id| BTreeMap::from([(String::from("turn_id"), turn_id)]));
-    FeedbackUploadParams {
-        classification: crate::bottom_pane::feedback_classification(category).to_string(),
-        reason,
-        thread_id: origin_thread_id.map(|thread_id| thread_id.to_string()),
-        include_logs,
-        extra_log_files,
-        tags,
-    }
-}
-
 /// Convert flat `McpServerStatus` responses into the per-server maps used by the
 /// in-process MCP subsystem (tools keyed as `mcp__{server}__{tool}`, plus
 /// per-server resource/template/auth maps). Test-only because the TUI
@@ -1358,91 +728,10 @@ mod tests {
     use app_test_support::ChatGptAuthFixture;
     use app_test_support::write_chatgpt_auth;
     use codex_app_server_protocol::PluginMarketplaceEntry;
-    use codex_app_server_protocol::ThreadUsage;
     use codex_config::types::AuthCredentialsStoreMode;
     use codex_protocol::mcp::Tool;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
-
-    #[tokio::test]
-    async fn fetch_thread_usage_uses_app_server_auth_after_persisted_account_changes() {
-        let mut app = make_test_app().await;
-        let server = wiremock::MockServer::start().await;
-        let thread_id = ThreadId::new();
-        app.config.chatgpt_base_url = server.uri();
-        app.cli_kv_overrides = vec![(
-            "chatgpt_base_url".to_string(),
-            toml::Value::String(server.uri()),
-        )];
-        app.config.cli_auth_credentials_store_mode = AuthCredentialsStoreMode::File;
-        wiremock::Mock::given(wiremock::matchers::method("GET"))
-            .and(wiremock::matchers::path("/api/codex/config/bundle"))
-            .respond_with(wiremock::ResponseTemplate::new(/*s*/ 200).set_body_string("{}"))
-            .mount(&server)
-            .await;
-        write_chatgpt_auth(
-            app.config.codex_home.as_path(),
-            ChatGptAuthFixture::new("chatgpt-token").account_id("account-123"),
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("write ChatGPT authentication");
-        let app_server = crate::start_app_server_for_picker(
-            &app.config,
-            &crate::AppServerTarget::Embedded,
-            app.cli_kv_overrides.clone(),
-            app.loader_overrides.clone(),
-            /*state_db*/ None,
-            app.environment_manager.clone(),
-        )
-        .await
-        .expect("start authenticated embedded app server");
-        write_chatgpt_auth(
-            app.config.codex_home.as_path(),
-            ChatGptAuthFixture::new("different-token").account_id("different-account"),
-            AuthCredentialsStoreMode::File,
-        )
-        .expect("replace persisted ChatGPT authentication");
-
-        wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path(
-                "/api/codex/usage/thread_usage/query",
-            ))
-            .and(wiremock::matchers::header(
-                "authorization",
-                "Bearer chatgpt-token",
-            ))
-            .and(wiremock::matchers::header(
-                "chatgpt-account-id",
-                "account-123",
-            ))
-            .and(wiremock::matchers::body_json(serde_json::json!({
-                "thread_ids": [thread_id.to_string()]
-            })))
-            .respond_with(wiremock::ResponseTemplate::new(/*s*/ 200).set_body_json(
-                serde_json::json!({
-                    "threads": [{
-                        "thread_id": thread_id.to_string(),
-                        "estimated_usage_credits_micros": 46_000_000,
-                        "estimated_usage_usd_micros": 1_820_000
-                    }]
-                }),
-            ))
-            .expect(/*r*/ 1)
-            .mount(&server)
-            .await;
-
-        assert_eq!(
-            fetch_thread_usage(app_server.request_handle(), thread_id)
-                .await
-                .expect("read thread usage through the authenticated app server"),
-            ThreadUsageOutcome::Available(ThreadUsage {
-                thread_id: thread_id.to_string(),
-                estimated_usage_credits_micros: 46_000_000,
-                estimated_usage_usd_micros: Some(1_820_000),
-                groups: Vec::new(),
-            })
-        );
-    }
 
     fn test_absolute_path(path: &str) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(PathBuf::from(path)).expect("absolute test path")
@@ -1474,40 +763,6 @@ mod tests {
     }
 
     #[test]
-    fn hide_cli_only_plugin_marketplaces_removes_openai_bundled() {
-        let mut response = PluginListResponse {
-            marketplaces: vec![
-                PluginMarketplaceEntry {
-                    name: "openai-bundled".to_string(),
-                    path: Some(test_absolute_path("/marketplaces/openai-bundled")),
-                    interface: None,
-                    plugins: Vec::new(),
-                },
-                PluginMarketplaceEntry {
-                    name: "openai-curated".to_string(),
-                    path: Some(test_absolute_path("/marketplaces/openai-curated")),
-                    interface: None,
-                    plugins: Vec::new(),
-                },
-            ],
-            marketplace_load_errors: Vec::new(),
-            featured_plugin_ids: Vec::new(),
-        };
-
-        hide_cli_only_plugin_marketplaces(&mut response);
-
-        assert_eq!(
-            response.marketplaces,
-            vec![PluginMarketplaceEntry {
-                name: "openai-curated".to_string(),
-                path: Some(test_absolute_path("/marketplaces/openai-curated")),
-                interface: None,
-                plugins: Vec::new(),
-            }]
-        );
-    }
-
-    #[test]
     fn plugin_location_request_params_select_exactly_one_location() {
         let local_path = test_absolute_path("/marketplaces/local");
 
@@ -1517,79 +772,6 @@ mod tests {
             }
             .into_request_params(),
             (Some(local_path), None)
-        );
-        assert_eq!(
-            PluginLocation::Remote {
-                marketplace_name: "workspace-directory".to_string()
-            }
-            .into_request_params(),
-            (None, Some("workspace-directory".to_string()))
-        );
-    }
-
-    #[test]
-    fn plugin_remote_section_error_message_adds_concrete_next_steps() {
-        let cases = [
-            (
-                "Workspace",
-                "chatgpt authentication required for remote plugin catalog",
-                "Sign in to ChatGPT, then try loading this section again",
-            ),
-            (
-                "OpenAI Curated",
-                "chatgpt authentication required for remote plugin catalog; api key auth is not supported",
-                "Sign in with ChatGPT auth; API key auth cannot load remote plugin catalogs",
-            ),
-            (
-                "Shared with me",
-                "remote plugin catalog request failed with status 404: missing",
-                "Check that you are signed in to the correct workspace and still have access",
-            ),
-            (
-                "Shared with me",
-                "workspace access mismatch",
-                "Switch to the matching workspace or ask the sharer for access",
-            ),
-            (
-                "Shared with me",
-                "old build fallback",
-                "Update Codex, then try opening the shared plugin again",
-            ),
-            (
-                "Shared with me",
-                "remote service unavailable",
-                "Try again later; local plugin functionality is still available",
-            ),
-            (
-                "Workspace",
-                "plugin disabled by admin",
-                "Ask a workspace admin to confirm plugin access",
-            ),
-            (
-                "Shared with me",
-                "plugin sharing is not enabled",
-                "Ask a workspace admin to enable Codex plugins or plugin sharing",
-            ),
-        ];
-
-        for (label, err, next_step) in cases {
-            assert_eq!(
-                plugin_remote_section_error_message(label, err),
-                format!("{err} {next_step}")
-            );
-        }
-    }
-
-    #[test]
-    fn plugin_sharing_disabled_remote_section_error_targets_shared_with_me() {
-        assert_eq!(
-            plugin_sharing_disabled_remote_section_error(),
-            PluginRemoteSectionError {
-                section_id: "shared-with-me".to_string(),
-                label: "Shared with me".to_string(),
-                message: "Enable plugin sharing for this Codex session to load shared plugins"
-                    .to_string(),
-            }
         );
     }
 
@@ -1673,53 +855,5 @@ mod tests {
         app.agent_navigation.mark_closed(thread_id);
 
         assert_eq!(app.mcp_inventory_request_thread_id(Some(thread_id)), None);
-    }
-
-    #[test]
-    fn build_feedback_upload_params_includes_thread_id_and_rollout_path() {
-        let thread_id = ThreadId::new();
-        let rollout_path = PathBuf::from("/tmp/rollout.jsonl");
-
-        let params = build_feedback_upload_params(
-            Some(thread_id),
-            Some(rollout_path.clone()),
-            FeedbackCategory::SafetyCheck,
-            Some("needs follow-up".to_string()),
-            Some("turn-123".to_string()),
-            /*include_logs*/ true,
-        );
-
-        assert_eq!(params.classification, "safety_check");
-        assert_eq!(params.reason, Some("needs follow-up".to_string()));
-        assert_eq!(params.thread_id, Some(thread_id.to_string()));
-        assert_eq!(
-            params
-                .tags
-                .as_ref()
-                .and_then(|tags| tags.get("turn_id"))
-                .map(String::as_str),
-            Some("turn-123")
-        );
-        assert_eq!(params.include_logs, true);
-        assert_eq!(params.extra_log_files, Some(vec![rollout_path]));
-    }
-
-    #[test]
-    fn build_feedback_upload_params_omits_rollout_path_without_logs() {
-        let params = build_feedback_upload_params(
-            /*origin_thread_id*/ None,
-            Some(PathBuf::from("/tmp/rollout.jsonl")),
-            FeedbackCategory::GoodResult,
-            /*reason*/ None,
-            /*turn_id*/ None,
-            /*include_logs*/ false,
-        );
-
-        assert_eq!(params.classification, "good_result");
-        assert_eq!(params.reason, None);
-        assert_eq!(params.thread_id, None);
-        assert_eq!(params.tags, None);
-        assert_eq!(params.include_logs, false);
-        assert_eq!(params.extra_log_files, None);
     }
 }

@@ -269,7 +269,6 @@ async fn app_server_executor_auth_supports_tokens_and_legacy_configuration() -> 
                 let home = TempDir::new()?;
                 let builder = TestAppServer::builder()
                     .with_program(&codex)
-                    .with_plugin_startup_tasks()
                     .with_args(&["-c", "features.plugins=false", "app-server"])
                     .with_codex_home(home.path())
                     .without_auto_env()

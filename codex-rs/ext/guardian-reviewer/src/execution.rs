@@ -5,7 +5,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use anyhow::anyhow;
-use codex_analytics::GuardianReviewAnalyticsResult;
+use codex_protocol::guardian_review::GuardianReviewDetails;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -68,7 +68,7 @@ pub async fn wait_for_guardian_review(
     expected_turn_id: &str,
     deadline: tokio::time::Instant,
     external_cancel: Option<&CancellationToken>,
-    analytics_result: &mut GuardianReviewAnalyticsResult,
+    analytics_result: &mut GuardianReviewDetails,
 ) -> ReviewTurnResult {
     let timeout = tokio::time::sleep_until(deadline);
     tokio::pin!(timeout);

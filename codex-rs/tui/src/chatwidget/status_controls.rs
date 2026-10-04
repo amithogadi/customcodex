@@ -265,14 +265,7 @@ impl ChatWidget {
             self.refreshing_status_outputs
                 .push((request_id, handle.clone()));
         }
-        if self.thread_usage_is_available() {
-            handle.reserve_thread_usage_label_width();
-            handle.set_thread_usage(self.estimated_thread_usage().cloned());
-            self.add_to_history(cell);
-            self.request_thread_usage_for_status(handle.clone());
-        } else {
-            self.add_to_history(cell);
-        }
+        self.add_to_history(cell);
         // Capture the displayed status inputs before later configuration or thread changes.
         let mut copy_targets = vec![
             ("Model".to_string(), Arc::<str>::from(model)),
@@ -375,13 +368,6 @@ impl ChatWidget {
                     preview_data.suppress_placeholder(item);
                 }
             }
-        }
-
-        if self
-            .estimated_thread_usage()
-            .is_some_and(|usage| usage.estimated_usage_usd_micros.is_none())
-        {
-            preview_data.suppress_placeholder(StatusSurfacePreviewItem::EstimatedThreadCost);
         }
 
         preview_data

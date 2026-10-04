@@ -1,3 +1,3 @@
-# Codex CLI
+# Custom Codex terminal agent
 
-[**Codex CLI Documentation**](https://developers.openai.com/codex/cli)
+See the [repository README](../README.md) and [provider configuration](../docs/config.md).

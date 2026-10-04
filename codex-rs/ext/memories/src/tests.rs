@@ -122,7 +122,7 @@ fn tools_are_contributed_when_enabled_with_dedicated_tools() {
 #[test]
 fn install_registers_dedicated_tool_contributor() {
     let mut builder = ExtensionRegistryBuilder::<codex_core::config::Config>::new();
-    crate::install(&mut builder, /*metrics_client*/ None);
+    crate::install(&mut builder);
     let registry = builder.build();
     let thread_store = ExtensionData::new("thread");
     thread_store.insert(MemoriesExtensionConfig {
@@ -590,13 +590,10 @@ fn memory_tool(
     tool_name: &str,
 ) -> Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>> {
     let expected_tool_name = memory_tool_name(tool_name);
-    crate::tools::memory_tools(
-        LocalMemoriesBackend::from_memory_root(memory_root),
-        /*metrics_client*/ None,
-    )
-    .into_iter()
-    .find(|tool| tool.tool_name() == expected_tool_name)
-    .unwrap_or_else(|| panic!("{tool_name} tool should be registered"))
+    crate::tools::memory_tools(LocalMemoriesBackend::from_memory_root(memory_root))
+        .into_iter()
+        .find(|tool| tool.tool_name() == expected_tool_name)
+        .unwrap_or_else(|| panic!("{tool_name} tool should be registered"))
 }
 
 fn memory_tool_name(tool_name: &str) -> ToolName {

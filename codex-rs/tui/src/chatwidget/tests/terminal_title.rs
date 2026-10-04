@@ -38,7 +38,6 @@ async fn goal_clock_refresh_redraws_only_when_elapsed_label_changes() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual_with_auth(
         /*model_override*/ None,
         /*has_chatgpt_account*/ false,
-        /*has_codex_backend_auth*/ false,
         frame_requester,
     )
     .await;

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::sync::Weak;
 
-use codex_analytics::AnalyticsEventsClient;
 use codex_core::ThreadManager;
 use codex_core::TurnStartOptions;
 use codex_extension_api::ConfigContributor;
@@ -27,7 +26,6 @@ use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
-use codex_otel::MetricsClient;
 use codex_protocol::ThreadId;
 use codex_protocol::items::TurnItem;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -38,10 +36,8 @@ use codex_protocol::protocol::TokenUsageInfo;
 
 use crate::accounting::BudgetLimitedGoalDisposition;
 use crate::accounting::GoalAccountingState;
-use crate::analytics::GoalAnalytics;
 use crate::api::GoalService;
 use crate::events::GoalEventEmitter;
-use crate::metrics::GoalMetrics;
 use crate::runtime::ActiveGoalStopReason;
 use crate::runtime::GoalRuntimeConfig;
 use crate::runtime::GoalRuntimeHandle;
@@ -59,9 +55,7 @@ pub struct GoalExtensionConfig {
 #[derive(Clone)]
 pub struct GoalExtension<C> {
     state_dbs: Arc<codex_state::StateRuntime>,
-    analytics: GoalAnalytics,
     event_emitter: GoalEventEmitter,
-    metrics: GoalMetrics,
     thread_manager: Weak<ThreadManager>,
     goal_service: Arc<GoalService>,
     goal_config: Arc<dyn Fn(&C) -> GoalExtensionConfig + Send + Sync>,
@@ -76,18 +70,14 @@ impl<C> std::fmt::Debug for GoalExtension<C> {
 impl<C> GoalExtension<C> {
     pub(crate) fn new_with_host_capabilities(
         state_dbs: Arc<codex_state::StateRuntime>,
-        analytics_events_client: AnalyticsEventsClient,
         event_sink: Arc<dyn ExtensionEventSink>,
-        metrics_client: Option<MetricsClient>,
         thread_manager: Weak<ThreadManager>,
         goal_service: Arc<GoalService>,
         goal_config: impl Fn(&C) -> GoalExtensionConfig + Send + Sync + 'static,
     ) -> Self {
         Self {
             state_dbs,
-            analytics: GoalAnalytics::new(analytics_events_client),
             event_emitter: GoalEventEmitter::new(event_sink),
-            metrics: GoalMetrics::new(metrics_client),
             thread_manager,
             goal_service,
             goal_config: Arc::new(goal_config),
@@ -145,11 +135,9 @@ where
                     thread_id,
                     Arc::clone(&self.state_dbs),
                     self.event_emitter.clone(),
-                    self.metrics.clone(),
                     self.thread_manager.clone(),
                     accounting_state,
                     GoalRuntimeConfig {
-                        analytics: self.analytics.clone(),
                         enabled,
                         tools_available_for_thread,
                         tools_visible_for_thread,
@@ -552,26 +540,20 @@ where
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
-                self.analytics.clone(),
                 self.event_emitter.clone(),
-                self.metrics.clone(),
             ),
             GoalToolExecutor::create(
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
-                self.analytics.clone(),
                 self.event_emitter.clone(),
-                self.metrics.clone(),
                 max_goal_token_budget,
             ),
             GoalToolExecutor::update(
                 runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
-                self.analytics.clone(),
                 self.event_emitter.clone(),
-                self.metrics.clone(),
             ),
         ];
         tools
@@ -587,8 +569,6 @@ where
 pub fn install_with_backend<C>(
     registry: &mut ExtensionRegistryBuilder<C>,
     state_dbs: Arc<codex_state::StateRuntime>,
-    analytics_events_client: AnalyticsEventsClient,
-    metrics_client: Option<MetricsClient>,
     thread_manager: Weak<ThreadManager>,
     goal_service: Arc<GoalService>,
     goal_config: impl Fn(&C) -> GoalExtensionConfig + Send + Sync + 'static,
@@ -597,9 +577,7 @@ pub fn install_with_backend<C>(
 {
     let extension = Arc::new(GoalExtension::new_with_host_capabilities(
         state_dbs,
-        analytics_events_client,
         registry.event_sink(),
-        metrics_client,
         thread_manager,
         Arc::clone(&goal_service),
         goal_config,

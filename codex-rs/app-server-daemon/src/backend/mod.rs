@@ -21,27 +21,13 @@ pub enum BackendKind {
 pub(crate) struct BackendPaths {
     pub(crate) codex_bin: PathBuf,
     pub(crate) pid_file: PathBuf,
-    pub(crate) update_pid_file: PathBuf,
-    pub(crate) remote_control_enabled: bool,
     pub(crate) feature_overrides: BTreeMap<String, bool>,
 }
 
 pub(crate) fn pid_backend(paths: BackendPaths) -> PidBackend {
-    let mut backend = PidBackend::new(
-        paths.codex_bin,
-        paths.pid_file,
-        paths.remote_control_enabled,
-    );
+    let mut backend = PidBackend::new(paths.codex_bin, paths.pid_file);
     backend.feature_overrides = paths.feature_overrides;
     backend
-}
-
-pub(crate) fn pid_update_loop_backend(paths: BackendPaths) -> PidBackend {
-    PidBackend::new_update_loop(
-        paths.codex_bin,
-        paths.update_pid_file,
-        /*restore_release*/ None,
-    )
 }
 
 pub(crate) async fn append_stderr_log_tail_context(pid_file: &Path, context: &mut String) {

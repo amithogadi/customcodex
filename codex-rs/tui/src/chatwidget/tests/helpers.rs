@@ -162,23 +162,6 @@ pub(super) fn snapshot(percent: f64) -> RateLimitSnapshot {
     }
 }
 
-pub(super) fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
-    let model_info =
-        construct_model_info_offline_for_tests(model, &config.to_models_manager_config());
-    SessionTelemetry::new(
-        ThreadId::new(),
-        model,
-        model_info.slug.as_str(),
-        /*account_id*/ None,
-        /*account_email*/ None,
-        /*auth_mode*/ None,
-        "test_originator".to_string(),
-        /*log_user_prompts*/ false,
-        "test".to_string(),
-        crate::test_support::session_source_cli(),
-    )
-}
-
 pub(super) fn test_model_catalog(_config: &Config) -> Arc<ModelCatalog> {
     Arc::new(
         ModelCatalog::new(crate::test_support::TEST_MODEL_PRESETS.clone())
@@ -199,7 +182,6 @@ pub(super) async fn make_chatwidget_manual(
     make_chatwidget_manual_with_auth(
         model_override,
         /*has_chatgpt_account*/ false,
-        /*has_codex_backend_auth*/ false,
         FrameRequester::test_dummy(),
     )
     .await
@@ -208,7 +190,6 @@ pub(super) async fn make_chatwidget_manual(
 pub(super) async fn make_chatwidget_manual_with_auth(
     model_override: Option<&str>,
     has_chatgpt_account: bool,
-    has_codex_backend_auth: bool,
     frame_requester: FrameRequester,
 ) -> (
     ChatWidget,
@@ -225,7 +206,6 @@ pub(super) async fn make_chatwidget_manual_with_auth(
     if let Some(model) = model_override {
         cfg.model = Some(model.to_string());
     }
-    let session_telemetry = test_session_telemetry(&cfg, resolved_model.as_str());
     let model_catalog = test_model_catalog(&cfg);
     let common = ChatWidgetInit {
         requires_openai_auth: cfg.model_provider.requires_openai_auth,
@@ -237,9 +217,7 @@ pub(super) async fn make_chatwidget_manual_with_auth(
         initial_user_message: None,
         enhanced_keys_supported: false,
         has_chatgpt_account,
-        has_codex_backend_auth,
         model_catalog,
-        feedback: codex_feedback::CodexFeedback::new(),
         is_first_run: true,
         status_account_display: None,
         initial_plan_type: None,
@@ -247,7 +225,6 @@ pub(super) async fn make_chatwidget_manual_with_auth(
         startup_tooltip_override: None,
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         terminal_title_invalid_items_warned: Arc::new(AtomicBool::new(false)),
-        session_telemetry,
     };
     let mut widget = ChatWidget::new_with_op_target(common, super::CodexOpTarget::Direct(op_tx));
     widget.test_codex_home = Some(codex_home);
@@ -299,7 +276,6 @@ pub(super) fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiv
 
 pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
     chat.has_chatgpt_account = true;
-    chat.has_codex_backend_auth = true;
     chat.model_catalog = test_model_catalog(&chat.config);
 }
 
@@ -1479,55 +1455,6 @@ pub(super) fn plugins_test_summary(
     }
 }
 
-pub(super) fn plugins_test_remote_summary(
-    remote_plugin_id: &str,
-    name: &str,
-    display_name: Option<&str>,
-    description: Option<&str>,
-    installed: bool,
-) -> PluginSummary {
-    PluginSummary {
-        id: remote_plugin_id.to_string(),
-        remote_plugin_id: Some(remote_plugin_id.to_string()),
-        version: None,
-        local_version: None,
-        name: name.to_string(),
-        share_context: None,
-        source: PluginSource::Remote,
-        installed,
-        installed_at: None,
-        enabled: true,
-        install_policy: PluginInstallPolicy::Available,
-        install_policy_source: None,
-        must_show_installation_interstitial: None,
-        auth_policy: PluginAuthPolicy::OnInstall,
-        availability: PluginAvailability::Available,
-        disabled_reason: None,
-        eligible_plan_types: None,
-        interface: Some(plugins_test_interface(
-            display_name,
-            description,
-            /*long_description*/ None,
-        )),
-        keywords: Vec::new(),
-    }
-}
-
-pub(super) fn plugins_test_remote_marketplace(
-    name: &str,
-    display_name: &str,
-    plugins: Vec<PluginSummary>,
-) -> PluginMarketplaceEntry {
-    PluginMarketplaceEntry {
-        name: name.to_string(),
-        path: None,
-        interface: Some(MarketplaceInterface {
-            display_name: Some(display_name.to_string()),
-        }),
-        plugins,
-    }
-}
-
 pub(super) fn plugins_test_curated_marketplace(
     plugins: Vec<PluginSummary>,
 ) -> PluginMarketplaceEntry {
@@ -1564,23 +1491,12 @@ pub(super) fn plugins_test_response(
 
 pub(super) fn render_loaded_plugins_popup(
     chat: &mut ChatWidget,
-    mut response: PluginListResponse,
+    response: PluginListResponse,
 ) -> String {
     let cwd = chat.config.cwd.clone();
-    let remote_marketplaces = response
-        .marketplaces
-        .iter()
-        .filter(|marketplace| marketplace.path.is_none())
-        .cloned()
-        .collect();
-    response
-        .marketplaces
-        .retain(|marketplace| marketplace.path.is_some());
-    let response_for_refresh = response.clone();
-    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response.clone()));
     chat.add_plugins_output();
-    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response_for_refresh));
-    chat.on_plugin_remote_sections_loaded(cwd.to_path_buf(), remote_marketplaces, Vec::new());
+    chat.on_plugins_loaded(cwd.to_path_buf(), Ok(response));
     render_bottom_popup(chat, /*width*/ 100)
 }
 
@@ -1636,27 +1552,6 @@ pub(super) fn plugins_test_detail(
             .collect(),
         app_templates: Vec::new(),
         mcp_servers: mcp_servers.iter().map(|name| (*name).to_string()).collect(),
-        scheduled_tasks: None,
-    }
-}
-
-pub(super) fn plugins_test_remote_detail(
-    marketplace_name: &str,
-    summary: PluginSummary,
-    description: Option<&str>,
-) -> PluginDetail {
-    PluginDetail {
-        onboarding_skill: None,
-        marketplace_name: marketplace_name.to_string(),
-        marketplace_path: None,
-        summary,
-        share_url: None,
-        description: description.map(str::to_string),
-        skills: Vec::new(),
-        hooks: Vec::new(),
-        apps: Vec::new(),
-        app_templates: Vec::new(),
-        mcp_servers: Vec::new(),
         scheduled_tasks: None,
     }
 }
@@ -1819,7 +1714,7 @@ pub(super) async fn assert_hook_events_snapshot(
     assert_chatwidget_snapshot!(snapshot_name, combined);
 }
 
-/// Normalize timestamps only in structurally identified completion footer cells.
+/// Normalize volatile times only in structurally identified completion footer cells.
 pub(crate) fn normalize_completion_timestamps(
     cell: &dyn HistoryCell,
     value: impl std::fmt::Display,
@@ -1829,7 +1724,7 @@ pub(crate) fn normalize_completion_timestamps(
     }
     static COMPLETION_FOOTER: std::sync::LazyLock<regex_lite::Regex> = std::sync::LazyLock::new(
         || {
-            regex_lite::Regex::new(r"(?m)^(?P<indent>[ \t]*)(?P<duration>Worked for (?:<1s|(?:[0-9]+h )?(?:[0-9]+m )?[0-9]+s) • )?(?:[A-Z][a-z]{2} [0-9]{1,2}(?:, [0-9]{4})? at )?[0-9]{1,2}:[0-9]{2}(?: (?:AM|PM))?(?P<padding>[ \t]*)$")
+            regex_lite::Regex::new(r"(?m)^(?P<indent>[ \t]*)(?P<duration>Worked for (?:<1s|(?:[0-9]+h )?(?:[0-9]+m )?[0-9]+s) • )?(?:[A-Z][a-z]{2} [0-9]{1,2}(?:, [0-9]{4})? at )?[0-9]{1,2}:[0-9]{2}(?: (?:AM|PM))?(?P<runtime> • .+?)?(?P<padding>[ \t]*)$")
                 .expect("valid completion footer pattern")
         },
     );
@@ -1842,7 +1737,14 @@ pub(crate) fn normalize_completion_timestamps(
             } else {
                 ""
             };
-            format!("{indent}{duration}[completion time]{padding}")
+            static RUNTIME_DURATION: std::sync::LazyLock<regex_lite::Regex> =
+                std::sync::LazyLock::new(|| {
+                    regex_lite::Regex::new(r"\b[0-9]+(?:\.[0-9]+)?(?:ms|s|m|h)\b")
+                        .expect("valid runtime duration pattern")
+                });
+            let runtime = captures.name("runtime").map_or("", |value| value.as_str());
+            let runtime = RUNTIME_DURATION.replace_all(runtime, "[duration]");
+            format!("{indent}{duration}[completion time]{runtime}{padding}")
         })
         .into_owned()
 }

@@ -10,6 +10,72 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[test]
+fn removed_service_settings_are_inert_in_strict_config() {
+    let contents = r#"
+forced_login_method = "chatgpt"
+forced_chatgpt_workspace_id = "retired-workspace"
+[otel]
+exporter = "otlp-http"
+[feedback]
+enabled = true
+[features]
+remote_plugin = true
+runtime_metrics = true
+use_agent_identity = true
+"#;
+    assert!(
+        config_error_from_ignored_toml_fields::<ConfigToml>(
+            Path::new("/tmp/config.toml"),
+            contents
+        )
+        .is_none()
+    );
+    let config = ConfigLayerStack::new(
+        vec![layer(ConfigLayerSource::SessionFlags, contents)],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .unwrap();
+    let warning = ignored_config_warning(&config, &[]).expect("removed settings warning");
+    assert!(warning.contains("This service was removed; the setting has no effect."));
+}
+
+#[test]
+fn retired_login_settings_report_compatibility_warnings() {
+    let config = ConfigLayerStack::new(
+        vec![layer(
+            ConfigLayerSource::SessionFlags,
+            "forced_login_method = 'chatgpt'\nforced_chatgpt_workspace_id = 'retired-workspace'",
+        )],
+        ConfigRequirements::default(),
+        ConfigRequirementsToml::default(),
+    )
+    .unwrap();
+    let warning = ignored_config_warning(&config, &[]).expect("retired login settings warning");
+    assert!(warning.contains("forced_login_method"));
+    assert!(warning.contains("forced_chatgpt_workspace_id"));
+    assert!(warning.contains("This service was removed; the setting has no effect."));
+}
+
+#[test]
+fn removed_settings_do_not_hide_provider_typos_in_strict_config() {
+    let contents = r#"
+[otel]
+exporter = "none"
+[model_providers.custom]
+name = "Custom"
+wire_api = "responses"
+base_urll = "https://provider.example/v1"
+"#;
+    let error = config_error_from_ignored_toml_fields::<ConfigToml>(
+        Path::new("/tmp/config.toml"),
+        contents,
+    )
+    .expect("provider typo must still fail");
+    assert!(error.message.contains("model_providers.custom.base_urll"));
+}
+
+#[test]
 fn ignored_toml_field_errors_accept_non_file_source_names() {
     let source_name = "com.openai.codex:config_toml_base64";
     let contents = r#"

@@ -1,12 +1,9 @@
 [workspace]
 members = [
     "aws-auth",
-    "analytics",
     "agent-graph-store",
     "agent-message-board-client",
-    "agent-identity",
     "agent-roles",
-    "backend-client",
     "cloud-client",
     "bwrap",
     "build-info",
@@ -22,7 +19,6 @@ members = [
     "app-server-test-client",
     "apply-patch",
     "arg0",
-    "feedback",
     "features",
     "install-context",
     "codex-backend-openapi-models",
@@ -31,10 +27,6 @@ members = [
     "code-mode-protocol",
     "code-mode-runtime",
     "codex-home",
-    "cloud-config",
-    "cloud-tasks",
-    "cloud-tasks-client",
-    "cloud-tasks-mock-client",
     "cli",
     "collaboration-mode-templates",
     "connectors",
@@ -68,7 +60,6 @@ members = [
     "ext/git-attribution",
     "ext/guardian-reviewer",
     "ext/guardian-v2",
-    "ext/history-notes",
     "ext/image-generation",
     "ext/items",
     "ext/memories",
@@ -93,8 +84,6 @@ members = [
     "network-proxy",
     "ollama",
     "process-hardening",
-    "realtime-webrtc",
-    "voice-host",
     "protocol",
     "prompts",
     "rollout",
@@ -104,8 +93,6 @@ members = [
     "response-debug-context",
     "sandboxing",
     "stdio-to-uds",
-    "otel",
-    "otel-trace-websocket",
     "tcp-tunnel",
     "tui",
     "user-verification",
@@ -170,11 +157,8 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 # Internal
-codex-realtime-webrtc = { path = "realtime-webrtc" }
 app_test_support = { path = "app-server/tests/common" }
-codex-analytics = { path = "analytics" }
 codex-agent-graph-store = { path = "agent-graph-store" }
-codex-agent-identity = { path = "agent-identity" }
 codex-agent-roles = { path = "agent-roles" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
@@ -190,14 +174,9 @@ codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
-codex-backend-client = { path = "backend-client" }
 codex-build-info = { path = "build-info" }
-codex-chatgpt = { path = "chatgpt" }
 codex-client = { path = "codex-client" }
 codex-collaboration-mode-templates = { path = "collaboration-mode-templates" }
-codex-cloud-config = { path = "cloud-config" }
-codex-cloud-tasks-client = { path = "cloud-tasks-client" }
-codex-cloud-tasks-mock-client = { path = "cloud-tasks-mock-client" }
 codex-code-mode = { path = "code-mode" }
 codex-code-mode-protocol = { path = "code-mode-protocol" }
 codex-code-mode-runtime = { path = "code-mode-runtime" }
@@ -229,12 +208,10 @@ codex-goal-extension = { path = "ext/goal" }
 codex-git-attribution = { path = "ext/git-attribution" }
 codex-guardian-reviewer = { path = "ext/guardian-reviewer" }
 codex-guardian-v2 = { path = "ext/guardian-v2" }
-codex-history-notes-extension = { path = "ext/history-notes" }
 codex-image-generation-extension = { path = "ext/image-generation" }
 codex-external-agent-migration = { path = "external-agent-migration" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
 codex-features = { path = "features" }
-codex-feedback = { path = "feedback" }
 codex-install-context = { path = "install-context" }
 codex-file-search = { path = "file-search" }
 codex-file-watcher = { path = "file-watcher" }
@@ -259,8 +236,6 @@ codex-models-manager = { path = "models-manager" }
 codex-mxc-sandbox = { path = "mxc-sandbox" }
 codex-network-proxy = { path = "network-proxy" }
 codex-ollama = { path = "ollama" }
-codex-otel = { path = "otel" }
-codex-otel-trace-websocket = { path = "otel-trace-websocket" }
 codex-plugin = { path = "plugin" }
 codex-model-provider = { path = "model-provider" }
 codex-process-hardening = { path = "process-hardening" }
@@ -418,11 +393,6 @@ notify = "8.2.0"
 nucleo = { git = "https://github.com/helix-editor/nucleo.git", rev = "4253de9faabb4e5c6d81d946a5e35a90f87347ee" }
 once_cell = "1.20.2"
 openssl-sys = "*"
-opentelemetry = "0.31.0"
-opentelemetry-appender-tracing = "0.31.0"
-opentelemetry-otlp = "0.31.0"
-opentelemetry-semantic-conventions = "0.31.0"
-opentelemetry_sdk = "0.31.0"
 os_info = "3.12.0"
 owo-colors = "4.3.0"
 pathdiff = "0.2"
@@ -461,7 +431,6 @@ rustls-pki-types = "1.14.0"
 schemars = "0.8.22"
 seccompiler = "0.5.0"
 semver = "1.0"
-sentry = "0.46.0"
 serde = { version = "1", features = ["rc"] }
 serde_ignored = "0.1.14"
 serde_json = "1"
@@ -526,7 +495,6 @@ toml = "0.9.5"
 toml_edit = "0.24.0"
 tracing = "0.1.44"
 tracing-appender = "0.2.3"
-tracing-opentelemetry = "0.32.0"
 tracing-subscriber = "0.3.22"
 tracing-test = "0.2.5"
 tonic = { version = "0.14.3", default-features = false, features = ["channel", "codegen"] }

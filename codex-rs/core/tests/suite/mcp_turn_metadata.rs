@@ -38,7 +38,6 @@ use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::user_input::UserInput;
-use core_test_support::PathExt;
 use core_test_support::apps_test_server::AppsTestServer;
 use core_test_support::apps_test_server::LINK_ID;
 use core_test_support::apps_test_server::SEARCH_CALENDAR_CREATE_TOOL;
@@ -65,8 +64,6 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::Mutex;
 use test_case::test_case;
 use wiremock::Mock;
 use wiremock::Request;
@@ -219,222 +216,25 @@ async fn mcp_app_ui_survives_tool_events_and_resume(
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_session_approval_is_scoped_to_tool_link_id() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
-    let has_link_selector = Arc::new(Mutex::new(true));
-    let lists_link_selector = Arc::clone(&has_link_selector);
-    Mock::given(method("POST"))
-        .and(path_regex("^/api/codex/ps/mcp/?$"))
-        .and(body_partial_json(json!({ "method": "tools/list" })))
-        .respond_with(move |request: &Request| {
-            let body: Value = serde_json::from_slice(&request.body).expect("valid tools/list");
-            let mut tool = json!({
-                "name": "calendar_create_event",
-                "description": "Create a calendar event.",
-                "annotations": { "readOnlyHint": false },
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "title": { "type": "string" },
-                        "starts_at": { "type": "string" }
-                    },
-                    "required": ["title", "starts_at"]
-                },
-                "_meta": {
-                    "connector_id": "calendar",
-                    "connector_name": "Calendar",
-                    "_codex_apps": {
-                        "resource_uri": "connector://calendar/tools/calendar_create_event",
-                        "contains_mcp_source": true,
-                        "connector_id": "calendar"
-                    }
-                }
-            });
-            if *lists_link_selector.lock().unwrap() {
-                // The catalog account stays fixed while each call selects its account.
-                tool["_meta"]["link_id"] = json!("link_a");
-                tool["_meta"]["_codex_apps"]["requires_explicit_link_id"] = json!(true);
-                tool["inputSchema"]["properties"]["link_id"] = json!({ "type": "string" });
-                tool["inputSchema"]["required"] = json!(["title", "starts_at", "link_id"]);
-            }
-            ResponseTemplate::new(/*status*/ 200).set_body_json(json!({
-                "jsonrpc": "2.0",
-                "id": body["id"],
-                "result": { "tools": [tool] }
-            }))
-        })
-        .with_priority(/*priority*/ 1)
-        .mount(&server)
-        .await;
-
-    let cases = [
-        (Some("link_a"), true),
-        (Some("link_b"), true),
-        (None, true),
-        (Some("link_a"), false),
-    ];
-    let responses = mount_sse_sequence(
-        &server,
-        cases
-            .iter()
-            .enumerate()
-            .flat_map(|(index, (selected_link_id, _))| {
-                let call_id = format!("calendar-call-{index}");
-                let mut calendar_args = json!({
-                    "title": "Lunch",
-                    "starts_at": "2026-03-10T12:00:00Z"
-                });
-                if let Some(selected_link_id) = selected_link_id {
-                    calendar_args["link_id"] = json!(selected_link_id);
-                }
-                [
-                    sse(vec![
-                        ev_response_created(&call_id),
-                        ev_function_call_with_namespace(
-                            &call_id,
-                            SEARCH_CALENDAR_NAMESPACE,
-                            SEARCH_CALENDAR_CREATE_TOOL,
-                            &calendar_args.to_string(),
-                        ),
-                        ev_completed(&call_id),
-                    ]),
-                    sse(vec![
-                        ev_response_created("resp-done"),
-                        ev_assistant_message("msg-done", "done"),
-                        ev_completed("resp-done"),
-                    ]),
-                ]
-            })
-            .collect(),
-    )
-    .await;
-    let test = search_capable_apps_builder(apps_server.chatgpt_base_url)
-        .with_config(move |config| {
-            set_calendar_approval_mode(config, AppToolApproval::Auto);
-            config.approvals_reviewer = ApprovalsReviewer::User;
-            config
-                .features
-                .enable(Feature::ToolCallMcpElicitation)
-                .expect("test config should allow feature update");
-        })
-        .build_with_auto_env(&server)
-        .await?;
-
-    for (index, (selected_link_id, expects_prompt)) in cases.into_iter().enumerate() {
-        *has_link_selector.lock().unwrap() = selected_link_id.is_some();
-        // Reconnect to publish the account selector or legacy metadata without a link.
-        test.codex.submit(Op::RefreshMcpServers).await?;
-        submit_user_turn(
-            &test,
-            "Use [$calendar](app://calendar) to create a calendar event.",
-            AskForApproval::OnRequest,
-            PermissionProfile::Disabled,
-            /*collaboration_mode*/ None,
-        )
-        .await?;
-        let event = wait_for_event(&test.codex, |event| {
-            matches!(
-                event,
-                EventMsg::ElicitationRequest(_) | EventMsg::TurnComplete(_)
-            )
-        })
-        .await;
-        assert_eq!(
-            matches!(event, EventMsg::ElicitationRequest(_)),
-            expects_prompt,
-            "unexpected approval for call {index} with link {selected_link_id:?}"
-        );
-        if let EventMsg::ElicitationRequest(request) = event {
-            test.codex
-                .submit(Op::ResolveElicitation {
-                    server_name: request.server_name,
-                    request_id: request.id,
-                    decision: ElicitationAction::Accept,
-                    content: None,
-                    meta: Some(json!({ "persist": "session" })),
-                })
-                .await?;
-            wait_for_event(&test.codex, |event| {
-                matches!(event, EventMsg::TurnComplete(_))
-            })
-            .await;
-        }
-    }
-
-    let requests = responses.requests();
-    assert_eq!(requests.len(), cases.len() * 2);
-    for (index, request) in requests.iter().skip(1).step_by(2).enumerate() {
-        let call_id = format!("calendar-call-{index}");
-        let output = request
-            .function_call_output_text(&call_id)
-            .expect("MCP tool output");
-        let (_, result) = output.split_once("\nOutput:\n").expect("MCP output header");
-        let result: Value = serde_json::from_str(result)?;
-        let mut expected_result = json!({
-            "_codex_apps": {
-                "call_id": call_id,
-                "connector_id": "calendar",
-                "contains_mcp_source": true,
-                "resource_uri": "connector://calendar/tools/calendar_create_event"
-            }
-        });
-        if cases[index].0.is_some() {
-            expected_result["_codex_apps"]["requires_explicit_link_id"] = json!(true);
-        }
-        assert_eq!(result, expected_result);
-    }
-    Ok(())
-}
-
 fn set_calendar_approval_mode(config: &mut Config, approval_mode: AppToolApproval) {
-    let approval_mode = match approval_mode {
-        AppToolApproval::Auto => "auto",
-        AppToolApproval::Prompt => "prompt",
-        AppToolApproval::Writes => "writes",
-        AppToolApproval::Approve => "approve",
-    };
-    let user_config_path = config.codex_home.join("config.toml").abs();
-    let user_config = toml::from_str(&format!(
-        r#"
-[apps.calendar]
-default_tools_approval_mode = "{approval_mode}"
-"#
-    ))
-    .expect("apps config should parse");
-    config.config_layer_stack = config
-        .config_layer_stack
-        .with_user_config(&user_config_path, user_config)
-        .expect("apps user config should be valid");
+    let mut servers = config.mcp_servers.get().clone();
+    servers
+        .get_mut("codex_apps")
+        .expect("explicit MCP server")
+        .default_tools_approval_mode = Some(approval_mode);
+    config
+        .mcp_servers
+        .set(servers)
+        .expect("explicit MCP approval config");
 }
 
-fn set_default_app_approval_mode_and_reviewer(
+fn set_mcp_approval_mode_and_reviewer(
     config: &mut Config,
     approval_mode: AppToolApproval,
-    default_approvals_reviewer: ApprovalsReviewer,
+    reviewer: ApprovalsReviewer,
 ) {
-    let approval_mode = match approval_mode {
-        AppToolApproval::Auto => "auto",
-        AppToolApproval::Prompt => "prompt",
-        AppToolApproval::Writes => "writes",
-        AppToolApproval::Approve => "approve",
-    };
-    let user_config_path = config.codex_home.join("config.toml").abs();
-    let user_config = toml::from_str(&format!(
-        r#"
-[apps._default]
-approvals_reviewer = "{default_approvals_reviewer}"
-default_tools_approval_mode = "{approval_mode}"
-"#
-    ))
-    .expect("apps config should parse");
-    config.config_layer_stack = config
-        .config_layer_stack
-        .with_user_config(&user_config_path, user_config)
-        .expect("apps user config should be valid");
+    set_calendar_approval_mode(config, approval_mode);
+    config.approvals_reviewer = reviewer;
 }
 
 async fn submit_user_turn(
@@ -647,7 +447,7 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
                     .enable(Feature::RequestPermissionsTool)
                     .expect("test config should allow feature update");
             }
-            set_default_app_approval_mode_and_reviewer(
+            set_mcp_approval_mode_and_reviewer(
                 config,
                 AppToolApproval::Prompt,
                 ApprovalsReviewer::User,
@@ -706,7 +506,7 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
         })
         .await
         else {
-            panic!("expected apps._default user to route the app approval to the user");
+            panic!("expected the MCP approval to route to the user");
         };
 
         test.codex
@@ -777,12 +577,10 @@ async fn approved_mcp_tool_call_metadata_records_prior_user_input_request(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[test_case(false, false; "unmanaged model")]
-#[test_case(true, false; "protected model")]
-#[test_case(false, true; "work mode link reviewer")]
-async fn apps_prompt_with_auto_review_routes_actual_mcp_approval_to_guardian(
+#[test_case(false; "unmanaged model")]
+#[test_case(true; "protected model")]
+async fn mcp_prompt_with_auto_review_routes_actual_mcp_approval_to_guardian(
     protected_model: bool,
-    work_link_reviewer: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -862,40 +660,16 @@ async fn apps_prompt_with_auto_review_routes_actual_mcp_approval_to_guardian(
 
     let mut builder = search_capable_apps_builder(apps_server.chatgpt_base_url.clone())
         .with_config(move |config| {
-            let (reviewer, app_reviewer) = if protected_model {
-                (ApprovalsReviewer::AutoReview, ApprovalsReviewer::User)
+            config.approvals_reviewer = if protected_model {
+                ApprovalsReviewer::User
             } else {
-                (ApprovalsReviewer::User, ApprovalsReviewer::AutoReview)
+                ApprovalsReviewer::AutoReview
             };
-            config.approvals_reviewer = reviewer;
             config
                 .features
                 .enable(Feature::ToolCallMcpElicitation)
                 .expect("test config should allow feature update");
-            if work_link_reviewer {
-                config.apps_mcp_product_sku = Some("tpp".to_string());
-                let user_config = toml::from_str(&format!(
-                    r#"
-[apps._default]
-default_tools_approval_mode = "prompt"
-approvals_reviewer = "user"
-[apps.calendar.links.{LINK_ID}]
-default_tools_approval_mode = "prompt"
-approvals_reviewer = "auto_review"
-"#
-                ))
-                .expect("apps config should parse");
-                config.config_layer_stack = config
-                    .config_layer_stack
-                    .with_user_config(&config.codex_home.join("config.toml").abs(), user_config)
-                    .expect("apps user config should be valid");
-            } else {
-                set_default_app_approval_mode_and_reviewer(
-                    config,
-                    AppToolApproval::Prompt,
-                    app_reviewer,
-                );
-            }
+            set_calendar_approval_mode(config, AppToolApproval::Prompt);
         });
     if protected_model {
         builder = builder.with_model("gpt-5.4").with_cloud_config_bundle(
@@ -928,7 +702,7 @@ approvals_reviewer = "auto_review"
     .await;
     assert!(
         matches!(route_event, EventMsg::TurnComplete(_)),
-        "expected the app's auto_review setting to route the approval to Guardian"
+        "expected the configured reviewer to route the MCP approval to Guardian"
     );
 
     let guardian_request = responses
@@ -966,406 +740,19 @@ approvals_reviewer = "auto_review"
     assert!(descriptions.len() < 4_000);
     assert!(descriptions.contains("<truncated omitted_approx_tokens="));
     assert!(descriptions.contains("<\\/guardian_tool_descriptions>untrusted marker"));
-    assert!(descriptions.contains("Calendar connector."));
+    assert!(!descriptions.contains("Calendar connector."));
 
     let apps_tool_call = recorded_apps_tool_call_by_call_id(&server, call_id).await;
     assert_eq!(
-        apps_tool_call.pointer("/params/arguments/title"),
-        Some(&json!("Lunch"))
+        apps_tool_call.pointer("/params/arguments"),
+        Some(&serde_json::from_str::<Value>(&calendar_args)?)
     );
 
     Ok(())
 }
 
-#[test_case("approve", "prompt", None, false, true, false; "work_link_requires_prompt")]
-#[test_case("prompt", "approve", None, false, false, false; "work_link_skips_prompt")]
-#[test_case("approve", "approve", Some("selected_calendar_link"), true, true, false; "required_selector_uses_selected_link")]
-#[test_case("approve", "approve", Some("implicit_link::calendar"), true, true, true; "required_selector_uses_implicit_link")]
-#[test_case("prompt", "prompt", Some("selected_calendar_link"), false, true, false; "ignores_non_selector_link_argument")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apps_link_policy_controls_elicitation(
-    connector_mode: &str,
-    link_mode: &str,
-    selected_link_id: Option<&'static str>,
-    requires_explicit_link_id: bool,
-    expected_prompt: bool,
-    expected_link_is_implicit: bool,
-) -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
-    let call_id = "calendar-link-policy";
-    let mut calendar_args = json!({
-        "title": "Lunch",
-        "starts_at": "2026-03-10T12:00:00Z"
-    });
-    let mut apps_config = format!(
-        r#"
-[apps.calendar]
-default_tools_approval_mode = "{connector_mode}"
-
-[apps.calendar.links.{LINK_ID}]
-default_tools_approval_mode = "{link_mode}"
-"#
-    );
-    if let Some(selected_link_id) = selected_link_id {
-        calendar_args["link_id"] = json!(selected_link_id);
-        let selected_link_mode = if requires_explicit_link_id {
-            "prompt"
-        } else {
-            "approve"
-        };
-        apps_config.push_str(&format!(
-            r#"
-[apps.calendar.links."{selected_link_id}"]
-default_tools_approval_mode = "{selected_link_mode}"
-"#
-        ));
-        let mut required = vec!["title", "starts_at"];
-        let link_description = if requires_explicit_link_id {
-            required.push("link_id");
-            format!(
-                "Link ID for the account this call should use. Supply link_id using a link_id value below. Select only from the accounts below.\n{}",
-                serde_json::to_string_pretty(&json!([
-                    { "link_id": LINK_ID, "link_name": "Default calendar" },
-                    { "link_id": selected_link_id, "link_name": "Selected calendar" }
-                ]))?
-            )
-        } else {
-            "Link identifier for the calendar resource.".to_string()
-        };
-        let tool = json!({
-            "name": "calendar_create_event",
-            "description": "Create a calendar event.",
-            "annotations": { "readOnlyHint": false },
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "title": { "type": "string" },
-                    "starts_at": { "type": "string" },
-                    "link_id": { "type": "string", "description": link_description }
-                },
-                "required": required,
-                "additionalProperties": false
-            },
-            "_meta": {
-                "connector_id": "calendar",
-                "link_id": LINK_ID,
-                "connector_name": "Calendar",
-                "_codex_apps": {
-                    "connector_id": "calendar",
-                    "resource_uri": "connector://calendar/tools/calendar_create_event",
-                    "contains_mcp_source": true,
-                    "requires_explicit_link_id": requires_explicit_link_id
-                }
-            }
-        });
-        Mock::given(method("POST"))
-            .and(path_regex("^/api/codex/ps/mcp/?$"))
-            .and(body_partial_json(json!({ "method": "tools/list" })))
-            .respond_with(move |request: &Request| {
-                let body: Value = serde_json::from_slice(&request.body)
-                    .expect("Apps tools/list should be a valid JSON-RPC request");
-                ResponseTemplate::new(200).set_body_json(json!({
-                    "jsonrpc": "2.0",
-                    "id": body["id"],
-                    "result": { "tools": [tool] }
-                }))
-            })
-            .with_priority(1)
-            .mount(&server)
-            .await;
-    }
-    let user_config = toml::from_str(&apps_config)?;
-    let mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-calendar"),
-                ev_function_call_with_namespace(
-                    call_id,
-                    SEARCH_CALENDAR_NAMESPACE,
-                    SEARCH_CALENDAR_CREATE_TOOL,
-                    &calendar_args.to_string(),
-                ),
-                ev_completed("resp-calendar"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-done"),
-                ev_assistant_message("msg-done", "done"),
-                ev_completed("resp-done"),
-            ]),
-        ],
-    )
-    .await;
-    let mut builder =
-        search_capable_apps_builder(apps_server.chatgpt_base_url).with_config(move |config| {
-            config.apps_mcp_product_sku = Some("tpp".to_string());
-            config.approvals_reviewer = ApprovalsReviewer::User;
-            config
-                .features
-                .enable(Feature::ToolCallMcpElicitation)
-                .expect("test config should allow feature update");
-            config.config_layer_stack = config
-                .config_layer_stack
-                .with_user_config(&config.codex_home.join("config.toml").abs(), user_config)
-                .expect("apps user config should be valid");
-        });
-    let test = builder.build_with_auto_env(&server).await?;
-
-    submit_user_turn(
-        &test,
-        "Use [$calendar](app://calendar) to create a calendar event.",
-        AskForApproval::OnRequest,
-        PermissionProfile::Disabled,
-        /*collaboration_mode*/ None,
-    )
-    .await?;
-
-    let expected_link_id = if requires_explicit_link_id {
-        selected_link_id
-    } else {
-        Some(LINK_ID)
-    };
-    let mut completed_links = Vec::new();
-    let mut record_link = |event: &EventMsg| {
-        if let EventMsg::ItemCompleted(event) = event
-            && let TurnItem::McpToolCall(item) = &event.item
-            && item.id == call_id
-        {
-            completed_links.push(item.link_id.clone());
-        }
-    };
-    let event = wait_for_event(&test.codex, |event| {
-        record_link(event);
-        matches!(
-            event,
-            EventMsg::ElicitationRequest(_) | EventMsg::TurnComplete(_)
-        )
-    })
-    .await;
-    assert_eq!(
-        matches!(&event, EventMsg::ElicitationRequest(_)),
-        expected_prompt
-    );
-    if let EventMsg::ElicitationRequest(request) = event {
-        let ElicitationRequest::Form {
-            meta: Some(meta), ..
-        } = &request.request
-        else {
-            panic!("expected a native MCP tool approval with metadata");
-        };
-        assert_eq!(
-            (
-                meta.get("link_id").and_then(Value::as_str),
-                meta.get("link_is_implicit").and_then(Value::as_bool),
-            ),
-            (expected_link_id, Some(expected_link_is_implicit)),
-        );
-        test.codex
-            .submit(Op::ResolveElicitation {
-                server_name: request.server_name,
-                request_id: request.id,
-                decision: ElicitationAction::Accept,
-                content: None,
-                meta: None,
-            })
-            .await?;
-        wait_for_event(&test.codex, |event| {
-            record_link(event);
-            matches!(event, EventMsg::TurnComplete(_))
-        })
-        .await;
-    }
-    assert_eq!(mock.requests().len(), 2);
-    assert_eq!(
-        recorded_apps_tool_call_by_call_id(&server, call_id).await["params"]["arguments"],
-        calendar_args
-    );
-    assert_eq!(completed_links, vec![expected_link_id.map(str::to_string)]);
-    Ok(())
-}
-
-const INVALID_APP_SELECTOR_ERROR: &str =
-    "This app tool requires a non-empty string link_id argument";
-
-#[derive(Clone, Copy)]
-enum MissingAppLinkOutcome {
-    Execute,
-    Prompt,
-    Reject(&'static str),
-}
-
-#[test_case(Some(json!(false)), AppToolApproval::Approve, MissingAppLinkOutcome::Execute; "legacy_false_uses_connector_approval")]
-#[test_case(Some(json!(false)), AppToolApproval::Prompt, MissingAppLinkOutcome::Prompt; "legacy_false_uses_connector_prompt")]
-#[test_case(Some(json!(true)), AppToolApproval::Approve, MissingAppLinkOutcome::Reject(INVALID_APP_SELECTOR_ERROR); "required_selector_cannot_use_connector_approval")]
-#[test_case(None, AppToolApproval::Approve, MissingAppLinkOutcome::Execute; "legacy_absence_uses_connector_approval")]
-#[test_case(Some(json!("true")), AppToolApproval::Approve, MissingAppLinkOutcome::Execute; "string_true_uses_connector_approval")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apps_missing_link_respects_advertised_selector(
-    requires_explicit_link_id: Option<Value>,
-    connector_approval: AppToolApproval,
-    expected: MissingAppLinkOutcome,
-) -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_mock_server().await;
-    let apps_server = AppsTestServer::mount(&server).await?;
-    let call_id = "calendar-missing-link";
-    let calendar_args = json!({ "title": "Lunch", "starts_at": "2026-03-10T12:00:00Z" });
-    let mut required = vec!["title", "starts_at"];
-    if matches!(&requires_explicit_link_id, Some(Value::Bool(true))) {
-        required.push("link_id");
-    }
-    let mut apps_meta = json!({
-        "resource_uri": "/calendar/link_calendar/create_event",
-        "contains_mcp_source": true
-    });
-    if let Some(requires_explicit_link_id) = requires_explicit_link_id {
-        apps_meta["requires_explicit_link_id"] = requires_explicit_link_id;
-    }
-    let tool = json!({
-        "name": "calendar_create_event",
-        "description": "Create a calendar event.",
-        "annotations": { "readOnlyHint": false },
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "title": { "type": "string" },
-                "starts_at": { "type": "string" },
-                "link_id": { "type": "string" }
-            },
-            "required": required
-        },
-        "_meta": {
-            "connector_id": "calendar",
-            "connector_name": "Calendar",
-            "_codex_apps": apps_meta
-        }
-    });
-    Mock::given(method("POST"))
-        .and(path_regex("^/api/codex/ps/mcp/?$"))
-        .and(body_partial_json(json!({ "method": "tools/list" })))
-        .respond_with(move |request: &Request| {
-            let body: Value = serde_json::from_slice(&request.body).expect("valid tools/list");
-            ResponseTemplate::new(200).set_body_json(json!({
-                "jsonrpc": "2.0", "id": body["id"], "result": { "tools": [tool] }
-            }))
-        })
-        .with_priority(1)
-        .mount(&server)
-        .await;
-    let mock = mount_sse_sequence(
-        &server,
-        vec![
-            sse(vec![
-                ev_response_created("resp-calendar"),
-                ev_function_call_with_namespace(
-                    call_id,
-                    SEARCH_CALENDAR_NAMESPACE,
-                    SEARCH_CALENDAR_CREATE_TOOL,
-                    &calendar_args.to_string(),
-                ),
-                ev_completed("resp-calendar"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-done"),
-                ev_assistant_message("msg-done", "done"),
-                ev_completed("resp-done"),
-            ]),
-        ],
-    )
-    .await;
-    let mut builder =
-        search_capable_apps_builder(apps_server.chatgpt_base_url).with_config(move |config| {
-            set_calendar_approval_mode(config, connector_approval);
-            config.approvals_reviewer = ApprovalsReviewer::User;
-            config
-                .features
-                .enable(Feature::ToolCallMcpElicitation)
-                .expect("test config should allow feature update");
-        });
-    let test = builder.build_with_auto_env(&server).await?;
-    submit_user_turn(
-        &test,
-        "Use [$calendar](app://calendar) to create a calendar event.",
-        AskForApproval::OnRequest,
-        PermissionProfile::Disabled,
-        /*collaboration_mode*/ None,
-    )
-    .await?;
-
-    let mut completed_calls = Vec::new();
-    let mut record_call = |event: &EventMsg| {
-        if let EventMsg::ItemCompleted(event) = event
-            && let TurnItem::McpToolCall(item) = &event.item
-            && item.id == call_id
-        {
-            completed_calls.push((item.status, item.link_id.clone()));
-        }
-    };
-    let event = wait_for_event(&test.codex, |event| {
-        record_call(event);
-        matches!(
-            event,
-            EventMsg::ElicitationRequest(_)
-                | EventMsg::RequestUserInput(_)
-                | EventMsg::TurnComplete(_)
-        )
-    })
-    .await;
-    assert_eq!(
-        matches!(&event, EventMsg::ElicitationRequest(_)),
-        matches!(expected, MissingAppLinkOutcome::Prompt),
-    );
-    if let EventMsg::ElicitationRequest(request) = event {
-        assert_eq!(recorded_apps_tool_calls(&server).await, Vec::<Value>::new());
-        test.codex
-            .submit(Op::ResolveElicitation {
-                server_name: request.server_name,
-                request_id: request.id,
-                decision: ElicitationAction::Accept,
-                content: None,
-                meta: None,
-            })
-            .await?;
-        wait_for_event(&test.codex, |event| {
-            record_call(event);
-            matches!(event, EventMsg::TurnComplete(_))
-        })
-        .await;
-    } else {
-        assert!(
-            matches!(event, EventMsg::TurnComplete(_)),
-            "unexpected approval prompt"
-        );
-    }
-    let requests = mock.requests();
-    assert_eq!(requests.len(), 2);
-    let tool_calls = recorded_apps_tool_calls(&server).await;
-    match expected {
-        MissingAppLinkOutcome::Execute | MissingAppLinkOutcome::Prompt => {
-            assert_eq!(tool_calls.len(), 1);
-            assert_eq!(tool_calls[0]["params"]["arguments"], calendar_args);
-            assert_eq!(completed_calls, vec![(McpToolCallStatus::Completed, None)]);
-        }
-        MissingAppLinkOutcome::Reject(message) => {
-            assert_eq!(tool_calls, Vec::<Value>::new());
-            assert_eq!(completed_calls, vec![(McpToolCallStatus::Failed, None)]);
-            assert!(
-                requests[1]
-                    .function_call_output(call_id)
-                    .to_string()
-                    .contains(message)
-            );
-        }
-    }
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
+async fn mcp_writes_prompts_for_writes_but_not_reads() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -1415,7 +802,7 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
                 .features
                 .enable(Feature::ToolCallMcpElicitation)
                 .expect("test config should allow feature update");
-            set_default_app_approval_mode_and_reviewer(
+            set_mcp_approval_mode_and_reviewer(
                 config,
                 AppToolApproval::Writes,
                 ApprovalsReviewer::User,
@@ -1510,12 +897,10 @@ async fn apps_default_writes_prompts_for_writes_but_not_reads() -> Result<()> {
         json!({
             "status": "complete",
             "sources": [{
-                "connector_id": "calendar",
                 "server_name": "codex_apps",
                 "tool_name": "calendar_list_events",
                 "first_turn_id": first_turn_id,
             }, {
-                "connector_id": "calendar",
                 "server_name": "codex_apps",
                 "tool_name": "calendar_create_event",
                 "first_turn_id": first_turn_id,

@@ -36,9 +36,6 @@ use codex_login::CodexAuth;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::manager::StaticModelsManager;
-use codex_otel::MULTI_AGENT_SPAWN_FAILURE_METRIC;
-use codex_otel::MetricsClient;
-use codex_otel::MetricsConfig;
 use codex_protocol::AgentPath;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -76,9 +73,6 @@ use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::user_input::UserInput;
 use codex_state::DirectionalThreadSpawnEdgeStatus;
 use core_test_support::TempDirExt;
-use opentelemetry_sdk::metrics::InMemoryMetricExporter;
-use opentelemetry_sdk::metrics::data::AggregatedMetrics;
-use opentelemetry_sdk::metrics::data::MetricData;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
 use serde_json::json;
@@ -302,22 +296,10 @@ async fn spawn_agent_rejects_when_message_and_items_are_both_set() {
 }
 
 #[tokio::test]
-async fn spawn_agent_limit_failure_emits_bounded_metric() {
-    let metrics = MetricsClient::new(
-        MetricsConfig::in_memory(
-            "test",
-            "codex-core",
-            env!("CARGO_PKG_VERSION"),
-            InMemoryMetricExporter::default(),
-        )
-        .with_runtime_reader(),
-    )
-    .expect("create in-memory metrics client");
+async fn spawn_agent_limit_failure_returns_an_error() {
     let (mut session, mut turn) = make_session_and_context().await;
-    turn.session_telemetry = turn.session_telemetry.clone().with_metrics(metrics.clone());
     let mut config = (*turn.config).clone();
     config.agent_max_threads = Some(0);
-    config.apps_mcp_product_sku = Some("codex".to_string());
     turn.config = Arc::new(config);
     let manager = thread_manager();
     set_agent_control(&mut session, manager.agent_control());
@@ -338,34 +320,6 @@ async fn spawn_agent_limit_failure_emits_bounded_metric() {
         FunctionCallError::RespondToModel(
             "collab spawn failed: agent thread limit reached".to_string()
         )
-    );
-
-    let snapshot = metrics.snapshot().expect("snapshot spawn metrics");
-    let failure_metric = snapshot
-        .scope_metrics()
-        .flat_map(opentelemetry_sdk::metrics::data::ScopeMetrics::metrics)
-        .find(|metric| metric.name() == MULTI_AGENT_SPAWN_FAILURE_METRIC)
-        .expect("spawn failure metric");
-    let AggregatedMetrics::U64(MetricData::Sum(sum)) = failure_metric.data() else {
-        panic!("expected spawn failure counter");
-    };
-    let points = sum.data_points().collect::<Vec<_>>();
-    assert_eq!(points.len(), 1);
-    assert_eq!(points[0].value(), 1);
-    assert_eq!(
-        points[0]
-            .attributes()
-            .map(|attribute| (
-                attribute.key.as_str().to_string(),
-                attribute.value.as_str().to_string(),
-            ))
-            .collect::<BTreeMap<_, _>>(),
-        BTreeMap::from([
-            ("fork_mode".to_string(), "none".to_string()),
-            ("multi_agent_version".to_string(), "v1".to_string()),
-            ("product_sku".to_string(), "codex".to_string()),
-            ("reason".to_string(), "limit_reached".to_string()),
-        ])
     );
 }
 
@@ -4326,7 +4280,6 @@ async fn tool_handlers_cascade_close_and_resume_and_keep_explicitly_closed_subtr
         Arc::new(codex_exec_server::EnvironmentManager::default_for_tests()),
         empty_extension_registry(),
         Arc::new(crate::test_support::EmptyUserInstructionsProvider),
-        /*analytics_events_client*/ None,
         crate::thread_manager::passthrough_image_store(),
         thread_store_from_config(&config, state_db.clone()),
         local_agent_graph_store_from_state_db(state_db.as_ref()),

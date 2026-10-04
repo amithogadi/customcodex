@@ -28,7 +28,6 @@ use crate::CodexThread;
 use crate::session::session::Session;
 use crate::tools::context::McpToolOutput;
 
-use super::app_tool_policy;
 use super::mcp_tool_metadata;
 use super::requires_mcp_tool_approval_for_mode;
 use super::with_mcp_tool_call_ids_meta;
@@ -128,12 +127,10 @@ impl<'call> ToolExecutor<ToolCall<'call>> for HistoryTool {
                     prepared.plugin_id(),
                     Some(&arguments),
                 )?;
-                let policy = app_tool_policy(prepared.config(), &metadata, &raw_name);
-                anyhow::ensure!(policy.enabled, "MCP tool call blocked by app configuration");
                 anyhow::ensure!(
                     !requires_mcp_tool_approval_for_mode(
                         metadata.annotations.as_ref(),
-                        policy.approval
+                        prepared.tool_approval_mode()
                     ),
                     "History tool requires approval on the parent; unavailable during review"
                 );
@@ -163,7 +160,6 @@ impl<'call> ToolExecutor<ToolCall<'call>> for HistoryTool {
                 Ok(Box::new(McpToolOutput {
                     result,
                     tool_input: arguments,
-                    result_metadata_capture_allowed: false,
                     wall_time: started.elapsed(),
                     original_image_detail_supported: false,
                     truncation_policy,

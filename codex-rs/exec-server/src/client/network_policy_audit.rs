@@ -52,7 +52,7 @@ pub(super) fn emit_network_policy_decision(
     };
     let metadata = &context.metadata;
     tracing::event!(
-        target: "codex_otel.log_only",
+        target: "codex_exec_server",
         tracing::Level::INFO,
         event.name = "codex.network_proxy.policy_decision",
         event.timestamp = decision.timestamp,

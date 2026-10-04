@@ -31,7 +31,6 @@ use super::find_all_rollout_paths;
 use super::migration_error;
 use super::publish::migration_journal_path;
 use super::publish::pending_migration_thread_ids;
-use super::telemetry::RolloutMigrationTrigger;
 use super::thread_id_from_rollout_filename;
 use crate::ThreadStoreError;
 use crate::ThreadStoreResult;
@@ -222,7 +221,6 @@ async fn run_startup_migration(
                     max_mib_per_second: None,
                 },
                 |_| {},
-                RolloutMigrationTrigger::Startup,
                 super::RolloutMigrationPaths::Known(paths.clone()),
             )
             .await

@@ -128,12 +128,6 @@ pub(crate) enum StatusLineItem {
     /// Total output tokens generated.
     TotalOutputTokens,
 
-    /// Estimated credits attributed directly to the current enterprise thread.
-    ThreadCredits,
-
-    /// Estimated dollar cost attributed directly to the current enterprise thread.
-    EstimatedThreadCost,
-
     /// Full thread UUID.
     #[strum(to_string = "thread-id", serialize = "session-id")]
     SessionId,
@@ -152,9 +146,6 @@ pub(crate) enum StatusLineItem {
 
     /// Current thread title, falling back to its identifier when unnamed.
     ThreadTitle,
-
-    /// Current workspace notification headline.
-    WorkspaceHeadline,
 
     /// Latest checklist task progress from `update_plan` (if available).
     TaskProgress,
@@ -199,12 +190,6 @@ impl StatusLineItem {
             StatusLineItem::UsedTokens => "Total tokens used in session (omitted when zero)",
             StatusLineItem::TotalInputTokens => "Total input tokens used in session",
             StatusLineItem::TotalOutputTokens => "Total output tokens used in session",
-            StatusLineItem::ThreadCredits => {
-                "Estimated current-thread credits (Enterprise workspaces only; omitted when unavailable)"
-            }
-            StatusLineItem::EstimatedThreadCost => {
-                "Estimated current-thread cost in USD (Enterprise workspaces only; omitted when unavailable)"
-            }
             StatusLineItem::SessionId => "Current thread identifier (omitted until thread starts)",
             StatusLineItem::FastMode => "Whether Fast mode is currently active",
             StatusLineItem::Daybreak => "Whether Daybreak is enabled for this thread",
@@ -212,9 +197,6 @@ impl StatusLineItem {
             StatusLineItem::ThreadName => "Current thread name (omitted when unnamed)",
             StatusLineItem::ThreadTitle => {
                 "Current thread title, or thread identifier when unnamed"
-            }
-            StatusLineItem::WorkspaceHeadline => {
-                "Workspace notification headline (Enterprise workspaces only; omitted when unavailable)"
             }
             StatusLineItem::TaskProgress => {
                 "Latest task progress from update_plan (omitted until available)"
@@ -245,15 +227,12 @@ impl StatusLineItem {
             StatusLineItem::UsedTokens => StatusSurfacePreviewItem::UsedTokens,
             StatusLineItem::TotalInputTokens => StatusSurfacePreviewItem::TotalInputTokens,
             StatusLineItem::TotalOutputTokens => StatusSurfacePreviewItem::TotalOutputTokens,
-            StatusLineItem::ThreadCredits => StatusSurfacePreviewItem::ThreadCredits,
-            StatusLineItem::EstimatedThreadCost => StatusSurfacePreviewItem::EstimatedThreadCost,
             StatusLineItem::SessionId => StatusSurfacePreviewItem::SessionId,
             StatusLineItem::FastMode => StatusSurfacePreviewItem::FastMode,
             StatusLineItem::Daybreak => StatusSurfacePreviewItem::Daybreak,
             StatusLineItem::RawOutput => StatusSurfacePreviewItem::RawOutput,
             StatusLineItem::ThreadName => StatusSurfacePreviewItem::ThreadName,
             StatusLineItem::ThreadTitle => StatusSurfacePreviewItem::ThreadTitle,
-            StatusLineItem::WorkspaceHeadline => StatusSurfacePreviewItem::WorkspaceHeadline,
             StatusLineItem::TaskProgress => StatusSurfacePreviewItem::TaskProgress,
         }
     }
@@ -464,18 +443,6 @@ mod tests {
         assert_eq!(
             StatusLineItem::ContextRemaining.to_string(),
             "context-remaining"
-        );
-    }
-
-    #[test]
-    fn thread_usage_items_are_independently_selectable() {
-        assert_eq!(
-            "thread-credits".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::ThreadCredits)
-        );
-        assert_eq!(
-            "estimated-thread-cost".parse::<StatusLineItem>(),
-            Ok(StatusLineItem::EstimatedThreadCost)
         );
     }
 
@@ -714,32 +681,6 @@ mod tests {
         );
 
         assert_snapshot!(render_lines(&view, /*width*/ 72));
-    }
-
-    #[test]
-    fn setup_view_snapshot_includes_thread_usage_items() {
-        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
-        let view = StatusLineSetupView::new(
-            Some(&[
-                StatusLineItem::ThreadCredits.to_string(),
-                StatusLineItem::EstimatedThreadCost.to_string(),
-            ]),
-            /*use_theme_colors*/ true,
-            StatusSurfacePreviewData::from_iter([
-                (
-                    StatusLineItem::ThreadCredits.preview_item(),
-                    "5.2 credits".to_string(),
-                ),
-                (
-                    StatusLineItem::EstimatedThreadCost.preview_item(),
-                    "~$1.82".to_string(),
-                ),
-            ]),
-            AppEventSender::new(tx_raw),
-            crate::keymap::RuntimeKeymap::defaults().list,
-        );
-
-        assert_snapshot!(render_lines(&view, /*width*/ 100));
     }
 
     #[test]
