@@ -1962,17 +1962,8 @@ async fn run_interactive_tui(
     remote_auth_token_env: Option<String>,
     arg0_paths: Arg0DispatchPaths,
 ) -> std::io::Result<AppExitInfo> {
-    if interactive.no_daemon {
-        if interactive.agents_overview {
-            return Ok(AppExitInfo::fatal(
-                "--no-daemon cannot be used with codex agents. The agents overview requires a shared server. Use codex --no-daemon to work without it.",
-            ));
-        }
-        if remote.is_some() {
-            return Ok(AppExitInfo::fatal(
-                "--no-daemon cannot be used with --remote.",
-            ));
-        }
+    if let Err(message) = interactive.validate_daemon_options(remote.is_some()) {
+        return Ok(AppExitInfo::fatal(message));
     }
     if let Some(prompt) = interactive.prompt.take() {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -2235,6 +2226,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         approval_policy,
         web_search,
         no_alt_screen,
+        daemon,
         no_daemon,
         prompt,
         mut config_overrides,
@@ -2256,6 +2248,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         interactive.web_search = true;
     }
     interactive.no_alt_screen |= no_alt_screen;
+    interactive.daemon |= daemon;
     interactive.no_daemon |= no_daemon;
     if strict_config {
         interactive.strict_config = true;
@@ -3355,6 +3348,43 @@ mod tests {
                 ["codex", command, "--last", "--no-daemon"],
             ] {
                 assert!(finalize(&args).no_daemon);
+            }
+        }
+    }
+
+    #[test]
+    fn resume_and_fork_preserve_daemon_opt_in() {
+        for (command, finalize) in [
+            ("resume", finalize_resume_from_args as fn(&[&str]) -> TuiCli),
+            ("fork", finalize_fork_from_args as fn(&[&str]) -> TuiCli),
+        ] {
+            for args in [
+                ["codex", "--daemon", command, "--last"],
+                ["codex", command, "--last", "--daemon"],
+            ] {
+                let cli = finalize(&args);
+                assert!(cli.daemon);
+                assert!(!cli.no_daemon);
+                assert!(cli.validate_daemon_options(false).is_ok());
+            }
+            assert!(!finalize(&["codex", command]).daemon);
+        }
+    }
+
+    #[test]
+    fn resume_and_fork_reject_daemon_conflicts_across_scopes() {
+        for (command, finalize) in [
+            ("resume", finalize_resume_from_args as fn(&[&str]) -> TuiCli),
+            ("fork", finalize_fork_from_args as fn(&[&str]) -> TuiCli),
+        ] {
+            for args in [
+                ["codex", "--daemon", command, "--no-daemon"],
+                ["codex", "--no-daemon", command, "--daemon"],
+            ] {
+                assert_eq!(
+                    finalize(&args).validate_daemon_options(false),
+                    Err("--daemon cannot be used with --no-daemon."),
+                );
             }
         }
     }

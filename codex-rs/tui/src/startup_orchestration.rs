@@ -13,11 +13,9 @@ pub(super) async fn run_main_inner(
     loader_overrides: LoaderOverrides,
     explicit_remote_endpoint: Option<RemoteAppServerEndpoint>,
 ) -> std::io::Result<AppExitInfo> {
-    if cli.no_daemon && explicit_remote_endpoint.is_some() {
-        return Err(std::io::Error::other(
-            "--no-daemon cannot be used with --remote.",
-        ));
-    }
+    cli.validate_daemon_options(explicit_remote_endpoint.is_some())
+        .map_err(std::io::Error::other)?;
+    cli.apply_interactive_daemon_default(explicit_remote_endpoint.is_some());
     if explicit_remote_endpoint.is_some() && !cli.add_dir.is_empty() {
         return Err(std::io::Error::other(
             "--add-dir is not supported with --remote. Configure additional workspace roots on the server.",

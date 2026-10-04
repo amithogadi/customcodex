@@ -60,9 +60,9 @@ async fn incompatible_daemon_falls_back_for_default_and_explicit_features() -> R
             Ok::<_, anyhow::Error>(())
         });
         let args = if scenario == "explicit" {
-            vec!["-c", "features.api_key_model_discovery=false"]
+            vec!["--daemon", "-c", "features.api_key_model_discovery=false"]
         } else {
-            vec![]
+            vec!["--daemon"]
         };
         let mut terminal = PtyCodex::start(&cwd, home, &args)?;
         terminal.wait_for_startup()?;

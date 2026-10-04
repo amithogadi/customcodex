@@ -560,50 +560,57 @@ pub(super) fn write_test_config(codex_home: &Path, repo_root: &Path) -> Result<(
 }
 
 #[test]
-fn no_daemon_skips_startup_and_discovery() -> Result<()> {
-    for running in [false, true] {
-        let workspace = tempfile::tempdir()?;
-        let home = tempfile::tempdir()?;
-        write_test_config(home.path(), workspace.path())?;
-        let config = home.path().join("config.toml");
-        let contents = std::fs::read_to_string(&config)?;
-        std::fs::write(
-            config,
-            contents.replace("features.daemon_auto_start = false\n", ""),
-        )?;
-        let socket_path = codex_app_server_client::app_server_control_socket_path(home.path())?;
-        std::fs::create_dir_all(socket_path.as_path().parent().unwrap())?;
-        let listener = if running {
-            let listener = std::os::unix::net::UnixListener::bind(socket_path.as_path())?;
-            listener.set_nonblocking(true)?;
-            Some(listener)
-        } else {
-            None
-        };
-        let mut terminal = PtyCodex::start(workspace.path(), home, &["--no-daemon"])?;
-        terminal.wait_for_startup()?;
-        terminal.write_input(b"/status")?;
-        terminal.wait_for_screen("show current session configuration")?;
-        terminal.read_output(Duration::from_millis(/*millis*/ 200))?;
-        terminal.write_input(b"\r")?;
-        terminal.wait_for_screen("Model:")?;
-        ensure!(
-            !terminal
-                ._codex_home
-                .path()
-                .join("app-server-daemon")
-                .exists()
-        );
-        if let Some(listener) = listener {
-            assert_eq!(
-                listener.accept().unwrap_err().kind(),
-                std::io::ErrorKind::WouldBlock
+fn embedded_default_and_no_daemon_skip_startup_and_discovery() -> Result<()> {
+    for args in [&[][..], &["--no-daemon"][..]] {
+        for socket_state in ["missing", "running", "stale"] {
+            let workspace = tempfile::tempdir()?;
+            let home = tempfile::tempdir()?;
+            write_test_config(home.path(), workspace.path())?;
+            let config = home.path().join("config.toml");
+            let contents = std::fs::read_to_string(&config)?;
+            std::fs::write(
+                config,
+                contents.replace("features.daemon_auto_start = false\n", ""),
+            )?;
+            let socket_path = codex_app_server_client::app_server_control_socket_path(home.path())?;
+            std::fs::create_dir_all(socket_path.as_path().parent().unwrap())?;
+            let listener = if socket_state != "missing" {
+                let listener = std::os::unix::net::UnixListener::bind(socket_path.as_path())?;
+                listener.set_nonblocking(true)?;
+                if socket_state == "running" {
+                    Some(listener)
+                } else {
+                    drop(listener);
+                    None
+                }
+            } else {
+                None
+            };
+            let mut terminal = PtyCodex::start(workspace.path(), home, args)?;
+            terminal.wait_for_startup()?;
+            terminal.write_input(b"/status")?;
+            terminal.wait_for_screen("show current session configuration")?;
+            terminal.read_output(Duration::from_millis(/*millis*/ 200))?;
+            terminal.write_input(b"\r")?;
+            terminal.wait_for_screen("Model:")?;
+            ensure!(
+                !terminal
+                    ._codex_home
+                    .path()
+                    .join("app-server-daemon")
+                    .exists()
+            );
+            if let Some(listener) = listener {
+                assert_eq!(
+                    listener.accept().unwrap_err().kind(),
+                    std::io::ErrorKind::WouldBlock
+                );
+            }
+            ensure!(
+                !String::from_utf8_lossy(&terminal.output)
+                    .contains("Running without the shared background server")
             );
         }
-        ensure!(
-            !String::from_utf8_lossy(&terminal.output)
-                .contains("Running without the shared background server")
-        );
     }
     Ok(())
 }
@@ -625,6 +632,7 @@ fn auto_daemon_start_failure_exits_with_manual_fallback_hint() -> Result<()> {
         workspace.path(),
         home,
         &[
+            "--daemon",
             "-c",
             "features.api_key_model_discovery=true",
             "-c",

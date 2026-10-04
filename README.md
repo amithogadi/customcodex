@@ -42,7 +42,7 @@ git show origin/original:path/to/file
 
 You can also [compare the branches on GitHub](https://github.com/amithogadi/customcodex/compare/original...main).
 
-## Build and run
+## Build
 
 Clone this repository and build the customized CLI:
 
@@ -55,6 +55,8 @@ cargo build --locked --release -p codex-cli --bin codex
 The Rust toolchain is pinned in [`codex-rs/rust-toolchain.toml`](codex-rs/rust-toolchain.toml).
 See [build instructions](docs/install.md) for prerequisites and development tools.
 Upstream installers and packages install the upstream version.
+
+## Launch CustomCodex
 
 Configure your provider in `~/.customcodex/config.toml`, for example:
 
@@ -70,11 +72,24 @@ env_key = "CUSTOM_PROVIDER_API_KEY"
 requires_openai_auth = false
 ```
 
-Set `CUSTOM_PROVIDER_API_KEY` in your shell environment, then launch from `codex-rs`:
+Set `CUSTOM_PROVIDER_API_KEY` in your shell environment. From the repository root
+(`customcodex/`), type this command to launch the CustomCodex build. If you are
+still in `codex-rs/` after building, run `cd ..` first:
 
 ```sh
-./target/release/codex
+./codex-rs/target/release/codex
 ```
+
+The executable is named `codex`, but this path selects the customized binary
+built above.
+It runs without a daemon by default. To request that behavior explicitly:
+
+```sh
+./codex-rs/target/release/codex --no-daemon
+```
+
+For a development build created without `--release`, use
+`./codex-rs/target/debug/codex --no-daemon` instead.
 
 This fork defaults to `~/.customcodex` for configuration and session data.
 Set `CODEX_HOME` explicitly if you want to override that directory.
@@ -82,6 +97,18 @@ Project configuration is loaded from `.customcodex/config.toml` within the proje
 Existing configuration must be moved or copied to the new location manually.
 For an endpoint without authentication, omit `env_key`. See
 [provider configuration](docs/config.md) for more options and compatibility details.
+
+Interactive launches, including `codex resume` and `codex fork`, use an embedded
+server by default. They do not discover or start a background daemon. Tools,
+subagents, and saved session history remain available; running work depends on
+the terminal process staying alive.
+
+Use `./codex-rs/target/release/codex --daemon` to opt into the shared background
+server. Resume and fork also accept `--daemon`. The `features.daemon_auto_start`
+setting controls automatic startup only after opting in; setting it to `false` still
+allows attachment to an existing daemon. `--no-daemon` remains supported.
+Explicit `--remote`, `codex agents`, `codex queue`, and `codex app-server daemon`
+commands retain their shared-server behavior.
 
 ## Validation
 

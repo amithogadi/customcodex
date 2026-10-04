@@ -14,7 +14,7 @@ const SERVER_FEATURES: [Feature; 4] = [
     Feature::McpOAuthRefreshCoordination,
 ];
 
-pub(super) const FAILURE_HINT: &str = "To work without the background server, rerun the same command with --no-daemon (including resume or fork and its arguments).";
+pub(super) const FAILURE_HINT: &str = "To work without the background server, remove --daemon or replace it with --no-daemon, keeping the rest of the command unchanged.";
 pub(super) const WSL_DRVFS_EXCLUSION: &str = "a Windows-mounted WSL CODEX_HOME (DrvFS/9p)";
 
 pub(super) fn uses_wsl_drvfs(codex_home: &std::path::Path) -> bool {

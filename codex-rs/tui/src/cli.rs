@@ -76,12 +76,45 @@ pub struct Cli {
     #[arg(long = "no-alt-screen", default_value_t = false)]
     pub no_alt_screen: bool,
 
-    /// Run without the shared background server, even if it is already running.
-    #[arg(long)]
+    /// Use the shared background server, starting it if configured and eligible.
+    #[arg(long, conflicts_with = "no_daemon")]
+    pub daemon: bool,
+
+    /// Run without the shared background server (the default), even if it is already running.
+    #[arg(long, conflicts_with = "daemon")]
     pub no_daemon: bool,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+}
+
+impl Cli {
+    /// Validate after merging root and subcommand flags, before any server side effects.
+    pub fn validate_daemon_options(&self, has_remote: bool) -> Result<(), &'static str> {
+        if self.daemon && self.no_daemon {
+            return Err("--daemon cannot be used with --no-daemon.");
+        }
+        if self.daemon && has_remote {
+            return Err("--daemon cannot be used with --remote.");
+        }
+        if self.no_daemon && self.agents_overview {
+            return Err(
+                "--no-daemon cannot be used with codex agents. The agents overview requires a shared server. Use codex --no-daemon to work without it.",
+            );
+        }
+        if self.no_daemon && has_remote {
+            return Err("--no-daemon cannot be used with --remote.");
+        }
+        Ok(())
+    }
+
+    /// Only interactive local sessions default to embedded mode. Explicit shared-server
+    /// commands and remote endpoints retain their own server selection.
+    pub(crate) fn apply_interactive_daemon_default(&mut self, has_remote: bool) {
+        if !self.daemon && !self.agents_overview && !has_remote {
+            self.no_daemon = true;
+        }
+    }
 }
 
 impl std::ops::Deref for Cli {
@@ -146,4 +179,68 @@ fn mark_tui_args(cmd: clap::Command) -> clap::Command {
         arg.conflicts_with("approval_policy")
     })
     .mut_arg("auto_review", |arg| arg.conflicts_with("approval_policy"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn interactive_launches_default_to_embedded() {
+        for args in [vec!["codex"], vec!["codex", "--no-daemon"]] {
+            for action in ["new", "resume", "fork"] {
+                let mut cli = Cli::parse_from(&args);
+                cli.resume_picker = action == "resume";
+                cli.fork_picker = action == "fork";
+                assert_eq!(cli.validate_daemon_options(false), Ok(()));
+                cli.apply_interactive_daemon_default(false);
+                assert!(cli.no_daemon, "{args:?} {action}");
+                assert_eq!(
+                    crate::daemon_startup::exclusion(
+                        &cli,
+                        &[],
+                        &codex_config::LoaderOverrides::default(),
+                        false,
+                        None,
+                    ),
+                    Some("--no-daemon"),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_shared_server_launches_keep_their_policy() {
+        for (args, remote, agents) in [
+            (vec!["codex", "--daemon"], false, false),
+            (vec!["codex"], true, false),
+            (vec!["codex"], false, true),
+        ] {
+            let mut cli = Cli::parse_from(args);
+            cli.agents_overview = agents;
+            assert_eq!(cli.validate_daemon_options(remote), Ok(()));
+            cli.apply_interactive_daemon_default(remote);
+            assert!(!cli.no_daemon);
+        }
+    }
+
+    #[test]
+    fn daemon_flags_reject_conflicting_server_selection() {
+        assert!(Cli::try_parse_from(["codex", "--daemon", "--no-daemon"]).is_err());
+        for flag in ["--daemon", "--no-daemon"] {
+            let cli = Cli::parse_from(["codex", flag]);
+            assert_eq!(
+                cli.validate_daemon_options(true),
+                Err(if flag == "--daemon" {
+                    "--daemon cannot be used with --remote."
+                } else {
+                    "--no-daemon cannot be used with --remote."
+                }),
+            );
+        }
+        let mut cli = Cli::parse_from(["codex", "--no-daemon"]);
+        cli.agents_overview = true;
+        assert!(cli.validate_daemon_options(false).is_err());
+    }
 }

@@ -231,9 +231,8 @@ pub(super) async fn start_app_server_for_session_command(
         arg0_paths,
         explicit_remote_endpoint,
     } = options;
-    if cli.no_daemon && explicit_remote_endpoint.is_some() {
-        return Err(eyre!("--no-daemon cannot be used with --remote."));
-    }
+    cli.validate_daemon_options(explicit_remote_endpoint.is_some())
+        .map_err(|message| eyre!(message))?;
     let loader_overrides = LoaderOverrides::default();
     let strict_config = cli.strict_config;
     let raw_overrides = cli.config_overrides.raw_overrides.clone();

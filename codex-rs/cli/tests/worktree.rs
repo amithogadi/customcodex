@@ -329,6 +329,9 @@ trust_level = "trusted"
             .mount(&server)
             .await;
         let mut args = worktree_args.clone();
+        if backend == "daemon" {
+            args.push("--daemon".into());
+        }
         if backend == "daemon" && previous.is_empty() {
             args.extend(["-c".into(), "features.auth_elicitation=true".into()]);
         }

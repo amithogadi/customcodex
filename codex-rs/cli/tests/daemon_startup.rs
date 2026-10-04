@@ -101,7 +101,7 @@ async fn restrictive_launcher_uses_embedded_if_daemon_cannot_start() -> Result<(
         let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
         let mut command = tokio::process::Command::new(codex);
         command
-            .arg("--no-alt-screen")
+            .args(["--no-alt-screen", "--daemon"])
             .stdin(std::process::Stdio::inherit())
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
@@ -239,6 +239,7 @@ async fn daemon_startup(command: &str) -> Result<()> {
         } else {
             None
         };
+        args.push("--daemon".into());
         let expected = if command == "start" {
             // The draft header is visible before the session's command composer is ready.
             steps.push_back(("GPT-5.6-Terra", b"/status\r"));

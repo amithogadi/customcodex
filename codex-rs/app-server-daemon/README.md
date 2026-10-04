@@ -3,6 +3,15 @@
 The daemon provides a local app-server that terminal clients can share. It keeps
 agent work running independently of the terminal that started it.
 
+Ordinary interactive launches, resume, and fork use an embedded server by default,
+without probing or starting this daemon. Pass `--daemon` to opt into discovery and
+eligible automatic startup. `features.daemon_auto_start` defaults to `true` and
+controls startup for opted-in launches; `false` allows attachment to an existing
+server without starting one. The setting alone does not opt a launch in.
+`--no-daemon` explicitly selects the default embedded behavior and conflicts with
+`--daemon`. Both flags conflict with `--remote`, which selects its own endpoint.
+The `codex agents` and `codex queue` commands retain their shared-server behavior.
+
 ## Commands
 
 ```sh

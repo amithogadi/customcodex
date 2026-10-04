@@ -321,3 +321,33 @@ fn no_daemon_rejects_agents_and_explicit_remote_targets() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn daemon_rejects_conflicts_before_starting_a_server() -> Result<()> {
+    for args in [
+        "--daemon --remote ws://localhost:9999",
+        "--daemon --remote ws://localhost:9999 agents",
+        "--daemon --remote ws://localhost:9999 archive example",
+        "--daemon --remote ws://localhost:9999 queue --thread example --message hello",
+        "--remote ws://localhost:9999 resume --daemon --last",
+        "--daemon fork --remote ws://localhost:9999 session-name",
+        "--daemon resume --no-daemon --last",
+        "--no-daemon resume --daemon --last",
+        "--daemon fork --no-daemon --last",
+        "--no-daemon fork --daemon --last",
+    ] {
+        let home = TempDir::new()?;
+        let expected = if args.contains("--no-daemon") {
+            "--daemon cannot be used with --no-daemon."
+        } else {
+            "--daemon cannot be used with --remote."
+        };
+        codex_command(home.path())?
+            .args(args.split_whitespace())
+            .assert()
+            .failure()
+            .stderr(contains(expected));
+        assert!(!home.path().join("app-server-daemon").exists());
+    }
+    Ok(())
+}
