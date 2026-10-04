@@ -53,6 +53,7 @@ pub use crate::endpoint::ResponsesWebsocketClose;
 pub use crate::endpoint::ResponsesWebsocketConnection;
 pub use crate::endpoint::ResponsesWebsocketProbe;
 pub use crate::endpoint::SearchClient;
+pub use crate::endpoint::is_openrouter_responses_provider;
 pub use crate::error::ApiError;
 pub use crate::images::ImageBackground;
 pub use crate::images::ImageData;

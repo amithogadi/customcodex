@@ -1,6 +1,7 @@
 pub(crate) mod images;
 pub(crate) mod memories;
 pub(crate) mod models;
+mod openrouter;
 pub(crate) mod responses;
 pub(crate) mod responses_websocket;
 pub(crate) mod search;
@@ -10,6 +11,7 @@ pub use images::ImageRequestError;
 pub use images::ImagesClient;
 pub use memories::MemoriesClient;
 pub use models::ModelsClient;
+pub use openrouter::is_openrouter as is_openrouter_responses_provider;
 pub use responses::ResponsesClient;
 pub use responses::ResponsesOptions;
 pub use responses_websocket::ResponsesWebsocketClient;

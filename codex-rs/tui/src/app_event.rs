@@ -477,6 +477,12 @@ pub(crate) enum AppEvent {
     NewSession {
         name: Option<String>,
     },
+    /// A provider-scoped choice, guarded against selection from an obsolete thread.
+    SelectConfiguredModel {
+        source_thread: Option<ThreadId>,
+        provider: String,
+        model: String,
+    },
 
     /// Create a managed checkout and start or fork a session into it.
     StartManagedWorktree {

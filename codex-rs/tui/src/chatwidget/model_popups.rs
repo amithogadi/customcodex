@@ -22,6 +22,10 @@ impl ChatWidget {
             return;
         }
 
+        if self.open_configured_model_popup() {
+            return;
+        }
+
         let presets: Vec<ModelPreset> = match self.model_catalog.try_list_models() {
             Ok(models) => models,
             Err(_) => {
@@ -80,6 +84,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
+        if self.open_configured_model_popup() {
+            return;
+        }
         if self.restrict_model_picker_to_luna_reserve() {
             self.open_luna_reserve_model_popup(presets, MODEL_SELECTION_VIEW_ID);
             return;
@@ -212,6 +219,9 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_all_models_popup(&mut self) {
+        if self.open_configured_model_popup() {
+            return;
+        }
         if self.restrict_model_picker_to_luna_reserve() {
             self.open_luna_reserve_model_popup(
                 self.model_catalog.try_list_models().unwrap_or_default(),

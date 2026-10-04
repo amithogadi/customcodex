@@ -28,7 +28,7 @@ eventsource-stream = { workspace = true }
 regex-lite = { workspace = true }
 tokio-util = { workspace = true, features = ["codec", "io"] }
 url = { workspace = true }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["v5"] }
 
 [dev-dependencies]
 anyhow = { workspace = true }

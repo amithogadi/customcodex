@@ -977,6 +977,26 @@ impl App {
         initial_user_message: Option<crate::chatwidget::UserMessage>,
         new_thread_name: Option<String>,
     ) {
+        self.start_fresh_session_with_model(
+            tui,
+            app_server,
+            session_start_source,
+            initial_user_message,
+            new_thread_name,
+            None,
+        )
+        .await;
+    }
+
+    pub(super) async fn start_fresh_session_with_model(
+        &mut self,
+        tui: &mut tui::Tui,
+        app_server: &mut AppServerSession,
+        session_start_source: Option<ThreadStartSource>,
+        initial_user_message: Option<crate::chatwidget::UserMessage>,
+        new_thread_name: Option<String>,
+        selected_model: Option<(String, String)>,
+    ) {
         if self.reject_pending_permission_root_switch() {
             if let Some(message) = initial_user_message {
                 self.chat_widget.restore_user_message_to_composer(message);
@@ -1004,7 +1024,20 @@ impl App {
             &self.cli_kv_overrides,
             &self.harness_overrides,
         );
-        match app_server
+        if let Some((provider_id, model_id)) = &selected_model {
+            if let Err(err) =
+                super::model_defaults::apply_configured_model(&mut config, provider_id, model_id)
+            {
+                self.chat_widget.add_error_message(err.to_string());
+                return;
+            }
+        }
+        // The override is request-scoped: history lookup and resume retain their own routing.
+        let previous_provider_override = app_server.model_provider_override.clone();
+        if let Some((provider, _)) = &selected_model {
+            app_server.model_provider_override = Some(provider.clone());
+        }
+        let start_result = app_server
             .start_thread_with_session_start_source(
                 &self.local_settings,
                 &config,
@@ -1012,8 +1045,9 @@ impl App {
                 /*remote_cwd_override*/ None,
                 /*selected_profile*/ None,
             )
-            .await
-        {
+            .await;
+        app_server.model_provider_override = previous_provider_override;
+        match start_result {
             Ok(mut started) => {
                 if let Some(thread_id) = self.current_displayed_thread_id()
                     && let Some(blank) = self.agents_overview.blank_sessions.get_mut(&thread_id)
@@ -1072,8 +1106,30 @@ impl App {
                     self.chat_widget.add_error_message(format!(
                         "Failed to attach to fresh app-server thread: {err}"
                     ));
+                    tui.frame_requester().schedule_frame();
+                    return;
                 } else if let Some(err) = name_error {
                     self.chat_widget.add_error_message(err);
+                }
+                if let Some((provider, model)) = selected_model {
+                    let mut edits = crate::config_update::build_model_selection_edits(
+                        &model,
+                        self.config.model_reasoning_effort.as_ref(),
+                    );
+                    edits.push(crate::config_update::replace_config_value(
+                        "model_provider",
+                        serde_json::json!(provider),
+                    ));
+                    if let Err(err) = self
+                        .persist_model_defaults(
+                            app_server.request_handle(),
+                            edits,
+                            "model provider, model and reasoning",
+                        )
+                        .await
+                    {
+                        self.chat_widget.add_warning_message(format!("Model selected for this session, but defaults could not be saved: {err}"));
+                    }
                 }
             }
             Err(err) => {

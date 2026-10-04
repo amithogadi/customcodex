@@ -1,5 +1,113 @@
 # Configuration
 
+## Configured model picker
+
+`/model` lists models declared under `model_providers.<id>.models`. Selecting a
+different entry starts a new chat; the previous conversation remains resumable.
+Provider, model, and reasoning defaults are saved together after startup succeeds.
+The picker identifies entries by both provider and model ID. Configured catalogs
+do not fetch or fall back to the bundled OpenAI model list. Existing explicit
+`model_catalog_json` configuration still takes precedence for runtime metadata.
+
+For Isoquant and Qwen through OpenRouter, use:
+
+```toml
+model = "glm-5.3-flash"
+model_provider = "isoquant"
+model_reasoning_effort = "high"
+model_reasoning_summary = "none"
+web_search = "disabled"
+
+[model_providers.isoquant]
+name = "Isoquant"
+base_url = "https://api.isoquant.ai/v1"
+env_key = "ISOQUANT_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+http_headers = { "Isoquant-ZDR" = "required" }
+
+[[model_providers.isoquant.models]]
+id = "glm-5.3-flash"
+name = "GLM-5.3-Flash"
+context_window = 1048576
+reasoning_effort = "high"
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+
+[[model_providers.openrouter.models]]
+id = "qwen/qwen3.8-27b"
+name = "Qwen-3.8-27B"
+context_window = 65536
+reasoning_effort = "high"
+# Optional: restrict routing to one provider, or an ordered list.
+# openrouter_providers = ["deepinfra"]
+```
+
+The context windows above come from provider model metadata checked on 2026-10-04.
+Use the endpoint's served limit, which may be smaller than the model's theoretical
+maximum. The existing compaction limit is clamped to the model context window.
+`Isoquant-ZDR: required` is preserved on Isoquant requests; it is not sent to other
+providers.
+
+Keys can be placed in `~/.customcodex/.env` (or `$CODEX_HOME/.env`), which the CLI
+already loads. Use the environment variable names above; do not put keys in model
+entries or commit them to this repository.
+
+To add OpenRouter models, define its provider once, then add one `models` entry
+per model. Replace the example values below with its exact model ID and served
+context limit from `https://openrouter.ai/api/v1/models`:
+
+```toml
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+
+[[model_providers.openrouter.models]]
+id = "provider/model-id"
+context_window = 32768 # Replace with the provider's advertised context limit.
+# name = "My model"
+# reasoning_effort = "high" # Only when supported by this model.
+# openrouter_providers = ["provider-slug", "another-provider-slug"]
+```
+
+`openrouter_providers` is optional. Omit it (or use `[]`) for automatic routing.
+Use one slug to pin a provider, or a list to try providers in that order, strictly
+within that list. Requests send both `provider.order` and `provider.only`; if none
+of your allowed providers is available, the request fails instead of using another
+provider. These settings apply to every turn and retry. Use OpenRouter's exact
+provider slugs, including endpoint variants when needed. Choose a context window
+supported by every allowed provider; the Qwen example uses a conservative 65,536
+tokens. The picker shows the configured provider restriction.
+See [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection).
+
+As checked on 2026-10-04, OpenRouter's Cerebras endpoint for this Qwen model does
+not advertise tool calling and rejects tool requests. DeepInfra passed a real CLI
+tool-call and continuation check. Use a tool-capable endpoint for coding, or leave
+routing automatic. A provider can support tools directly without supporting them
+through OpenRouter.
+
+Restart the CLI after editing the catalog. This first version supports text input,
+text output, and function tools. Choose models advertising tool calling; image,
+audio, hosted search, and image-generation tools are not advertised by these
+catalog entries. Reasoning is a per-entry setting. OpenRouter uses stateless
+Responses requests (`store=false`, full history, no `previous_response_id`).
+Both services use the existing Responses transport. OpenRouter's function-tool
+translation preserves native tool identities in local history, including subagent
+messages. Configured OpenRouter models use direct function tools even when
+`code_mode` or `code_mode_only` is enabled, because the adapter does not support
+the freeform code-mode tool. There is no direct Cerebras adapter. Legacy
+`wire_api="chat"` remains unsupported.
+
+## Provider configuration
+
 This branch runs terminal agents and subagents using the selected provider in
 `config.toml`. For example, an endpoint that supports the Responses API can be
 configured as follows:

@@ -636,6 +636,7 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
             request,
             ResponsesOptions {
                 session_id: Some("sess_123".into()),
+                openrouter_providers: Vec::new(),
                 thread_id: Some("thread_123".into()),
                 session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
                 extra_headers,
@@ -684,5 +685,117 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
         .and_then(|id| id.as_str());
     assert_eq!(input_id, Some("msg_1"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn openrouter_allowlist_is_optional_and_preserves_provider_order() -> Result<()> {
+    let state = RecordingState::default();
+    let client = ResponsesClient::new(
+        RecordingTransport::new(state.clone()),
+        provider("openrouter"),
+        Arc::new(NoAuth),
+    );
+    let request = ResponsesApiRequest {
+        model: "qwen/qwen3.8-27b".into(),
+        instructions: "Say hi".into(),
+        input: vec![],
+        tools: Some(empty_tools().into()),
+        tool_choice: "auto".into(),
+        parallel_tool_calls: true,
+        reasoning: None,
+        store: false,
+        stream: true,
+        stream_options: None,
+        include: vec![],
+        service_tier: None,
+        prompt_cache_key: None,
+        text: None,
+        client_metadata: None,
+        access_programs: None,
+    };
+    for providers in [
+        vec![],
+        vec!["cerebras".to_owned()],
+        vec!["cerebras".to_owned(), "deepinfra".to_owned()],
+    ] {
+        let _stream = client
+            .stream_request(
+                request.clone(),
+                ResponsesOptions {
+                    openrouter_providers: providers.clone(),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let requests = state.take_stream_requests();
+        assert_path_ends_with(&requests, "/responses");
+        let bytes = request_body_bytes(&requests[0]);
+        let body: serde_json::Value = serde_json::from_slice(bytes)?;
+        if providers.is_empty() {
+            assert_eq!(bytes, serde_json::to_vec(&request)?);
+            assert!(body.get("provider").is_none());
+        } else {
+            assert_eq!(
+                body["provider"],
+                serde_json::json!({"order":providers,"only":providers})
+            );
+        }
+        assert_eq!(body["model"], "qwen/qwen3.8-27b");
+        assert_eq!(body["store"], false);
+        assert!(body.get("previous_response_id").is_none());
+    }
+    let mut request = request;
+    request.tools = Some(Arc::<RawValue>::from(serde_json::value::to_raw_value(&serde_json::json!([
+        {"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object"}}]}
+    ]))?).into());
+    request.input = serde_json::from_value(serde_json::json!([
+        {"type":"function_call","call_id":"a","name":"spawn_agent","namespace":"collaboration","arguments":"{}"},
+        {"type":"function_call_output","call_id":"a","output":"child started"},
+        {"type":"agent_message","author":"/root/child","recipient":"/root","content":[{"type":"input_text","text":"child-ok"}]}
+    ]))?;
+    let mut openrouter = provider("openrouter");
+    openrouter.base_url = "https://openrouter.ai/api/v1".into();
+    let client = ResponsesClient::new(
+        RecordingTransport::new(state.clone()),
+        openrouter,
+        Arc::new(NoAuth),
+    );
+    let _stream = client
+        .stream_request(request.clone(), ResponsesOptions::default())
+        .await?;
+    let requests = state.take_stream_requests();
+    let body: serde_json::Value = serde_json::from_slice(request_body_bytes(&requests[0]))?;
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(body["tools"][0]["name"], "collaboration__spawn_agent");
+    assert_eq!(body["input"][0]["name"], "collaboration__spawn_agent");
+    assert!(body["input"][0].get("namespace").is_none());
+    assert_eq!(body["input"][1]["call_id"], "a");
+    assert_eq!(body["input"][2]["role"], "user");
+    assert!(
+        body["input"][2]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("child-ok")
+    );
+    assert!(
+        matches!(&request.input[0], ResponseItem::FunctionCall { namespace: Some(ns), .. } if ns == "collaboration")
+    );
+    request.tools = None;
+    request.input.clear();
+    let _stream = client
+        .stream_request(
+            request,
+            ResponsesOptions {
+                openrouter_providers: vec!["cerebras".into()],
+                ..Default::default()
+            },
+        )
+        .await?;
+    let requests = state.take_stream_requests();
+    let body: serde_json::Value = serde_json::from_slice(request_body_bytes(&requests[0]))?;
+    assert!(body.get("tool_choice").is_none());
+    assert!(body.get("parallel_tool_calls").is_none());
+    assert_eq!(body["provider"]["only"], serde_json::json!(["cerebras"]));
     Ok(())
 }

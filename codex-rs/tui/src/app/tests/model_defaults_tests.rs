@@ -1,4 +1,54 @@
 use super::*;
+
+#[tokio::test]
+async fn configured_selection_stages_complete_provider_and_keeps_failed_selection_unchanged() {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let original_provider = app.config.model_provider_id.clone();
+    let original_model = app.config.model.clone();
+    app.config.model_providers.insert(
+        "openrouter".into(),
+        codex_model_provider_info::ModelProviderInfo {
+            name: "OpenRouter".into(),
+            base_url: Some("https://openrouter.ai/api/v1".into()),
+            wire_api: codex_model_provider_info::WireApi::Responses,
+            models: vec![codex_model_provider_info::ConfiguredModel {
+                id: "qwen/qwen3.8-27b".into(),
+                name: None,
+                context_window: 65536,
+                reasoning_effort: Some(ReasoningEffortConfig::High),
+                openrouter_providers: Vec::new(),
+            }],
+            ..Default::default()
+        },
+    );
+    assert!(
+        super::super::model_defaults::apply_configured_model(
+            &mut app.config,
+            "openrouter",
+            "missing"
+        )
+        .is_err()
+    );
+    assert_eq!(app.config.model_provider_id, original_provider);
+    assert_eq!(app.config.model, original_model);
+    super::super::model_defaults::apply_configured_model(
+        &mut app.config,
+        "openrouter",
+        "qwen/qwen3.8-27b",
+    )
+    .unwrap();
+    assert_eq!(app.config.model_provider_id, "openrouter");
+    assert_eq!(
+        app.config.model_provider.wire_api,
+        codex_model_provider_info::WireApi::Responses
+    );
+    assert_eq!(
+        app.config.model_reasoning_effort,
+        Some(ReasoningEffortConfig::High)
+    );
+    assert_eq!(app.config.model_context_window, Some(65536));
+    assert_eq!(app.config.service_tier, None);
+}
 use crate::collaboration_modes;
 use codex_app_server_client::AppServerClient;
 use codex_config::LoaderOverrides;

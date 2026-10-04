@@ -12,6 +12,49 @@ use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ReasoningEffort;
 use color_eyre::eyre::Result;
 
+/// Validate and stage a complete provider choice without mutating the active session.
+pub(super) fn apply_configured_model(
+    config: &mut crate::legacy_core::config::Config,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<()> {
+    if config
+        .config_layer_stack
+        .required_model_provider()
+        .is_some_and(|required| required != provider_id)
+    {
+        color_eyre::eyre::bail!("The selected provider is disallowed by managed configuration");
+    }
+    let provider = config
+        .model_providers
+        .get(provider_id)
+        .ok_or_else(|| color_eyre::eyre::eyre!("Unknown provider: {provider_id}"))?
+        .clone();
+    provider
+        .validate()
+        .map_err(|err| color_eyre::eyre::eyre!(err))?;
+    // Resolve env-key errors before opening the replacement thread; never print the value.
+    provider.api_key()?;
+    let model = provider
+        .models
+        .iter()
+        .find(|m| m.id == model_id)
+        .ok_or_else(|| {
+            color_eyre::eyre::eyre!(
+                "Model is not configured for provider {provider_id}: {model_id}"
+            )
+        })?;
+    config.model_reasoning_effort = model.reasoning_effort.clone();
+    config.plan_mode_reasoning_effort = model.reasoning_effort.clone();
+    config.model_reasoning_summary = Some(codex_protocol::config_types::ReasoningSummary::None);
+    config.model_context_window = Some(model.context_window);
+    config.service_tier = None;
+    config.model = Some(model.id.clone());
+    config.model_provider_id = provider_id.to_owned();
+    config.model_provider = provider;
+    Ok(())
+}
+
 impl App {
     pub(super) async fn select_session_model(
         &mut self,

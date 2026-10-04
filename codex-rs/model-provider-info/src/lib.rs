@@ -133,10 +133,26 @@ impl<'de> Deserialize<'de> for WireApi {
     }
 }
 
+/// A text/tool model explicitly configured for a provider.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ConfiguredModel {
+    pub id: String,
+    pub context_window: i64,
+    pub name: Option<String>,
+    pub reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    /// Optional strict OpenRouter provider allowlist, in preference order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub openrouter_providers: Vec<String>,
+}
+
 /// Serializable representation of a provider definition.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ModelProviderInfo {
+    /// Explicit provider-scoped model catalog and TUI picker choices.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<ConfiguredModel>,
     /// Friendly display name.
     #[serde(default)]
     pub name: String,
@@ -297,6 +313,44 @@ other non-default provider fields are not supported"
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
+        let mut ids = std::collections::HashSet::new();
+        for model in &self.models {
+            if model.id.trim().is_empty() || model.context_window <= 0 {
+                return Err(
+                    "provider models require a non-empty id and positive context_window".into(),
+                );
+            }
+            if !ids.insert(&model.id) {
+                return Err(format!("duplicate provider model: {}", model.id));
+            }
+            if !model.openrouter_providers.is_empty() {
+                let base_url = self
+                    .base_url
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim_end_matches('/');
+                if !matches!(
+                    base_url,
+                    "https://openrouter.ai/api/v1"
+                        | "https://eu.openrouter.ai/api/v1"
+                        | "https://us.openrouter.ai/api/v1"
+                ) {
+                    return Err("openrouter_providers requires an OpenRouter API base_url".into());
+                }
+                if self.supports_websockets {
+                    return Err("openrouter_providers requires supports_websockets = false".into());
+                }
+                let mut providers = std::collections::HashSet::new();
+                for provider in &model.openrouter_providers {
+                    if provider.trim().is_empty()
+                        || provider.trim() != provider
+                        || !providers.insert(provider)
+                    {
+                        return Err("openrouter_providers must contain unique, non-empty provider slugs without surrounding whitespace".into());
+                    }
+                }
+            }
+        }
         if let Some(gateway) = &self.gateway_oauth {
             gateway.validate(self)?;
         }
@@ -520,6 +574,7 @@ other non-default provider fields are not supported"
 
     pub fn create_openai_provider(base_url: Option<String>) -> ModelProviderInfo {
         ModelProviderInfo {
+            models: Vec::new(),
             name: OPENAI_PROVIDER_NAME.into(),
             base_url,
             model_catalog_url: None,
@@ -564,6 +619,7 @@ other non-default provider fields are not supported"
         aws: Option<ModelProviderAwsAuthInfo>,
     ) -> ModelProviderInfo {
         ModelProviderInfo {
+            models: Vec::new(),
             name: AMAZON_BEDROCK_PROVIDER_NAME.into(),
             // The runtime provider derives the regional Mantle endpoint when
             // this is unset. A configured value is therefore unambiguously an
@@ -749,6 +805,7 @@ pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> Mod
 
 pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> ModelProviderInfo {
     ModelProviderInfo {
+        models: Vec::new(),
         name: "gpt-oss".into(),
         base_url: Some(base_url.into()),
         model_catalog_url: None,

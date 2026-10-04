@@ -33,6 +33,7 @@ use codex_state::SqliteConfig;
 use futures::SinkExt;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
+use std::fs;
 use std::sync::Mutex;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -42,6 +43,71 @@ use tokio_tungstenite::tungstenite::Message;
 
 pub(super) type RecordedRequests = Arc<Mutex<Vec<JSONRPCRequest>>>;
 pub(super) type RecordingAppServer = (AppServerSession, RecordedRequests, JoinHandle<Result<()>>);
+
+#[tokio::test]
+async fn configured_model_starts_a_new_thread_and_persists_the_provider_atomically() -> Result<()> {
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    let config_path = app.config.codex_home.join("config.toml");
+    let original_config = fs::read_to_string(&config_path).unwrap_or_default();
+    fs::write(
+        &config_path,
+        format!(
+            "{original_config}\n[model_providers.openrouter]\nname = \"OpenRouter\"\nbase_url = \"http://127.0.0.1:1/v1\"\nwire_api = \"responses\"\n[[model_providers.openrouter.models]]\nid = \"qwen/qwen3.8-27b\"\ncontext_window = 65536\nreasoning_effort = \"high\"\n"
+        ),
+    )?;
+    app.config = app
+        .rebuild_config_for_cwd(app.config.cwd.to_path_buf())
+        .await?;
+    let original_thread = ThreadId::new();
+    app.chat_widget
+        .handle_thread_session_quiet(test_thread_session(
+            original_thread,
+            app.config.cwd.to_path_buf(),
+        ));
+    let (mut server, requests, proxy) = start_recording_app_server(&app.config, None, None).await?;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::SelectConfiguredModel {
+            source_thread: Some(original_thread),
+            provider: "openrouter".into(),
+            model: "qwen/qwen3.8-27b".into(),
+        },
+    )
+    .await?;
+    assert_ne!(app.chat_widget.thread_id(), Some(original_thread));
+    assert_eq!(app.config.model_provider_id, "openrouter");
+    let starts = recorded_params(&requests, "thread/start");
+    let start = starts.last().expect("new thread request");
+    assert_eq!(start["modelProvider"], "openrouter");
+    assert_eq!(start["model"], "qwen/qwen3.8-27b");
+    assert_eq!(start["config"]["model_reasoning_effort"], "high");
+    assert!(
+        server.model_provider_override.is_none(),
+        "selection override must not leak into resume"
+    );
+    let saved: toml::Value = toml::from_str(&fs::read_to_string(&config_path)?)?;
+    assert_eq!(saved["model_provider"].as_str(), Some("openrouter"));
+    assert_eq!(saved["model"].as_str(), Some("qwen/qwen3.8-27b"));
+    requests.lock().unwrap().clear();
+    app.handle_event(
+        &mut tui,
+        &mut server,
+        AppEvent::SelectConfiguredModel {
+            source_thread: Some(original_thread),
+            provider: "openrouter".into(),
+            model: "qwen/qwen3.8-27b".into(),
+        },
+    )
+    .await?;
+    assert!(
+        recorded_params(&requests, "thread/start").is_empty(),
+        "stale picker action must not start another thread"
+    );
+    proxy.abort();
+    Ok(())
+}
 
 #[tokio::test]
 async fn daybreak_command_persists_and_confirms_each_selection() -> Result<()> {

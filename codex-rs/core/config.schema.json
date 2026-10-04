@@ -1240,6 +1240,37 @@
       },
       "type": "object"
     },
+    "ConfiguredModel": {
+      "additionalProperties": false,
+      "description": "A text/tool model explicitly configured for a provider.",
+      "properties": {
+        "context_window": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "openrouter_providers": {
+          "description": "Optional strict OpenRouter provider allowlist, in preference order.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reasoning_effort": {
+          "$ref": "#/definitions/ReasoningEffort"
+        }
+      },
+      "required": [
+        "context_window",
+        "id"
+      ],
+      "type": "object"
+    },
     "ContextManagementConfigToml": {
       "additionalProperties": false,
       "properties": {
@@ -2637,6 +2668,13 @@
         "model_catalog_url": {
           "description": "Optional full URL for a Codex-native model catalog. When unset, OpenAI discovery uses the Codex backend unless `base_url` overrides the inference endpoint.",
           "type": "string"
+        },
+        "models": {
+          "description": "Explicit provider-scoped model catalog and TUI picker choices.",
+          "items": {
+            "$ref": "#/definitions/ConfiguredModel"
+          },
+          "type": "array"
         },
         "name": {
           "default": "",

@@ -2469,6 +2469,7 @@ fn websocket_provider_with_connect_timeout(
     websocket_connect_timeout_ms: Option<u64>,
 ) -> ModelProviderInfo {
     ModelProviderInfo {
+        models: Vec::new(),
         name: "mock-ws".into(),
         base_url: Some(format!("{}/v1", server.uri())),
         model_catalog_url: None,

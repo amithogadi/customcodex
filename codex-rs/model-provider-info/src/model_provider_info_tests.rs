@@ -76,6 +76,7 @@ name = "Ollama"
 base_url = "http://localhost:11434/v1"
         "#;
     let expected_provider = ModelProviderInfo {
+        models: Vec::new(),
         name: "Ollama".into(),
         base_url: Some("http://localhost:11434/v1".into()),
         model_catalog_url: None,
@@ -113,6 +114,7 @@ env_key = "AZURE_OPENAI_API_KEY"
 query_params = { api-version = "2025-04-01-preview" }
         "#;
     let expected_provider = ModelProviderInfo {
+        models: Vec::new(),
         name: "Azure".into(),
         base_url: Some("https://xxxxx.openai.azure.com/openai".into()),
         model_catalog_url: None,
@@ -154,6 +156,7 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 supports_standalone_web_search = true
         "#;
     let expected_provider = ModelProviderInfo {
+        models: Vec::new(),
         name: "Example".into(),
         base_url: Some("https://example.com".into()),
         model_catalog_url: None,
@@ -340,6 +343,7 @@ fn test_create_amazon_bedrock_provider() {
     assert_eq!(
         ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
         ModelProviderInfo {
+            models: Vec::new(),
             name: "Amazon Bedrock".to_string(),
             base_url: None,
             model_catalog_url: None,
@@ -919,4 +923,50 @@ fn custom_endpoint_is_preserved_for_legacy_auth_modes() {
             "https://provider.example/v1"
         );
     }
+}
+#[test]
+fn configured_models_validate_and_preserve_explicit_protocol() {
+    let provider: ModelProviderInfo = toml::from_str(
+        r#"
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+wire_api = "responses"
+[[models]]
+id = "qwen/qwen3.8-27b"
+context_window = 65536
+reasoning_effort = "high"
+openrouter_providers = ["cerebras", "deepinfra"]
+"#,
+    )
+    .unwrap();
+    assert_eq!(provider.wire_api, WireApi::Responses);
+    assert_eq!(provider.models[0].id, "qwen/qwen3.8-27b");
+    assert_eq!(
+        provider.models[0].openrouter_providers,
+        ["cerebras", "deepinfra"]
+    );
+    provider.validate().unwrap();
+    let mut invalid = provider.clone();
+    invalid.models.push(provider.models[0].clone());
+    assert!(invalid.validate().unwrap_err().contains("duplicate"));
+    invalid = provider.clone();
+    invalid.models[0].context_window = 0;
+    assert!(invalid.validate().is_err());
+    for providers in [
+        vec!["".into()],
+        vec!["cerebras".into(), "cerebras".into()],
+        vec![" cerebras".into()],
+    ] {
+        invalid = provider.clone();
+        invalid.models[0].openrouter_providers = providers;
+        assert!(invalid.validate().is_err());
+    }
+    invalid = provider.clone();
+    invalid.base_url = Some("https://api.isoquant.ai/v1".into());
+    assert!(invalid.validate().is_err());
+    invalid.models[0].openrouter_providers.clear();
+    invalid.validate().unwrap();
+    invalid = provider;
+    invalid.supports_websockets = true;
+    assert!(invalid.validate().is_err());
 }

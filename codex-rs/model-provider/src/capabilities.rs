@@ -41,6 +41,8 @@ impl ProviderCapabilities {
         };
         let overrides = info.capabilities.unwrap_or_default();
         Self {
+            image_generation: defaults.image_generation && info.models.is_empty(),
+            web_search: defaults.web_search && info.models.is_empty(),
             external_web_access: overrides
                 .external_web_access
                 .unwrap_or(defaults.external_web_access),

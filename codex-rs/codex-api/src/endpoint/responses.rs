@@ -16,6 +16,7 @@ use codex_protocol::protocol::SessionSource;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::Method;
+use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -27,6 +28,8 @@ pub struct ResponsesClient<T: HttpTransport> {
 
 #[derive(Default)]
 pub struct ResponsesOptions {
+    /// OpenRouter-only strict upstream allowlist, ordered by preference.
+    pub openrouter_providers: Vec<String>,
     pub session_id: Option<String>,
     pub thread_id: Option<String>,
     pub session_source: Option<SessionSource>,
@@ -54,10 +57,11 @@ impl<T: HttpTransport> ResponsesClient<T> {
     )]
     pub async fn stream_request(
         &self,
-        request: ResponsesApiRequest,
+        mut request: ResponsesApiRequest,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
         let ResponsesOptions {
+            openrouter_providers,
             session_id,
             thread_id,
             session_source,
@@ -65,7 +69,13 @@ impl<T: HttpTransport> ResponsesClient<T> {
             compression,
             turn_state,
         } = options;
-        let body = EncodedJsonBody::encode(&request)
+        let tool_names = if super::openrouter::is_openrouter(&self.session.provider().base_url) {
+            Some(super::openrouter::prepare(&mut request)?)
+        } else {
+            None
+        };
+        let omit_tool_options = tool_names.as_ref().is_some_and(|names| names.is_empty());
+        let body = encode_request(&request, &openrouter_providers, omit_tool_options)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
         let mut headers = extra_headers;
@@ -77,8 +87,13 @@ impl<T: HttpTransport> ResponsesClient<T> {
             insert_header(&mut headers, "x-openai-subagent", &subagent);
         }
 
-        self.stream_encoded(body, headers, compression, turn_state)
-            .await
+        let stream = self
+            .stream_encoded(body, headers, compression, turn_state)
+            .await?;
+        Ok(match tool_names {
+            Some(names) => super::openrouter::restore_stream(stream, names),
+            None => stream,
+        })
     }
 
     #[instrument(
@@ -139,5 +154,51 @@ impl<T: HttpTransport> ResponsesClient<T> {
             self.session.provider().stream_idle_timeout,
             turn_state,
         ))
+    }
+}
+
+// Keep the standard request unchanged when routing is absent, including its
+// serialization order. OpenRouter's `only` prevents fallback outside the list.
+fn encode_request(
+    request: &ResponsesApiRequest,
+    providers: &[String],
+    omit_tool_options: bool,
+) -> Result<EncodedJsonBody, serde_json::Error> {
+    #[derive(Serialize)]
+    struct Routing<'a> {
+        order: &'a [String],
+        only: &'a [String],
+    }
+    #[derive(Serialize)]
+    struct RoutedRequest<'a> {
+        #[serde(flatten)]
+        request: &'a ResponsesApiRequest,
+        provider: Routing<'a>,
+    }
+    if omit_tool_options {
+        // Compaction and other tool-free requests must not ask upstream providers
+        // to select tools. In particular Cerebras rejects tool_choice without tools.
+        let mut body = serde_json::to_value(request)?;
+        if let Some(fields) = body.as_object_mut() {
+            fields.remove("tool_choice");
+            fields.remove("parallel_tool_calls");
+        }
+        if !providers.is_empty() {
+            body["provider"] = serde_json::to_value(Routing {
+                order: providers,
+                only: providers,
+            })?;
+        }
+        EncodedJsonBody::encode(&body)
+    } else if providers.is_empty() {
+        EncodedJsonBody::encode(request)
+    } else {
+        EncodedJsonBody::encode(&RoutedRequest {
+            request,
+            provider: Routing {
+                order: providers,
+                only: providers,
+            },
+        })
     }
 }

@@ -348,7 +348,9 @@ impl ConfiguredModelProvider {
         config_model_catalog: Option<ModelsResponse>,
         cache: ModelsCacheConfig,
     ) -> SharedModelsManager {
-        if let Some(model_catalog) = config_model_catalog {
+        if let Some(model_catalog) =
+            config_model_catalog.or_else(|| crate::configured_models::catalog(&self.info))
+        {
             return Arc::new(StaticModelsManager::new(
                 self.auth_manager.clone(),
                 model_catalog,
@@ -566,6 +568,7 @@ mod tests {
 
     fn provider_for(base_url: String) -> ModelProviderInfo {
         ModelProviderInfo {
+            models: Vec::new(),
             name: "mock".into(),
             base_url: Some(base_url),
             model_catalog_url: None,

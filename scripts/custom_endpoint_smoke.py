@@ -326,6 +326,10 @@ base_url = "http://127.0.0.1:{port}/v1"
 wire_api = "responses"
 requires_openai_auth = false
 env_key = "CUSTOM_SMOKE_PROVIDER_KEY"
+[[model_providers.custom_smoke.models]]
+id = "mock-agent"
+context_window = 65536
+reasoning_effort = "high"
 [features]
 multi_agent_v2 = true
 [analytics]

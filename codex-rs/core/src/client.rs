@@ -681,6 +681,16 @@ impl ModelClient {
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
     ) -> Reasoning {
+        // Explicit catalog entries own reasoning settings, including omission for
+        // models without reasoning. Do not leak a previous provider's default.
+        let effort = self
+            .state
+            .provider
+            .info()
+            .models
+            .iter()
+            .find(|model| model.id == model_info.slug)
+            .map_or(effort, |model| model.reasoning_effort.clone());
         Reasoning {
             effort: effort
                 .or_else(|| model_info.default_reasoning_level.clone())
@@ -793,11 +803,12 @@ impl ModelClient {
             .filter(|tier| {
                 // Bedrock requires an advertised tier, including for flex, which the
                 // generic OpenAI resolver permits without catalog support.
-                !self.state.provider.info().is_amazon_bedrock()
-                    || model_info
-                        .service_tiers
-                        .iter()
-                        .any(|supported| supported.id == *tier)
+                self.state.provider.info().models.is_empty()
+                    && (!self.state.provider.info().is_amazon_bedrock()
+                        || model_info
+                            .service_tiers
+                            .iter()
+                            .any(|supported| supported.id == *tier))
             });
         if !include_internal {
             for item in &mut input {
@@ -1091,6 +1102,7 @@ impl ModelClientSession {
         use_responses_lite: bool,
     ) -> ApiResponsesOptions {
         ApiResponsesOptions {
+            openrouter_providers: Vec::new(),
             session_id: Some(self.client.responses_session_id(responses_metadata)),
             thread_id: Some(responses_metadata.thread_id.to_string()),
             session_source: Some(self.client.state.session_source.clone()),
@@ -1412,6 +1424,16 @@ impl ModelClientSession {
                 responses_metadata,
                 include_internal,
             )?;
+            options.openrouter_providers = self
+                .client
+                .state
+                .provider
+                .info()
+                .models
+                .iter()
+                .find(|model| model.id == request.model)
+                .map(|model| model.openrouter_providers.clone())
+                .unwrap_or_default();
             self.client.set_guardian_metadata(
                 &mut request.client_metadata,
                 responses_metadata.parent_response_id.as_deref(),
