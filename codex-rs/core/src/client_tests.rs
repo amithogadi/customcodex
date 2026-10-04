@@ -117,6 +117,58 @@ fn test_model_provider() -> SharedModelProvider {
     test_model_client(SessionSource::Cli).state.provider.clone()
 }
 
+#[tokio::test]
+async fn openrouter_options_follow_exact_model_for_primary_and_subagent_requests() {
+    for source in [
+        SessionSource::Cli,
+        SessionSource::SubAgent(SubAgentSource::Review),
+    ] {
+        let mut client = test_model_client(source);
+        let info: ModelProviderInfo = toml::from_str(
+            r#"
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+[[models]]
+id = "default"
+context_window = 65536
+[[models]]
+id = "enforced"
+context_window = 65536
+openrouter_zdr = true
+openrouter_providers = ["together"]
+[[models]]
+id = "opted-out"
+context_window = 65536
+openrouter_zdr = false
+openrouter_providers = ["cerebras/fp16", "deepinfra"]
+"#,
+        )
+        .unwrap();
+        Arc::get_mut(&mut client.state).unwrap().provider = create_model_provider(info, None);
+        let metadata = test_responses_metadata_for_client(
+            &client,
+            None,
+            "window".into(),
+            None,
+            TestCodexResponsesRequestKind::Turn,
+        );
+        let session = client.new_session();
+        // Revisit defaults after an opt-out to ensure settings do not leak across models.
+        for (model, expected_zdr, expected_providers) in [
+            ("enforced", Some(true), vec!["together"]),
+            ("opted-out", Some(false), vec!["cerebras/fp16", "deepinfra"]),
+            ("default", None, vec![]),
+            ("unknown", None, vec![]),
+        ] {
+            let options = session
+                .build_responses_options(model, &metadata, codex_api::Compression::None, false)
+                .await;
+            assert_eq!(options.openrouter_zdr, expected_zdr, "{model}");
+            assert_eq!(options.openrouter_providers, expected_providers, "{model}");
+        }
+    }
+}
+
 #[derive(Debug)]
 enum SetupRefresh {
     Command(PathBuf),

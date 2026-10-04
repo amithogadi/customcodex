@@ -46,6 +46,7 @@ context_window = 65536
 reasoning_effort = "high"
 # Optional: restrict routing to one provider, or an ordered list.
 # openrouter_providers = ["deepinfra"]
+openrouter_zdr = true # Default when omitted.
 ```
 
 The context windows above come from provider model metadata checked on 2026-10-04.
@@ -76,6 +77,7 @@ context_window = 32768 # Replace with the provider's advertised context limit.
 # name = "My model"
 # reasoning_effort = "high" # Only when supported by this model.
 # openrouter_providers = ["provider-slug", "another-provider-slug"]
+# openrouter_zdr = false # Explicit opt-out; omission enforces ZDR.
 ```
 
 `openrouter_providers` is optional. Omit it (or use `[]`) for automatic routing.
@@ -87,6 +89,23 @@ provider slugs, including endpoint variants when needed. Choose a context window
 supported by every allowed provider; the Qwen example uses a conservative 65,536
 tokens. The picker shows the configured provider restriction.
 See [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection).
+
+`openrouter_zdr` is an optional per-model boolean, defaulting to `true` for
+OpenRouter. Every OpenRouter Responses request sends `provider.zdr`, even with
+automatic routing or a model absent from the configured catalog. Explicit `false`
+removes the request-level ZDR requirement; it cannot disable stricter OpenRouter
+account or guardrail policies. It does not require a non-ZDR endpoint.
+
+ZDR is enforced together with `openrouter_providers`: a request fails if none of
+the allowed endpoints is ZDR-eligible. Retries never relax either restriction.
+The setting applies to turns, continuations, subagents, and tool-free compaction.
+OpenRouter requires `supports_websockets = false` so requests use this HTTP path.
+Using `openrouter_zdr` on a non-OpenRouter provider is a configuration error.
+
+This controls inference-provider routing, not local conversation history or
+external tools. `store=false` remains unchanged and is separate from ZDR.
+Isoquant continues to use its existing `Isoquant-ZDR` header.
+See [OpenRouter ZDR documentation](https://openrouter.ai/docs/guides/features/zdr).
 
 As checked on 2026-10-04, OpenRouter's Cerebras endpoint for this Qwen model does
 not advertise tool calling and rejects tool requests. DeepInfra passed a real CLI

@@ -30,6 +30,8 @@ pub struct ResponsesClient<T: HttpTransport> {
 pub struct ResponsesOptions {
     /// OpenRouter-only strict upstream allowlist, ordered by preference.
     pub openrouter_providers: Vec<String>,
+    /// OpenRouter-only inference ZDR requirement; None enforces true.
+    pub openrouter_zdr: Option<bool>,
     pub session_id: Option<String>,
     pub thread_id: Option<String>,
     pub session_source: Option<SessionSource>,
@@ -62,6 +64,7 @@ impl<T: HttpTransport> ResponsesClient<T> {
     ) -> Result<ResponseStream, ApiError> {
         let ResponsesOptions {
             openrouter_providers,
+            openrouter_zdr,
             session_id,
             thread_id,
             session_source,
@@ -75,7 +78,8 @@ impl<T: HttpTransport> ResponsesClient<T> {
             None
         };
         let omit_tool_options = tool_names.as_ref().is_some_and(|names| names.is_empty());
-        let body = encode_request(&request, &openrouter_providers, omit_tool_options)
+        let zdr = tool_names.as_ref().map(|_| openrouter_zdr.unwrap_or(true));
+        let body = encode_request(&request, &openrouter_providers, zdr, omit_tool_options)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
 
         let mut headers = extra_headers;
@@ -109,11 +113,32 @@ impl<T: HttpTransport> ResponsesClient<T> {
     )]
     pub async fn stream(
         &self,
-        body: Value,
+        mut body: Value,
         extra_headers: HeaderMap,
         compression: Compression,
         turn_state: Option<Arc<OnceLock<String>>>,
     ) -> Result<ResponseStream, ApiError> {
+        if super::openrouter::is_openrouter(&self.session.provider().base_url) {
+            let fields = body
+                .as_object_mut()
+                .ok_or_else(|| ApiError::InvalidRequest {
+                    message: "OpenRouter requests must be JSON objects".into(),
+                })?;
+            let routing = fields
+                .entry("provider")
+                .or_insert_with(|| serde_json::json!({}));
+            let routing = routing
+                .as_object_mut()
+                .ok_or_else(|| ApiError::InvalidRequest {
+                    message: "OpenRouter provider preferences must be a JSON object".into(),
+                })?;
+            let zdr = routing.entry("zdr").or_insert(Value::Bool(true));
+            if !zdr.is_boolean() {
+                return Err(ApiError::InvalidRequest {
+                    message: "OpenRouter provider.zdr must be a boolean".into(),
+                });
+            }
+        }
         let body = EncodedJsonBody::encode(&body)
             .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
         self.stream_encoded(body, extra_headers, compression, turn_state)
@@ -157,17 +182,22 @@ impl<T: HttpTransport> ResponsesClient<T> {
     }
 }
 
-// Keep the standard request unchanged when routing is absent, including its
-// serialization order. OpenRouter's `only` prevents fallback outside the list.
+// Keep non-OpenRouter requests unchanged when routing is absent, including their
+// serialization order. OpenRouter always sends ZDR, independently of its allowlist.
 fn encode_request(
     request: &ResponsesApiRequest,
     providers: &[String],
+    zdr: Option<bool>,
     omit_tool_options: bool,
 ) -> Result<EncodedJsonBody, serde_json::Error> {
     #[derive(Serialize)]
     struct Routing<'a> {
+        #[serde(skip_serializing_if = "<[String]>::is_empty")]
         order: &'a [String],
+        #[serde(skip_serializing_if = "<[String]>::is_empty")]
         only: &'a [String],
+        #[serde(skip_serializing_if = "Option::is_none")]
+        zdr: Option<bool>,
     }
     #[derive(Serialize)]
     struct RoutedRequest<'a> {
@@ -183,14 +213,15 @@ fn encode_request(
             fields.remove("tool_choice");
             fields.remove("parallel_tool_calls");
         }
-        if !providers.is_empty() {
+        if !providers.is_empty() || zdr.is_some() {
             body["provider"] = serde_json::to_value(Routing {
                 order: providers,
                 only: providers,
+                zdr,
             })?;
         }
         EncodedJsonBody::encode(&body)
-    } else if providers.is_empty() {
+    } else if providers.is_empty() && zdr.is_none() {
         EncodedJsonBody::encode(request)
     } else {
         EncodedJsonBody::encode(&RoutedRequest {
@@ -198,6 +229,7 @@ fn encode_request(
             provider: Routing {
                 order: providers,
                 only: providers,
+                zdr,
             },
         })
     }

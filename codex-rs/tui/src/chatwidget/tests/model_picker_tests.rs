@@ -16,6 +16,7 @@ async fn configured_picker_uses_provider_identity_and_ignores_bundled_refresh() 
                     name: None,
                     context_window: 65536,
                     reasoning_effort: Some(ReasoningEffortConfig::High),
+                    openrouter_zdr: None,
                     openrouter_providers: if id == "openrouter" {
                         vec!["cerebras".into()]
                     } else {

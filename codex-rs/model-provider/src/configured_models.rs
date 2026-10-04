@@ -79,6 +79,7 @@ mod tests {
                     context_window: 65536,
                     reasoning_effort: None,
                     openrouter_providers: Vec::new(),
+                    openrouter_zdr: None,
                 }],
                 ..Default::default()
             };
@@ -98,6 +99,7 @@ mod tests {
                 context_window: 65536,
                 reasoning_effort: Some(ReasoningEffort::High),
                 openrouter_providers: Vec::new(),
+                openrouter_zdr: None,
             }],
             ..Default::default()
         };

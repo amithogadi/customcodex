@@ -1261,6 +1261,10 @@
           },
           "type": "array"
         },
+        "openrouter_zdr": {
+          "description": "OpenRouter inference ZDR requirement. Omission defaults to true on requests.",
+          "type": "boolean"
+        },
         "reasoning_effort": {
           "$ref": "#/definitions/ReasoningEffort"
         }

@@ -637,6 +637,7 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
             ResponsesOptions {
                 session_id: Some("sess_123".into()),
                 openrouter_providers: Vec::new(),
+                openrouter_zdr: None,
                 thread_id: Some("thread_123".into()),
                 session_source: Some(SessionSource::SubAgent(SubAgentSource::Review)),
                 extra_headers,
@@ -797,5 +798,209 @@ async fn openrouter_allowlist_is_optional_and_preserves_provider_order() -> Resu
     assert!(body.get("tool_choice").is_none());
     assert!(body.get("parallel_tool_calls").is_none());
     assert_eq!(body["provider"]["only"], serde_json::json!(["cerebras"]));
+    Ok(())
+}
+
+fn openrouter_zdr_request(with_tools: bool) -> ResponsesApiRequest {
+    ResponsesApiRequest {
+        model: "test-model".into(),
+        instructions: "Say hi".into(),
+        input: vec![],
+        tools: with_tools.then(|| {
+            Arc::<RawValue>::from(serde_json::value::to_raw_value(
+            &serde_json::json!([{"type":"function","name":"read","parameters":{"type":"object"}}])
+        ).unwrap()).into()
+        }),
+        tool_choice: "auto".into(),
+        parallel_tool_calls: true,
+        reasoning: None,
+        store: false,
+        stream: true,
+        stream_options: None,
+        include: vec![],
+        service_tier: None,
+        prompt_cache_key: None,
+        text: None,
+        client_metadata: None,
+        access_programs: None,
+    }
+}
+
+#[tokio::test]
+async fn openrouter_zdr_defaults_true_and_combines_with_optional_allowlists() -> Result<()> {
+    for host in ["openrouter.ai", "eu.openrouter.ai", "us.openrouter.ai"] {
+        let state = RecordingState::default();
+        let mut endpoint = provider("OpenRouter");
+        endpoint.base_url = format!("https://{host}/api/v1");
+        let client = ResponsesClient::new(
+            RecordingTransport::new(state.clone()),
+            endpoint,
+            Arc::new(NoAuth),
+        );
+        // Return to the default on the same client after an explicit opt-out.
+        for zdr in [None, Some(true), Some(false), None] {
+            for providers in [
+                vec![],
+                vec!["together".into()],
+                vec!["cerebras/fp16".into(), "deepinfra".into()],
+            ] {
+                for with_tools in [false, true] {
+                    let request = openrouter_zdr_request(with_tools);
+                    let _stream = client
+                        .stream_request(
+                            request,
+                            ResponsesOptions {
+                                openrouter_zdr: zdr,
+                                openrouter_providers: providers.clone(),
+                                session_source: Some(SessionSource::SubAgent(
+                                    SubAgentSource::Review,
+                                )),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                    let requests = state.take_stream_requests();
+                    assert_path_ends_with(&requests, "/responses");
+                    let body: serde_json::Value =
+                        serde_json::from_slice(request_body_bytes(&requests[0]))?;
+                    assert_eq!(body["provider"]["zdr"], zdr.unwrap_or(true), "{host}");
+                    if providers.is_empty() {
+                        assert_eq!(
+                            body["provider"],
+                            serde_json::json!({"zdr": zdr.unwrap_or(true)})
+                        );
+                    } else {
+                        assert_eq!(
+                            body["provider"],
+                            serde_json::json!({"zdr": zdr.unwrap_or(true), "order": providers, "only": providers})
+                        );
+                    }
+                    assert_eq!(body.get("tool_choice").is_some(), with_tools);
+                    assert_eq!(body.get("parallel_tool_calls").is_some(), with_tools);
+                    assert_eq!(body["store"], false);
+                    assert!(body.get("previous_response_id").is_none());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn openrouter_zdr_does_not_change_other_provider_payloads() -> Result<()> {
+    for base_url in [
+        "https://api.isoquant.ai/v1",
+        "https://openrouter.ai.example.com/api/v1",
+    ] {
+        let state = RecordingState::default();
+        let mut endpoint = provider("Custom");
+        endpoint.base_url = base_url.into();
+        endpoint
+            .headers
+            .insert("Isoquant-ZDR", HeaderValue::from_static("required"));
+        let client = ResponsesClient::new(
+            RecordingTransport::new(state.clone()),
+            endpoint,
+            Arc::new(NoAuth),
+        );
+        for zdr in [None, Some(true), Some(false)] {
+            for with_tools in [false, true] {
+                let request = openrouter_zdr_request(with_tools);
+                let expected = serde_json::to_vec(&request)?;
+                let _stream = client
+                    .stream_request(
+                        request,
+                        ResponsesOptions {
+                            openrouter_zdr: zdr,
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                let requests = state.take_stream_requests();
+                assert_eq!(request_body_bytes(&requests[0]), expected);
+                assert_eq!(
+                    requests[0].headers.get("Isoquant-ZDR"),
+                    Some(&HeaderValue::from_static("required"))
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn openrouter_zdr_and_allowlist_are_preserved_across_retries() -> Result<()> {
+    for zdr in [None, Some(true), Some(false)] {
+        let transport = FlakyTransport::new();
+        let mut endpoint = provider("OpenRouter");
+        endpoint.base_url = "https://openrouter.ai/api/v1".into();
+        endpoint.retry.max_attempts = 2;
+        let client = ResponsesClient::new(transport.clone(), endpoint, Arc::new(NoAuth));
+        let _stream = client
+            .stream_request(
+                openrouter_zdr_request(true),
+                ResponsesOptions {
+                    openrouter_zdr: zdr,
+                    openrouter_providers: vec!["together".into()],
+                    ..Default::default()
+                },
+            )
+            .await?;
+        let requests = transport.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0], requests[1]);
+        let RequestBody::EncodedJson(encoded) = &requests[0].0 else {
+            panic!("expected JSON")
+        };
+        let body: serde_json::Value = serde_json::from_slice(encoded.as_bytes())?;
+        assert_eq!(
+            body["provider"],
+            serde_json::json!({"zdr": zdr.unwrap_or(true), "order": ["together"], "only": ["together"]})
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn openrouter_raw_requests_enforce_zdr_default_without_overriding_explicit_false()
+-> Result<()> {
+    let state = RecordingState::default();
+    let mut endpoint = provider("OpenRouter");
+    endpoint.base_url = "https://openrouter.ai/api/v1".into();
+    let client = ResponsesClient::new(
+        RecordingTransport::new(state.clone()),
+        endpoint,
+        Arc::new(NoAuth),
+    );
+    for routing in [
+        None,
+        Some(serde_json::json!({"only": ["together"]})),
+        Some(serde_json::json!({"zdr": false})),
+    ] {
+        let mut request = serde_json::json!({"model": "uncatalogued", "input": "test"});
+        if let Some(routing) = routing {
+            request["provider"] = routing;
+        }
+        let expected_zdr = request["provider"]["zdr"].as_bool().unwrap_or(true);
+        let _stream = client
+            .stream(request.clone(), HeaderMap::new(), Compression::None, None)
+            .await?;
+        let requests = state.take_stream_requests();
+        let body: serde_json::Value = serde_json::from_slice(request_body_bytes(&requests[0]))?;
+        assert_eq!(body["provider"]["zdr"], expected_zdr);
+        assert_eq!(body["provider"]["only"], request["provider"]["only"]);
+    }
+    for request in [
+        serde_json::json!({"provider": null}),
+        serde_json::json!({"provider":{"zdr":"false"}}),
+    ] {
+        assert!(matches!(
+            client
+                .stream(request, HeaderMap::new(), Compression::None, None)
+                .await,
+            Err(ApiError::InvalidRequest { .. })
+        ));
+        assert!(state.take_stream_requests().is_empty());
+    }
     Ok(())
 }

@@ -456,12 +456,24 @@ impl ConnectionLease {
                     .await
             }
             Connection::Http(client) => {
+                let model = self
+                    .pool
+                    .config
+                    .provider
+                    .info()
+                    .models
+                    .iter()
+                    .find(|model| model.id == request.model);
                 // The SSE idle timeout starts after headers arrive. Bound that wait too.
                 tokio::time::timeout(
                     self.pool.config.provider.info().stream_idle_timeout(),
                     client.stream_request(
                         request.clone(),
                         ResponsesOptions {
+                            openrouter_providers: model
+                                .map(|model| model.openrouter_providers.clone())
+                                .unwrap_or_default(),
+                            openrouter_zdr: model.and_then(|model| model.openrouter_zdr),
                             session_id: Some(self.pool.config.session_id.clone()),
                             thread_id: Some(self.thread_id.clone()),
                             extra_headers: self

@@ -144,6 +144,9 @@ pub struct ConfiguredModel {
     /// Optional strict OpenRouter provider allowlist, in preference order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub openrouter_providers: Vec<String>,
+    /// OpenRouter inference ZDR requirement. Omission defaults to true on requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openrouter_zdr: Option<bool>,
 }
 
 /// Serializable representation of a provider definition.
@@ -313,6 +316,18 @@ other non-default provider fields are not supported"
     }
 
     pub fn validate(&self) -> std::result::Result<(), String> {
+        let is_openrouter = self.base_url.as_deref().is_some_and(|base_url| {
+            url::Url::parse(base_url).is_ok_and(|url| {
+                url.scheme() == "https"
+                    && matches!(
+                        url.host_str(),
+                        Some("openrouter.ai" | "eu.openrouter.ai" | "us.openrouter.ai")
+                    )
+            })
+        });
+        if is_openrouter && self.supports_websockets {
+            return Err("OpenRouter requires supports_websockets = false to enforce request routing and ZDR".into());
+        }
         let mut ids = std::collections::HashSet::new();
         for model in &self.models {
             if model.id.trim().is_empty() || model.context_window <= 0 {
@@ -322,6 +337,9 @@ other non-default provider fields are not supported"
             }
             if !ids.insert(&model.id) {
                 return Err(format!("duplicate provider model: {}", model.id));
+            }
+            if model.openrouter_zdr.is_some() && !is_openrouter {
+                return Err("openrouter_zdr requires an OpenRouter API base_url".into());
             }
             if !model.openrouter_providers.is_empty() {
                 let base_url = self
@@ -336,9 +354,6 @@ other non-default provider fields are not supported"
                         | "https://us.openrouter.ai/api/v1"
                 ) {
                     return Err("openrouter_providers requires an OpenRouter API base_url".into());
-                }
-                if self.supports_websockets {
-                    return Err("openrouter_providers requires supports_websockets = false".into());
                 }
                 let mut providers = std::collections::HashSet::new();
                 for provider in &model.openrouter_providers {

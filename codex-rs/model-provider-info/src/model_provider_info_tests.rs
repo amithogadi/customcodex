@@ -970,3 +970,63 @@ openrouter_providers = ["cerebras", "deepinfra"]
     invalid.supports_websockets = true;
     assert!(invalid.validate().is_err());
 }
+
+#[test]
+fn openrouter_zdr_config_round_trips_and_validates_provider() {
+    let base = r#"
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+[[models]]
+id = "test-model"
+context_window = 65536
+"#;
+    for (setting, expected) in [
+        ("", None),
+        ("openrouter_zdr = true", Some(true)),
+        ("openrouter_zdr = false", Some(false)),
+    ] {
+        let provider: ModelProviderInfo = toml::from_str(&format!("{base}\n{setting}")).unwrap();
+        provider.validate().unwrap();
+        assert_eq!(provider.models[0].openrouter_zdr, expected);
+        let encoded = toml::to_string(&provider).unwrap();
+        assert_eq!(encoded.contains("openrouter_zdr"), expected.is_some());
+        assert_eq!(
+            toml::from_str::<ModelProviderInfo>(&encoded).unwrap(),
+            provider
+        );
+        for base_url in [
+            "https://api.isoquant.ai/v1",
+            "https://openrouter.ai.example.com/api/v1",
+        ] {
+            let mut other = provider.clone();
+            other.base_url = Some(base_url.into());
+            assert_eq!(other.validate().is_ok(), expected.is_none());
+        }
+        for base_url in [
+            "https://openrouter.ai/api/v1",
+            "https://eu.openrouter.ai/api/v1/",
+            "https://us.openrouter.ai/api/v1",
+        ] {
+            let mut websocket = provider.clone();
+            websocket.base_url = Some(base_url.into());
+            websocket.supports_websockets = true;
+            assert!(
+                websocket
+                    .validate()
+                    .unwrap_err()
+                    .contains("supports_websockets = false")
+            );
+            websocket.models.clear();
+            assert!(
+                websocket.validate().is_err(),
+                "uncatalogued models must not bypass ZDR"
+            );
+        }
+    }
+    for value in ["\"true\"", "1", "[]"] {
+        assert!(
+            toml::from_str::<ModelProviderInfo>(&format!("{base}\nopenrouter_zdr = {value}"))
+                .is_err()
+        );
+    }
+}

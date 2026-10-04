@@ -1097,12 +1097,24 @@ impl ModelClientSession {
     /// regardless of transport choice.
     async fn build_responses_options(
         &self,
+        model_id: &str,
         responses_metadata: &CodexResponsesMetadata,
         compression: Compression,
         use_responses_lite: bool,
     ) -> ApiResponsesOptions {
+        let model = self
+            .client
+            .state
+            .provider
+            .info()
+            .models
+            .iter()
+            .find(|model| model.id == model_id);
         ApiResponsesOptions {
-            openrouter_providers: Vec::new(),
+            openrouter_providers: model
+                .map(|model| model.openrouter_providers.clone())
+                .unwrap_or_default(),
+            openrouter_zdr: model.and_then(|model| model.openrouter_zdr),
             session_id: Some(self.client.responses_session_id(responses_metadata)),
             thread_id: Some(responses_metadata.thread_id.to_string()),
             session_source: Some(self.client.state.session_source.clone()),
@@ -1409,6 +1421,7 @@ impl ModelClientSession {
             let compression = self.responses_request_compression(client_setup.auth.as_ref());
             let mut options = self
                 .build_responses_options(
+                    &model_info.slug,
                     responses_metadata,
                     compression,
                     model_info.use_responses_lite,
@@ -1424,16 +1437,6 @@ impl ModelClientSession {
                 responses_metadata,
                 include_internal,
             )?;
-            options.openrouter_providers = self
-                .client
-                .state
-                .provider
-                .info()
-                .models
-                .iter()
-                .find(|model| model.id == request.model)
-                .map(|model| model.openrouter_providers.clone())
-                .unwrap_or_default();
             self.client.set_guardian_metadata(
                 &mut request.client_metadata,
                 responses_metadata.parent_response_id.as_deref(),

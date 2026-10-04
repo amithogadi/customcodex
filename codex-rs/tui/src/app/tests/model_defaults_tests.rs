@@ -17,6 +17,7 @@ async fn configured_selection_stages_complete_provider_and_keeps_failed_selectio
                 context_window: 65536,
                 reasoning_effort: Some(ReasoningEffortConfig::High),
                 openrouter_providers: Vec::new(),
+                openrouter_zdr: None,
             }],
             ..Default::default()
         },
