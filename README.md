@@ -35,7 +35,23 @@ cargo build --locked --release -p codex-cli --bin codex
 ./target/release/codex
 ```
 
-To work in another repository, run this binary by its absolute path from that
-repository. A `customcodex` shell alias is optional and must be configured locally.
+To launch from any repository, add a `customcodex` alias to `~/.zshrc`. For a
+development build:
+
+```sh
+alias customcodex='/path/to/customcodex/codex-rs/target/debug/codex'
+```
+
+Replace `/path/to/customcodex` with your checkout's absolute path. For the release build above, use
+`target/release/codex` instead of `target/debug/codex`. Reload your shell settings,
+then launch from the repository you want to work in:
+
+```sh
+source ~/.zshrc
+customcodex
+```
+
+The alias preserves your current working directory and accepts normal CLI
+arguments, such as `customcodex resume` or `customcodex --daemon`.
 
 [Build setup](docs/install.md) · [Compare with upstream snapshot](https://github.com/amithogadi/customcodex/compare/original...main) · [Apache-2.0 license](LICENSE) · [Attribution](NOTICE)
