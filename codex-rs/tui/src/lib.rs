@@ -1118,6 +1118,31 @@ async fn run_ratatui_app(
     }));
     let (mut tui, mut terminal_restore_guard, mut startup_draft) = startup_draft.into_parts();
 
+    let (provider_key, provider_uses_account_login) = if matches!(
+        app_server_target,
+        AppServerTarget::Embedded
+    ) && !workload_identity_selected
+    {
+        use onboarding::provider_credentials::ProviderStartup;
+        match onboarding::provider_credentials::provider_startup(
+            &initial_config,
+            overrides.model_provider.is_some(),
+        )? {
+            ProviderStartup::NeedsConfiguration => {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!(
+                    "Welcome to CustomCodex. Configure a model provider in {}.\nCopy or merge config.example.toml from the CustomCodex repository into that file.\nThen run customcodex again; missing provider keys can be saved in {}. Existing settings are not changed.",
+                    initial_config.codex_home.join("config.toml").display(),
+                    initial_config.codex_home.join(".env").display(),
+                )).into());
+            }
+            ProviderStartup::MissingKey(setup) => (Some(setup), false),
+            ProviderStartup::Ready => (None, false),
+            ProviderStartup::AccountLogin => (None, true),
+        }
+    } else {
+        (None, true)
+    };
+
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
@@ -1191,6 +1216,8 @@ async fn run_ratatui_app(
     let startup_model_provider = initial_config.model_provider_id.clone();
     let (login_status, mut startup_account) = if workload_identity_selected {
         (LoginStatus::AuthMode(AuthMode::Chatgpt), None)
+    } else if !provider_uses_account_login {
+        (LoginStatus::NotAuthenticated, None)
     } else {
         let Some(active_app_server) = app_server.as_mut() else {
             unreachable!("app server should exist when auth is required");
@@ -1210,15 +1237,16 @@ async fn run_ratatui_app(
             }
         }
     };
-    // Workload identity bypasses interactive login; every other provider uses account/read.
+    // Env-key and keyless local providers do not need an OpenAI account lookup.
     let requires_openai_auth = startup_account
         .as_ref()
         .is_some_and(|account| account.requires_openai_auth);
-    let should_show_onboarding = should_show_onboarding(
-        login_status,
-        requires_openai_auth,
-        should_show_trust_screen_flag,
-    );
+    let should_show_onboarding = provider_key.is_some()
+        || should_show_onboarding(
+            login_status,
+            requires_openai_auth,
+            should_show_trust_screen_flag,
+        );
 
     let mut config = if should_show_onboarding {
         if let Err(err) = startup_draft.flush_pending_events(&mut tui).await {
@@ -1227,7 +1255,8 @@ async fn run_ratatui_app(
         }
         // Authentication can change while any interactive onboarding screen is open.
         startup_account = None;
-        let show_login_screen = should_show_login_screen(login_status, requires_openai_auth);
+        let show_login_screen =
+            provider_key.is_some() || should_show_login_screen(login_status, requires_openai_auth);
         let bedrock_setup_enabled = should_show_bedrock_setup_wizard(
             login_status,
             requires_openai_auth,
@@ -1237,6 +1266,7 @@ async fn run_ratatui_app(
         let onboarding_result = run_onboarding_app(
             OnboardingScreenArgs {
                 show_login_screen,
+                provider_key,
                 bedrock_setup_enabled,
                 show_trust_screen: should_show_trust_screen_flag,
                 remote_project_trust: None,

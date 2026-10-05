@@ -34,7 +34,7 @@ pub(super) fn apply_configured_model(
         .validate()
         .map_err(|err| color_eyre::eyre::eyre!(err))?;
     // Resolve env-key errors before opening the replacement thread; never print the value.
-    provider.api_key()?;
+    codex_login::provider_credentials::provider_api_key(&provider, Some(&config.codex_home))?;
     let model = provider
         .models
         .iter()

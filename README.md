@@ -17,6 +17,20 @@ A terminal-focused fork of [OpenAI Codex](https://github.com/openai/codex) using
 
 Put provider and model settings in `~/.customcodex/config.toml`, and API keys in
 `~/.customcodex/.env` or your environment. The default home is created on startup.
+The [starter configuration](config.example.toml) defines DeepSeek V4.1 Flash with
+high reasoning through OpenRouter, restricted to Together with ZDR enabled. It is
+embedded in the binary and installed on first local launch if `config.toml` is
+missing, then startup continues to the provider key prompt. Files containing only
+preferences also receive the missing defaults, preserving existing settings. No
+checkout or manual copy is needed. It is the central place to edit the starter
+model catalog (rebuild to ship changes). Existing installations keep their own
+provider/model settings, which populate the `/model` picker.
+
+On a normal local launch, CustomCodex asks for the selected provider's API key
+only when it is missing. Entering an OpenRouter key saves `OPENROUTER_API_KEY` in
+the home `.env` and continues immediately. Keys already in that file or your
+environment skip this prompt. Existing provider/model configurations are left unchanged.
+
 If you set `CODEX_HOME`, that directory must already exist; config and `.env` are
 then loaded from there. Restart after changing the model catalog.
 

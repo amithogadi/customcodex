@@ -105,6 +105,12 @@ pub(crate) struct ApiKeyInputState {
 
 impl KeyboardHandler for AuthModeWidget {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if self
+            .saving_provider_key
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
         if self.handle_bedrock_key_event(&key_event) {
             return;
         }
@@ -153,6 +159,12 @@ impl KeyboardHandler for AuthModeWidget {
     }
 
     fn handle_paste(&mut self, pasted: String) {
+        if self
+            .saving_provider_key
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return;
+        }
         let sign_in_state = self.sign_in_state.read().unwrap();
         match &*sign_in_state {
             SignInState::Bedrock(_) => {
@@ -176,6 +188,8 @@ pub(crate) struct AuthModeWidget {
     pub error: Arc<RwLock<Option<String>>>,
     pub sign_in_state: Arc<RwLock<SignInState>>,
     pub login_status: LoginStatus,
+    pub provider_key: Option<super::provider_credentials::ProviderKeySetup>,
+    pub saving_provider_key: Arc<std::sync::atomic::AtomicBool>,
     pub app_server_target: crate::AppServerTarget,
     pub app_server_request_handle: AppServerRequestHandle,
     pub auth_config: AuthConfig,
@@ -222,7 +236,9 @@ impl AuthModeWidget {
     /// Bedrock fields accept printable input from their first character.
     pub(crate) fn should_suppress_printable_quit(&self) -> bool {
         self.sign_in_state.read().is_ok_and(|guard| match &*guard {
-            SignInState::ApiKeyEntry(state) => !state.value.is_empty(),
+            SignInState::ApiKeyEntry(state) => {
+                self.provider_key.is_some() || !state.value.is_empty()
+            }
             SignInState::Bedrock(state) => state.is_text_entry_active(),
             _ => false,
         })
@@ -330,6 +346,11 @@ impl AuthModeWidget {
     }
 
     fn render_api_key_configured(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(setup) = &self.provider_key {
+            Paragraph::new(format!("✓ {} API key saved", setup.provider_name).green())
+                .render(area, buf);
+            return;
+        }
         let lines = vec![
             "✓ API key configured".fg(Color::Green).into(),
             "".into(),
@@ -342,6 +363,10 @@ impl AuthModeWidget {
     }
 
     fn render_api_key_entry(&self, area: Rect, buf: &mut Buffer, state: &ApiKeyInputState) {
+        if let Some(setup) = &self.provider_key {
+            setup.render_entry(&state.value, self.error_message(), area, buf);
+            return;
+        }
         let [intro_area, input_area, footer_area] = Layout::vertical([
             Constraint::Min(4),
             Constraint::Length(3),
@@ -471,6 +496,13 @@ impl AuthModeWidget {
     }
 
     fn handle_api_key_entry_paste(&mut self, pasted: String) -> bool {
+        if self.provider_key.is_some() && pasted.chars().any(char::is_control) {
+            self.set_error(Some(
+                "Paste a single-line API key without control characters".into(),
+            ));
+            self.request_frame.schedule_frame();
+            return true;
+        }
         let trimmed = pasted.trim();
         if trimmed.is_empty() {
             return false;
@@ -525,6 +557,51 @@ impl AuthModeWidget {
     }
 
     fn save_api_key(&mut self, api_key: String) {
+        if let Some(setup) = self.provider_key.clone() {
+            if !self.is_api_login_allowed() {
+                self.set_error(Some(API_KEY_DISABLED_MESSAGE.to_string()));
+                return;
+            }
+            if self
+                .saving_provider_key
+                .swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                return;
+            }
+            self.set_error(None);
+            let saving = self.saving_provider_key.clone();
+            let sign_in_state = self.sign_in_state.clone();
+            let error = self.error.clone();
+            let request_frame = self.request_frame.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    codex_login::provider_credentials::save_provider_key(
+                        &setup.codex_home,
+                        &setup.env_key,
+                        &api_key,
+                    )
+                })
+                .await;
+                match result {
+                    Ok(Ok(())) => {
+                        *error.write().unwrap() = None;
+                        *sign_in_state.write().unwrap() = SignInState::ApiKeyConfigured;
+                    }
+                    Ok(Err(err)) => {
+                        *error.write().unwrap() =
+                            Some(format!("Failed to save provider key: {err}"))
+                    }
+                    Err(_) => {
+                        *error.write().unwrap() = Some(
+                            "Failed to save provider key; retry or configure .env manually".into(),
+                        )
+                    }
+                }
+                saving.store(false, std::sync::atomic::Ordering::Relaxed);
+                request_frame.schedule_frame();
+            });
+            return;
+        }
         if !self.is_api_login_allowed() {
             self.disallow_api_login();
             return;
@@ -650,6 +727,76 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn provider_key_input_saves_without_account_login() -> color_eyre::Result<()> {
+        let home = TempDir::new()?;
+        std::fs::write(
+            home.path().join("config.toml"),
+            r#"
+model_provider = "test"
+[model_providers.test]
+name = "Test"
+base_url = "http://127.0.0.1:1/v1"
+[[model_providers.test.models]]
+id = "test-model"
+context_window = 65536
+"#,
+        )?;
+        let config = ConfigBuilder::default()
+            .codex_home(home.path().to_path_buf())
+            .loader_overrides(codex_config::LoaderOverrides::without_managed_config_for_tests())
+            .build()
+            .await?;
+        let server = crate::tests::start_test_embedded_app_server(config.clone()).await?;
+        let mut widget = AuthModeWidget {
+            request_frame: FrameRequester::test_dummy(),
+            highlighted_mode: SignInOption::ApiKey,
+            error: Arc::new(RwLock::new(None)),
+            sign_in_state: Arc::new(RwLock::new(SignInState::ApiKeyEntry(Default::default()))),
+            login_status: LoginStatus::NotAuthenticated,
+            provider_key: Some(super::super::provider_credentials::ProviderKeySetup {
+                provider_name: "OpenRouter".into(),
+                env_key: "CUSTOMCODEX_WIDGET_TEST_KEY_9712".into(),
+                codex_home: home.path().to_path_buf(),
+            }),
+            saving_provider_key: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            app_server_target: crate::AppServerTarget::Embedded,
+            app_server_request_handle: AppServerRequestHandle::InProcess(server.request_handle()),
+            auth_config: config.auth_config(),
+            bedrock_setup_enabled: false,
+            animations_enabled: false,
+            animations_suppressed: Cell::new(false),
+        };
+        assert!(widget.should_suppress_printable_quit());
+        widget.handle_paste("line-one\nline-two".into());
+        assert!(widget.error_message().is_some());
+        assert!(!home.path().join(".env").exists());
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE));
+        widget.handle_paste("-test-provider-key".into());
+        widget.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while widget
+                .saving_provider_key
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        assert!(widget.error_message().is_none());
+        assert!(matches!(widget.get_step_state(), StepState::Complete));
+        assert_eq!(
+            codex_login::provider_credentials::read_provider_key(
+                home.path(),
+                "CUSTOMCODEX_WIDGET_TEST_KEY_9712"
+            )?,
+            Some("q-test-provider-key".into())
+        );
+        assert!(!home.path().join("auth.json").exists());
+        server.shutdown().await?;
+        Ok(())
+    }
 
     const PRODUCTION_LENGTH_AUTH_URL: &str = concat!(
         "https://auth.openai.com/oauth/authorize?",

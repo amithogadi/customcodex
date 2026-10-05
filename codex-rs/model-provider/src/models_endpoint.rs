@@ -81,13 +81,27 @@ impl OpenAiModelsEndpoint {
         http_client_factory: HttpClientFactory,
     ) -> CoreResult<ModelsEndpointResponse> {
         let auth = self.auth().await;
-        let identity = crate::models_identity::identity(&self.provider_info, auth.as_ref())?;
+        let identity = crate::models_identity::identity(
+            &self.provider_info,
+            auth.as_ref(),
+            self.auth_manager
+                .as_ref()
+                .map(|manager| manager.runtime_config().codex_home)
+                .as_deref(),
+        )?;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider_info.to_api_provider(auth_mode)?;
         let resolved = compose_auth(
             &self.provider_info,
             self.gateway_auth_manager.as_ref(),
-            ResolvedProviderAuth::new(resolve_provider_auth(auth.as_ref(), &self.provider_info)?),
+            ResolvedProviderAuth::new(resolve_provider_auth(
+                auth.as_ref(),
+                &self.provider_info,
+                self.auth_manager
+                    .as_ref()
+                    .map(|manager| manager.runtime_config().codex_home)
+                    .as_deref(),
+            )?),
         )
         .await?;
         let api_auth = resolved.auth;
@@ -168,7 +182,15 @@ impl ModelsEndpointClient for OpenAiModelsEndpoint {
             .auth_manager
             .as_ref()
             .and_then(|manager| manager.auth_cached());
-        crate::models_identity::identity(&self.provider_info, auth.as_ref()).ok()
+        crate::models_identity::identity(
+            &self.provider_info,
+            auth.as_ref(),
+            self.auth_manager
+                .as_ref()
+                .map(|manager| manager.runtime_config().codex_home)
+                .as_deref(),
+        )
+        .ok()
     }
 
     fn has_command_auth(&self) -> bool {

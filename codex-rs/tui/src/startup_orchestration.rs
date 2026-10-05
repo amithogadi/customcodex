@@ -114,6 +114,18 @@ pub(super) async fn run_main_inner(
         codex_app_server_client::EmbeddedNetworkPolicy::load(&launch_loader_overrides).await;
     let workload_identity_selected = is_workload_identity_selected();
 
+    // Seed the user layer before any bootstrap/config reads. CLI and project
+    // overrides retain their normal precedence over this initial configuration.
+    if cli.no_daemon
+        && !cli.oss
+        && explicit_remote_endpoint.is_none()
+        && !workload_identity_selected
+        && loader_overrides_are_default(&launch_loader_overrides)
+        && launch_loader_overrides.packaged_defaults_path.is_none()
+    {
+        onboarding::provider_credentials::initialize_default_config(&codex_home)?;
+    }
+
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         let validation_target = app_server_target_for_launch(
             explicit_remote_endpoint.clone(),

@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod provider_credentials;
 pub mod test_support;
 pub mod token_data;
 

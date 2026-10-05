@@ -232,7 +232,7 @@ impl AmazonBedrockModelProvider {
         let source = self.auth_source();
         if source == auth::BedrockAuthSource::CommandBearerToken {
             let auth = self.auth().await;
-            return resolve_configured_provider_auth(auth.as_ref(), &self.info);
+            return resolve_configured_provider_auth(auth.as_ref(), &self.info, None);
         }
 
         let managed_auth = self.managed_auth();

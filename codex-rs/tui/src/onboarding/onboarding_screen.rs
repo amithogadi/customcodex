@@ -99,6 +99,7 @@ pub(crate) struct OnboardingScreenArgs {
     pub show_trust_screen: bool,
     pub remote_project_trust: Option<RemoteProjectTrust>,
     pub show_login_screen: bool,
+    pub provider_key: Option<super::provider_credentials::ProviderKeySetup>,
     pub bedrock_setup_enabled: bool,
     pub login_status: LoginStatus,
     pub app_server_target: crate::AppServerTarget,
@@ -126,6 +127,7 @@ impl OnboardingScreen {
             show_trust_screen,
             remote_project_trust,
             show_login_screen,
+            provider_key,
             bedrock_setup_enabled,
             login_status,
             app_server_target,
@@ -167,7 +169,13 @@ impl OnboardingScreen {
                     request_frame: tui.frame_requester(),
                     highlighted_mode,
                     error: Arc::new(RwLock::new(None)),
-                    sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
+                    sign_in_state: Arc::new(RwLock::new(if provider_key.is_some() {
+                        SignInState::ApiKeyEntry(Default::default())
+                    } else {
+                        SignInState::PickMode
+                    })),
+                    provider_key,
+                    saving_provider_key: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     login_status,
                     app_server_target,
                     app_server_request_handle,
@@ -339,6 +347,15 @@ impl KeyboardHandler for OnboardingScreen {
     /// Control/alt quit chords still work as emergency exits.
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return;
+        }
+        if keys::CANCEL.is_pressed(key_event)
+            && self
+                .auth_widget_mut()
+                .is_some_and(|widget| widget.provider_key.is_some())
+        {
+            self.should_exit = true;
+            self.is_done = true;
             return;
         }
         let text_entry_context = self.text_entry_context();

@@ -229,7 +229,13 @@ pub trait ModelProvider: fmt::Debug + Send + Sync {
     ) -> ModelProviderFuture<'_, codex_protocol::error::Result<SharedAuthProvider>> {
         Box::pin(async move {
             let auth = self.auth().await;
-            resolve_provider_auth(auth.as_ref(), self.info())
+            resolve_provider_auth(
+                auth.as_ref(),
+                self.info(),
+                self.auth_manager()
+                    .map(|manager| manager.runtime_config().codex_home)
+                    .as_deref(),
+            )
         })
     }
 
@@ -434,7 +440,14 @@ impl ModelProvider for ConfiguredModelProvider {
     ) -> ModelProviderFuture<'_, codex_protocol::error::Result<SharedAuthProvider>> {
         Box::pin(async move {
             let auth = self.auth().await;
-            let primary = resolve_provider_auth(auth.as_ref(), &self.info)?;
+            let primary = resolve_provider_auth(
+                auth.as_ref(),
+                &self.info,
+                self.auth_manager
+                    .as_ref()
+                    .map(|manager| manager.runtime_config().codex_home)
+                    .as_deref(),
+            )?;
             Ok(compose_auth(
                 &self.info,
                 self.gateway_auth_manager.as_ref(),
@@ -1020,6 +1033,37 @@ printf '%s\n' '{"AccessKeyId":"exported","SecretAccessKey":"secret"}'
         );
 
         assert_eq!(provider.auth().await, Some(auth));
+    }
+
+    #[tokio::test]
+    async fn provider_credential_save_is_immediately_available_to_requests() {
+        let home = tempfile::tempdir().unwrap();
+        let info = ModelProviderInfo {
+            name: "OpenRouter".into(),
+            base_url: Some("https://openrouter.ai/api/v1".into()),
+            env_key: Some("CUSTOMCODEX_REQUEST_TEST_KEY_5932".into()),
+            ..Default::default()
+        };
+        let provider = create_model_provider(
+            info,
+            Some(AuthManager::from_auth_for_testing_with_home(
+                CodexAuth::from_api_key("unrelated-openai-key"),
+                home.path().to_path_buf(),
+            )),
+        );
+        assert!(provider.api_auth().await.is_err());
+        codex_login::provider_credentials::save_provider_key(
+            home.path(),
+            "CUSTOMCODEX_REQUEST_TEST_KEY_5932",
+            "new-openrouter-key",
+        )
+        .unwrap();
+        let headers = provider.api_auth().await.unwrap().to_auth_headers();
+        assert_eq!(
+            headers.get(http::header::AUTHORIZATION).unwrap(),
+            "Bearer new-openrouter-key"
+        );
+        assert!(!home.path().join("auth.json").exists());
     }
 
     #[test]

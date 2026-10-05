@@ -3,7 +3,7 @@ load("//:defs.bzl", "MACOS_WEBRTC_RUSTC_LINK_FLAGS", "codex_rust_crate")
 codex_rust_crate(
     name = "tui",
     binaries_with_build_commit = ["codex-tui"],
-    compile_data = glob([
+    compile_data = ["//:config.example.toml"] + glob([
         "assets/**",
     ]),
     crate_name = "codex_tui",

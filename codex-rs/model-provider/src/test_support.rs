@@ -15,7 +15,7 @@ pub fn models_cache_entry(
         fetched_at: std::time::SystemTime::now().into(),
         etag: None,
         client_version: Some(codex_models_manager::client_version_to_whole()),
-        identity: crate::models_identity::identity(provider_info, auth).ok(),
+        identity: crate::models_identity::identity(provider_info, auth, None).ok(),
         models,
     }
 }

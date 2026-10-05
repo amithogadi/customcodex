@@ -3416,6 +3416,7 @@ dependencies = [
  "codex-utils-process",
  "codex-utils-template",
  "core_test_support",
+ "dotenvy",
  "http 1.4.0",
  "jsonwebtoken",
  "keyring",

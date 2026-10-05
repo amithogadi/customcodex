@@ -13,6 +13,7 @@ use crate::auth::resolve_provider_auth;
 pub(crate) fn identity(
     provider_info: &ModelProviderInfo,
     auth: Option<&CodexAuth>,
+    codex_home: Option<&std::path::Path>,
 ) -> CoreResult<String> {
     let mut api_provider = provider_info.to_api_provider(auth.map(CodexAuth::auth_mode))?;
     let mut digest = Sha256::new();
@@ -64,11 +65,12 @@ pub(crate) fn identity(
             && (auth.get_chatgpt_user_id().is_some() || auth.get_account_email().is_some())
     });
     let explicit_bearer =
-        provider_info.api_key()?.is_some() || provider_info.experimental_bearer_token.is_some();
+        codex_login::provider_credentials::provider_api_key(provider_info, codex_home)?.is_some()
+            || provider_info.experimental_bearer_token.is_some();
     // Command auth also returns opaque API keys. A changed key may belong to a
     // different account, so only credentials with stable owner metadata can be reused.
     if !has_stable_account || explicit_bearer {
-        let headers = resolve_provider_auth(auth, provider_info)?.to_auth_headers();
+        let headers = resolve_provider_auth(auth, provider_info, codex_home)?.to_auth_headers();
         api_provider.headers.extend(headers);
     }
     let mut headers: Vec<_> = api_provider.headers.iter().collect();

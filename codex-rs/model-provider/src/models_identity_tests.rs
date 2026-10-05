@@ -28,9 +28,9 @@ fn cache_identity_tracks_account_email_user_plan_and_auth_mode_but_not_token_ref
         "us".into(),
     )]));
     let initial = chatgpt_auth("one@example.com", "user", "account", "team", "first");
-    let key = identity(&provider, Some(&initial)).unwrap();
+    let key = identity(&provider, Some(&initial), None).unwrap();
     let refreshed = chatgpt_auth("one@example.com", "user", "account", "team", "second");
-    assert_eq!(identity(&provider, Some(&refreshed)).unwrap(), key);
+    assert_eq!(identity(&provider, Some(&refreshed), None).unwrap(), key);
     for auth in [
         chatgpt_auth("two@example.com", "user", "account", "team", "first"),
         chatgpt_auth("one@example.com", "other", "account", "team", "first"),
@@ -38,30 +38,30 @@ fn cache_identity_tracks_account_email_user_plan_and_auth_mode_but_not_token_ref
         chatgpt_auth("one@example.com", "user", "account", "plus", "first"),
         CodexAuth::from_api_key("api-key"),
     ] {
-        assert_ne!(identity(&provider, Some(&auth)).unwrap(), key);
+        assert_ne!(identity(&provider, Some(&auth), None).unwrap(), key);
     }
-    assert_ne!(identity(&provider, /*auth*/ None).unwrap(), key);
+    assert_ne!(identity(&provider, /*auth*/ None, None).unwrap(), key);
 }
 
 #[test]
 fn cache_identity_tracks_provider_routing_and_effective_api_credentials() {
     let auth = CodexAuth::from_api_key("first-key");
     let provider = ModelProviderInfo::create_openai_provider(Some("https://one.example/v1".into()));
-    let key = identity(&provider, Some(&auth)).unwrap();
+    let key = identity(&provider, Some(&auth), None).unwrap();
     let other_key = CodexAuth::from_api_key("second-key");
-    assert_ne!(identity(&provider, Some(&other_key)).unwrap(), key);
+    assert_ne!(identity(&provider, Some(&other_key), None).unwrap(), key);
     let mut other_provider = provider.clone();
     other_provider.base_url = Some("https://two.example/v1".into());
-    assert_ne!(identity(&other_provider, Some(&auth)).unwrap(), key);
+    assert_ne!(identity(&other_provider, Some(&auth), None).unwrap(), key);
     other_provider = provider.clone();
     other_provider.experimental_bearer_token = Some("provider-key".into());
-    assert_ne!(identity(&other_provider, Some(&auth)).unwrap(), key);
+    assert_ne!(identity(&other_provider, Some(&auth), None).unwrap(), key);
     other_provider = provider;
     other_provider.http_headers = Some(std::collections::HashMap::from([(
         "openai-project".into(),
         "another-project".into(),
     )]));
-    assert_ne!(identity(&other_provider, Some(&auth)).unwrap(), key);
+    assert_ne!(identity(&other_provider, Some(&auth), None).unwrap(), key);
 }
 
 #[test]
@@ -82,10 +82,10 @@ fn cache_identity_distinguishes_auth_requirements_and_unknown_plans() {
         "future-plan-two",
         "first",
     );
-    let key = identity(&provider, Some(&first)).unwrap();
-    assert_ne!(key, identity(&provider, Some(&second)).unwrap());
+    let key = identity(&provider, Some(&first), None).unwrap();
+    assert_ne!(key, identity(&provider, Some(&second), None).unwrap());
     provider.requires_openai_auth = false;
-    assert_ne!(key, identity(&provider, Some(&first)).unwrap());
+    assert_ne!(key, identity(&provider, Some(&first), None).unwrap());
 }
 
 #[test]
@@ -93,11 +93,11 @@ fn cache_identity_tracks_catalog_url() {
     let auth = CodexAuth::from_api_key("test-key");
     let mut provider =
         ModelProviderInfo::create_openai_provider(Some("https://gateway.example/v1".into()));
-    let bundled = identity(&provider, Some(&auth)).unwrap();
+    let bundled = identity(&provider, Some(&auth), None).unwrap();
     provider.model_catalog_url = Some("https://gateway.example/catalog-one".into());
-    let first = identity(&provider, Some(&auth)).unwrap();
+    let first = identity(&provider, Some(&auth), None).unwrap();
     provider.model_catalog_url = Some("https://gateway.example/catalog-two".into());
-    let second = identity(&provider, Some(&auth)).unwrap();
+    let second = identity(&provider, Some(&auth), None).unwrap();
     assert_ne!(bundled, first);
     assert_ne!(first, second);
 }

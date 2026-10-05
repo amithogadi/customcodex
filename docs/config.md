@@ -2,6 +2,16 @@
 
 ## Configured model picker
 
+The binary embeds the repository's [`config.example.toml`](../config.example.toml)
+and installs it as `~/.customcodex/config.toml` on first local launch if that file
+is absent (or `$CODEX_HOME/config.toml` when overridden).
+It selects DeepSeek V4.1 Flash with high reasoning, Together-only routing, and ZDR.
+Startup then asks for the OpenRouter key if needed. Empty or preference-only files
+also receive missing defaults while retaining existing settings and comments. Files
+with model, provider, or profile settings are left unchanged.
+Template changes require a rebuild and do not change an existing home configuration.
+Isoquant and additional models can still be configured manually as below.
+
 `/model` lists models declared under `model_providers.<id>.models`. Selecting a
 different entry starts a new chat; the previous conversation remains resumable.
 Provider, model, and reasoning defaults are saved together after startup succeeds.
@@ -58,6 +68,16 @@ providers.
 Keys can be placed in `~/.customcodex/.env` (or `$CODEX_HOME/.env`), which the CLI
 already loads. Use the environment variable names above; do not put keys in model
 entries or commit them to this repository.
+
+Normal local startup prompts for the selected provider's missing `env_key`, using
+the provider's name (for example, “Enter your OpenRouter API key”). The input is
+masked and saved to the home `.env` with owner-only permissions on Unix. Other
+entries are preserved. A newly saved key works immediately, and subsequent launches
+skip credential setup. Existing keys are checked locally, without an API validation
+request. Empty keys need setup; malformed or unreadable files report an error.
+Home `.env` entries take precedence over process environment values. No credentials
+are stored in this template, `config.toml`, or the OpenAI `auth.json` by this flow.
+Remote and daemon sessions retain their existing host-side credential setup.
 
 To add OpenRouter models, define its provider once, then add one `models` entry
 per model. Replace the example values below with its exact model ID and served

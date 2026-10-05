@@ -1,0 +1,26 @@
+# CustomCodex default configuration, embedded in the binary at build time.
+# First local launch installs this as ~/.customcodex/config.toml ($CODEX_HOME/config.toml)
+# when provider/model settings are absent. Existing preferences are preserved.
+# Keep credentials in that directory's .env, never in this file.
+# This is the central starter model catalog; add additional providers/models here.
+model_provider = "openrouter"
+model = "deepseek/deepseek-v4.1-flash"
+model_reasoning_effort = "high"
+model_reasoning_summary = "none"
+web_search = "disabled"
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+
+[[model_providers.openrouter.models]]
+id = "deepseek/deepseek-v4.1-flash"
+name = "DeepSeek V4.1 Flash"
+# Together endpoint metadata checked on 2026-10-05.
+context_window = 1048576
+reasoning_effort = "high"
+openrouter_providers = ["together"]
+openrouter_zdr = true
