@@ -8,6 +8,7 @@ A terminal-focused fork of [OpenAI Codex](https://github.com/openai/codex) using
 - **OpenRouter routing:** optionally pin one provider or an ordered list with `openrouter_providers`. Requests stay within that list; omitting it allows automatic routing.
 - **OpenRouter ZDR:** `openrouter_zdr` defaults to `true` per model, including automatic routing. Set it to `false` to opt out of the request-level requirement. Stricter account policies still apply; requests fail if no eligible endpoint remains.
 - **Separate home:** configuration and session data live in `~/.customcodex`; project settings use `.customcodex/config.toml`.
+- **Subagent limit:** defaults to 10 subagents per session, configurable in `config.toml`.
 - **No daemon by default:** work stops when the terminal process exits. Use `--daemon` to opt into background sessions.
 - Removes ChatGPT account services, telemetry, feedback uploads, and hosted plugin discovery.
 - Removes desktop/browser control, cloud tasks, voice, and automatic updates.

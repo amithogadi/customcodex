@@ -11733,8 +11733,14 @@ enabled = true
             config.agent_max_threads,
             config.effective_agent_max_threads(MultiAgentVersion::V2)
         ),
-        (None, Some(3))
+        (None, Some(10))
     );
+    assert_eq!(config.multi_agent_v2.max_concurrent_threads_per_session, 11);
+    assert_eq!(
+        config.effective_agent_max_threads(MultiAgentVersion::V1),
+        Some(10)
+    );
+    assert_eq!(config.agent_max_depth, 1);
 
     Ok(())
 }

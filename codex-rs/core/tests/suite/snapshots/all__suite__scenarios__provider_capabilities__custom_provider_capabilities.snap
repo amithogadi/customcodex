@@ -49,7 +49,7 @@ Settings:
 
     When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
 
-    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+    There are 11 available concurrency slots, meaning that up to 11 agents can be active at once, including you.
 02:message/developer:
     <MULTI_AGENT_MODE>
 03:message/user:

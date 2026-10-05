@@ -29,7 +29,7 @@ Scenario: Remote board tools and active-turn notifications share the existing se
 
     When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
 
-    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+    There are 11 available concurrency slots, meaning that up to 11 agents can be active at once, including you.
 
     Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d...fork_turns` to `"none"` or a positive integer string. [hash=db3545796947884f]
 04:message/developer:

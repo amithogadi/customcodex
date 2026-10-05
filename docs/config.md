@@ -125,6 +125,23 @@ messages. Configured OpenRouter models use direct function tools even when
 the freeform code-mode tool. There is no direct Cerebras adapter. Legacy
 `wire_api="chat"` remains unsupported.
 
+## Subagent limits
+
+Both subagent backends default to 10 subagents per session, excluding the main
+agent. Override the limit in `config.toml`:
+
+```toml
+[agents]
+max_concurrent_threads_per_session = 10
+max_depth = 1
+```
+
+The default V1 backend limits open subagent threads; close them to free slots.
+Its default depth of `1` permits children but not grandchildren. V2 ignores
+`max_depth` and counts the main agent in its session cap, so its default is `11`.
+An explicit `features.multi_agent_v2.max_concurrent_threads_per_session` overrides
+the shared `[agents]` limit and includes the main agent.
+
 ## Provider configuration
 
 This branch runs terminal agents and subagents using the selected provider in
