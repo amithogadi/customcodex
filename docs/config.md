@@ -57,6 +57,24 @@ reasoning_effort = "high"
 # Optional: restrict routing to one provider, or an ordered list.
 # openrouter_providers = ["deepinfra"]
 openrouter_zdr = true # Default when omitted.
+
+[[model_providers.openrouter.models]]
+id = "z-ai/glm-5.3-flash-max"
+name = "GLM-5.3-Flash Max"
+# Together endpoint metadata checked on 2026-10-06.
+context_window = 1048576
+reasoning_effort = "max"
+openrouter_providers = ["together"]
+openrouter_zdr = true
+
+[[model_providers.openrouter.models]]
+id = "deepseek/deepseek-v4.1-flash-max-thinking"
+name = "DeepSeek V4.1 Flash Max Thinking"
+# Together endpoint metadata checked on 2026-10-06.
+context_window = 1048576
+reasoning_effort = "max"
+openrouter_providers = ["together"]
+openrouter_zdr = true
 ```
 
 The context windows above come from provider model metadata checked on 2026-10-04.
