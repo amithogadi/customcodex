@@ -256,7 +256,7 @@ env_key = "CUSTOMCODEX_UNUSED_TEST_KEY_8132"
         assert_eq!(model.context_window, 1048576);
         assert_eq!(
             model.reasoning_effort,
-            Some(codex_protocol::openai_models::ReasoningEffort::High)
+            Some(codex_protocol::openai_models::ReasoningEffort::Max)
         );
         assert_eq!(model.openrouter_providers, vec!["together"]);
         assert_eq!(model.openrouter_zdr, Some(true));

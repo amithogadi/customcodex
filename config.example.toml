@@ -3,9 +3,11 @@
 # when provider/model settings are absent. Existing preferences are preserved.
 # Keep credentials in that directory's .env, never in this file.
 # This is the central starter model catalog; add additional providers/models here.
+# Use exact API model IDs; set thinking levels separately with reasoning_effort.
+# Each provider may list a model ID only once.
 model_provider = "openrouter"
 model = "deepseek/deepseek-v4.1-flash"
-model_reasoning_effort = "high"
+model_reasoning_effort = "max"
 model_reasoning_summary = "none"
 web_search = "disabled"
 
@@ -21,24 +23,33 @@ id = "deepseek/deepseek-v4.1-flash"
 name = "DeepSeek V4.1 Flash"
 # Together endpoint metadata checked on 2026-10-05.
 context_window = 1048576
+reasoning_effort = "max"
+openrouter_providers = ["together"]
+openrouter_zdr = true
+
+[[model_providers.openrouter.models]]
+id = "z-ai/glm-5.3-flash"
+name = "GLM-5.3-Flash"
+# Together endpoint metadata checked on 2026-10-06.
+context_window = 1048576
+reasoning_effort = "max"
+openrouter_providers = ["together"]
+openrouter_zdr = true
+
+# Same OpenRouter account, second provider block so DeepSeek V4.1 Flash can
+# also be listed at high effort (a provider may list a model ID only once).
+[model_providers.openrouter-high]
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+wire_api = "responses"
+supports_websockets = false
+
+[[model_providers.openrouter-high.models]]
+id = "deepseek/deepseek-v4.1-flash"
+name = "DeepSeek V4.1 Flash"
+# Together endpoint metadata checked on 2026-10-05.
+context_window = 1048576
 reasoning_effort = "high"
-openrouter_providers = ["together"]
-openrouter_zdr = true
-
-[[model_providers.openrouter.models]]
-id = "z-ai/glm-5.3-flash-max"
-name = "GLM-5.3-Flash Max"
-# Together endpoint metadata checked on 2026-10-06.
-context_window = 1048576
-reasoning_effort = "max"
-openrouter_providers = ["together"]
-openrouter_zdr = true
-
-[[model_providers.openrouter.models]]
-id = "deepseek/deepseek-v4.1-flash-max-thinking"
-name = "DeepSeek V4.1 Flash Max Thinking"
-# Together endpoint metadata checked on 2026-10-06.
-context_window = 1048576
-reasoning_effort = "max"
 openrouter_providers = ["together"]
 openrouter_zdr = true

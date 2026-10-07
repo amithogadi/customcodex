@@ -5,7 +5,7 @@
 The binary embeds the repository's [`config.example.toml`](../config.example.toml)
 and installs it as `~/.customcodex/config.toml` on first local launch if that file
 is absent (or `$CODEX_HOME/config.toml` when overridden).
-It selects DeepSeek V4.1 Flash with high reasoning, Together-only routing, and ZDR.
+It selects DeepSeek V4.1 Flash with max reasoning, Together-only routing, and ZDR.
 Startup then asks for the OpenRouter key if needed. Empty or preference-only files
 also receive missing defaults while retaining existing settings and comments. Files
 with model, provider, or profile settings are left unchanged.
@@ -59,8 +59,8 @@ reasoning_effort = "high"
 openrouter_zdr = true # Default when omitted.
 
 [[model_providers.openrouter.models]]
-id = "z-ai/glm-5.3-flash-max"
-name = "GLM-5.3-Flash Max"
+id = "z-ai/glm-5.3-flash"
+name = "GLM-5.3-Flash"
 # Together endpoint metadata checked on 2026-10-06.
 context_window = 1048576
 reasoning_effort = "max"
@@ -68,8 +68,8 @@ openrouter_providers = ["together"]
 openrouter_zdr = true
 
 [[model_providers.openrouter.models]]
-id = "deepseek/deepseek-v4.1-flash-max-thinking"
-name = "DeepSeek V4.1 Flash Max Thinking"
+id = "deepseek/deepseek-v4.1-flash"
+name = "DeepSeek V4.1 Flash"
 # Together endpoint metadata checked on 2026-10-06.
 context_window = 1048576
 reasoning_effort = "max"
@@ -98,7 +98,9 @@ are stored in this template, `config.toml`, or the OpenAI `auth.json` by this fl
 Remote and daemon sessions retain their existing host-side credential setup.
 
 To add OpenRouter models, define its provider once, then add one `models` entry
-per model. Replace the example values below with its exact model ID and served
+per model. Keep thinking levels such as `max` in `reasoning_effort`, not in the
+model ID, and do not repeat a model ID within the same provider.
+Replace the example values below with its exact model ID and served
 context limit from `https://openrouter.ai/api/v1/models`:
 
 ```toml
