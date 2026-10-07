@@ -53,3 +53,12 @@ context_window = 1048576
 reasoning_effort = "high"
 openrouter_providers = ["together"]
 openrouter_zdr = true
+
+[[model_providers.openrouter.models]]
+id = "z-ai/glm-5.3"
+name = "GLM-5.3"
+# Wafer endpoints verified ZDR-enabled on 2026-10-06.
+context_window = 1048576
+reasoning_effort = "max"
+openrouter_providers = ["wafer/us", "wafer"]
+openrouter_zdr = true
