@@ -41,6 +41,21 @@ Isoquant uses its own `Isoquant-ZDR: required` header in the example configurati
 
 ## Build and run
 
+For an easy rebuild of the development binary, run:
+
+```sh
+./rebuild.sh
+```
+
+The script works from any directory, uses the pinned Rust toolchain through
+rustup, and rebuilds `codex-rs/target/debug/codex`. An existing `customcodex`
+alias pointing to that binary will use the new build on its next launch.
+To rebuild from anywhere, you can add this separate alias to `~/.zshrc`:
+
+```sh
+alias rebuild-customcodex='/path/to/customcodex/rebuild.sh'
+```
+
 From this repository's root, using the [pinned Rust toolchain](codex-rs/rust-toolchain.toml):
 
 ```sh
