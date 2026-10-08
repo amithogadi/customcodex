@@ -29,8 +29,12 @@ pub(crate) fn catalog(provider: &ModelProviderInfo) -> Option<ModelsResponse> {
                 model.visibility = ModelVisibility::List;
                 model.priority = index as i32;
                 model.default_reasoning_level = configured.reasoning_effort.clone();
-                model.supported_reasoning_levels = configured
-                    .reasoning_effort
+                let efforts = provider
+                    .model_reasoning_efforts
+                    .get(&configured.id)
+                    .cloned()
+                    .unwrap_or_else(|| configured.reasoning_effort.iter().cloned().collect());
+                model.supported_reasoning_levels = efforts
                     .iter()
                     .map(|effort| ReasoningEffortPreset {
                         effort: effort.clone(),
@@ -85,6 +89,53 @@ mod tests {
             };
             let metadata = super::catalog(&info).unwrap().models.remove(0);
             assert_eq!(metadata.tool_mode, expected, "{base_url}");
+        }
+    }
+
+    #[test]
+    fn alias_catalog_exposes_both_reasoning_levels_and_the_full_model_union() {
+        let primary = ModelProviderInfo {
+            name: "Test".into(),
+            base_url: Some("http://127.0.0.1:1/v1".into()),
+            models: [
+                ("flash", 1048576, ReasoningEffort::Max),
+                ("glm", 65536, ReasoningEffort::High),
+            ]
+            .into_iter()
+            .map(|(id, context_window, effort)| ConfiguredModel {
+                id: id.into(),
+                name: None,
+                context_window,
+                reasoning_effort: Some(effort),
+                openrouter_providers: Vec::new(),
+                openrouter_zdr: None,
+            })
+            .collect(),
+            ..Default::default()
+        };
+        let mut high = primary.clone();
+        high.models.truncate(1);
+        high.models[0].reasoning_effort = Some(ReasoningEffort::High);
+        let providers = std::collections::HashMap::from([
+            ("primary".into(), primary.clone()),
+            ("high".into(), high.clone()),
+        ]);
+        for source in [primary, high] {
+            let runtime = source.with_model_aliases(&providers);
+            let catalog = super::catalog(&runtime).unwrap();
+            assert_eq!(catalog.models.len(), 2);
+            assert_eq!(
+                catalog.models[0].default_reasoning_level,
+                source.models[0].reasoning_effort
+            );
+            let efforts = catalog.models[0]
+                .supported_reasoning_levels
+                .iter()
+                .map(|entry| entry.effort.clone())
+                .collect::<Vec<_>>();
+            assert!(efforts.contains(&ReasoningEffort::Max));
+            assert!(efforts.contains(&ReasoningEffort::High));
+            assert_eq!(catalog.models[1].context_window, Some(65536));
         }
     }
 

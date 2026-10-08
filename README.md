@@ -4,7 +4,7 @@ A terminal-focused fork of [OpenAI Codex](https://github.com/openai/codex) using
 
 ## What this fork changes
 
-- **Configured model picker:** `/model` lists your configured models, including Isoquant and OpenRouter, without a bundled OpenAI catalog fallback. Switching models starts a new chat; the previous chat remains resumable.
+- **Configured model picker:** `/model` lists your configured models, including Isoquant and OpenRouter, without a bundled OpenAI catalog fallback. Switching models or reasoning variants within a provider (including equivalent aliases such as `openrouter-high`) keeps the current chat; changing providers starts a new chat, leaving the previous chat resumable.
 - **OpenRouter routing:** optionally pin one provider or an ordered list with `openrouter_providers`. Requests stay within that list; omitting it allows automatic routing.
 - **OpenRouter ZDR:** `openrouter_zdr` defaults to `true` per model, including automatic routing. Set it to `false` to opt out of the request-level requirement. Stricter account policies still apply; requests fail if no eligible endpoint remains.
 - **Separate home:** configuration and session data live in `~/.customcodex`; project settings use `.customcodex/config.toml`.

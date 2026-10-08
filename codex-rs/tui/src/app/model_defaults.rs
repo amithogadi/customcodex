@@ -7,7 +7,9 @@ use super::App;
 use crate::app_server_session::AppServerSession;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::ConfigEdit;
+use codex_app_server_protocol::ThreadSettingsUpdateParams;
 use codex_app_server_protocol::WriteStatus;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::openai_models::ReasoningEffort;
 use color_eyre::eyre::Result;
@@ -33,7 +35,7 @@ pub(super) fn apply_configured_model(
     provider
         .validate()
         .map_err(|err| color_eyre::eyre::eyre!(err))?;
-    // Resolve env-key errors before opening the replacement thread; never print the value.
+    // Resolve env-key errors before applying the selection; never print the value.
     codex_login::provider_credentials::provider_api_key(&provider, Some(&config.codex_home))?;
     let model = provider
         .models
@@ -51,11 +53,86 @@ pub(super) fn apply_configured_model(
     config.service_tier = None;
     config.model = Some(model.id.clone());
     config.model_provider_id = provider_id.to_owned();
-    config.model_provider = provider;
+    config.model_provider = provider.with_model_aliases(&config.model_providers);
     Ok(())
 }
 
 impl App {
+    pub(super) async fn select_configured_model_in_thread(
+        &mut self,
+        app_server: &mut AppServerSession,
+        thread_id: ThreadId,
+        provider: String,
+        model: String,
+    ) {
+        let mut selected = self.chat_widget.config_ref().clone();
+        if let Err(err) = apply_configured_model(&mut selected, &provider, &model) {
+            self.chat_widget.add_error_message(err.to_string());
+            return;
+        }
+        let effort = selected.model_reasoning_effort.clone();
+        if self.chat_widget.current_model() == model
+            && self.chat_widget.current_reasoning_effort() == effort
+        {
+            return;
+        }
+        let mut mode = self.chat_widget.effective_collaboration_mode();
+        mode.settings.model = model.clone();
+        // A complete collaboration mode also clears an inherited effort when the
+        // configured model does not specify one (the sparse effort field cannot).
+        mode.settings.reasoning_effort = effort.clone();
+        let params = ThreadSettingsUpdateParams {
+            thread_id: thread_id.to_string(),
+            model: Some(model.clone()),
+            effort: effort.clone(),
+            collaboration_mode: Some(mode.clone()),
+            summary: selected.model_reasoning_summary,
+            service_tier: Some(None),
+            ..ThreadSettingsUpdateParams::default()
+        };
+        match app_server.thread_settings_update(params).await {
+            Ok(true) => {}
+            Ok(false) => {
+                self.chat_widget.add_error_message(
+                    "This app server does not support switching models in the current chat."
+                        .to_string(),
+                );
+                return;
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to switch model: {err}"));
+                return;
+            }
+        }
+        self.chat_widget.apply_configured_model_selection(mode);
+        self.sync_active_thread_service_tier_to_cached_session()
+            .await;
+        self.chat_widget.add_info_message(
+            format!("Model changed to {model} for subsequent turns in this chat"),
+            /*hint*/ None,
+        );
+        let mut edits = crate::config_update::build_model_selection_edits(&model, effort.as_ref());
+        // An alias selects a reasoning variant, not a different runtime provider.
+        // Keep defaults and provider-filtered history aligned with the saved thread.
+        edits.push(crate::config_update::replace_config_value(
+            "model_provider",
+            serde_json::json!(self.chat_widget.config_ref().model_provider_id),
+        ));
+        if let Err(err) = self
+            .persist_model_defaults(
+                app_server.request_handle(),
+                edits,
+                "model provider, model and reasoning",
+            )
+            .await
+        {
+            self.chat_widget.add_warning_message(format!(
+                "Model selected for this session, but defaults could not be saved: {err}"
+            ));
+        }
+    }
+
     pub(super) async fn select_session_model(
         &mut self,
         app_server: &mut AppServerSession,

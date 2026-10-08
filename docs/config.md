@@ -13,8 +13,16 @@ Template changes require a rebuild and do not change an existing home configurat
 Isoquant and additional models can still be configured manually as below.
 
 `/model` lists models declared under `model_providers.<id>.models`. Selecting a
-different entry starts a new chat; the previous conversation remains resumable.
-Provider, model, and reasoning defaults are saved together after startup succeeds.
+different model within the current provider keeps the conversation and applies to
+subsequent turns. An active turn finishes with its original model. Changing
+providers starts a new chat; the previous conversation remains resumable.
+Provider, model, and reasoning defaults are saved together after the switch or
+new-chat startup succeeds, so the choice also becomes the default for new chats.
+Equivalent provider aliases, such as `openrouter` and `openrouter-high` for
+different reasoning levels, also share a chat. They must have identical provider
+settings and compatible model context limits and routing restrictions. Their
+model catalogs are combined at runtime; the configured picker entries remain
+separate. The selected reasoning level is sent on subsequent requests.
 The picker identifies entries by both provider and model ID. Configured catalogs
 do not fetch or fall back to the bundled OpenAI model list. Existing explicit
 `model_catalog_json` configuration still takes precedence for runtime metadata.

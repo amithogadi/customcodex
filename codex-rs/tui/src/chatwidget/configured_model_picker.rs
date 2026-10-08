@@ -1,7 +1,23 @@
-//! Configured choices carry the provider identity; selecting one starts a fresh thread.
+//! Configured choices retain the thread when the provider is unchanged.
 use super::*;
 
 impl ChatWidget {
+    pub(crate) fn configured_provider_shares_session(&self, provider_id: &str) -> bool {
+        if self.config.model_provider_id == provider_id {
+            return true;
+        }
+        let providers = &self.config.model_providers;
+        match (
+            providers.get(&self.config.model_provider_id),
+            providers.get(provider_id),
+        ) {
+            (Some(current), Some(selected)) => current
+                .with_model_aliases(providers)
+                .can_share_model_session(selected),
+            _ => false,
+        }
+    }
+
     pub(super) fn open_configured_model_popup(&mut self) -> bool {
         let mut providers = self
             .config
@@ -16,8 +32,10 @@ impl ChatWidget {
         let mut items = Vec::new();
         for (provider_id, provider) in providers {
             for model in &provider.models {
-                let is_current = self.config.model_provider_id == *provider_id
-                    && self.current_model() == model.id;
+                let shares_session = self.configured_provider_shares_session(provider_id);
+                let is_current = shares_session
+                    && self.current_model() == model.id
+                    && self.current_reasoning_effort() == model.reasoning_effort;
                 let provider_id = provider_id.clone();
                 let model_id = model.id.clone();
                 let source_thread = self.thread_id();
@@ -34,6 +52,8 @@ impl ChatWidget {
                 }
                 description.push_str(if is_current {
                     "Current model"
+                } else if self.thread_id().is_some() && shares_session {
+                    "Switches in this chat"
                 } else {
                     "Starts a new chat"
                 });
@@ -65,7 +85,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(SelectionViewParams {
             title: Some("Select Model".into()),
             subtitle: Some(
-                "A different model starts a new chat; the current chat stays saved.".into(),
+                "Switch models in this chat; changing providers starts a new chat.".into(),
             ),
             items,
             initial_selected_idx,

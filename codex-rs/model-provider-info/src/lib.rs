@@ -33,6 +33,7 @@ use std::time::Duration;
 
 mod capabilities;
 mod gateway_oauth;
+mod model_aliases;
 pub use capabilities::ModelProviderCapabilities;
 pub use capabilities::RemoteCompactionSupport;
 pub use gateway_oauth::GatewayOAuthConfig;
@@ -156,6 +157,11 @@ pub struct ModelProviderInfo {
     /// Explicit provider-scoped model catalog and TUI picker choices.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ConfiguredModel>,
+    /// Runtime-only reasoning choices from compatible provider aliases. The
+    /// serialized catalogs stay separate so picker entries retain their defaults.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub model_reasoning_efforts: HashMap<String, Vec<codex_protocol::openai_models::ReasoningEffort>>,
     /// Friendly display name.
     #[serde(default)]
     pub name: String,
@@ -590,6 +596,7 @@ other non-default provider fields are not supported"
     pub fn create_openai_provider(base_url: Option<String>) -> ModelProviderInfo {
         ModelProviderInfo {
             models: Vec::new(),
+            model_reasoning_efforts: Default::default(),
             name: OPENAI_PROVIDER_NAME.into(),
             base_url,
             model_catalog_url: None,
@@ -635,6 +642,7 @@ other non-default provider fields are not supported"
     ) -> ModelProviderInfo {
         ModelProviderInfo {
             models: Vec::new(),
+            model_reasoning_efforts: Default::default(),
             name: AMAZON_BEDROCK_PROVIDER_NAME.into(),
             // The runtime provider derives the regional Mantle endpoint when
             // this is unset. A configured value is therefore unambiguously an
@@ -821,6 +829,7 @@ pub fn create_oss_provider(default_provider_port: u16, wire_api: WireApi) -> Mod
 pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> ModelProviderInfo {
     ModelProviderInfo {
         models: Vec::new(),
+        model_reasoning_efforts: Default::default(),
         name: "gpt-oss".into(),
         base_url: Some(base_url.into()),
         model_catalog_url: None,

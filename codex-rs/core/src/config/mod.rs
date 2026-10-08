@@ -3764,7 +3764,7 @@ impl Config {
                 };
                 std::io::Error::new(std::io::ErrorKind::NotFound, message)
             })?
-            .clone();
+            .with_model_aliases(&model_providers);
 
         let shell_environment_policy = ShellEnvironmentPolicy::from(cfg.shell_environment_policy);
         let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);

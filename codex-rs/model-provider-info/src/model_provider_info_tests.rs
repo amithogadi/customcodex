@@ -77,6 +77,7 @@ base_url = "http://localhost:11434/v1"
         "#;
     let expected_provider = ModelProviderInfo {
         models: Vec::new(),
+        model_reasoning_efforts: Default::default(),
         name: "Ollama".into(),
         base_url: Some("http://localhost:11434/v1".into()),
         model_catalog_url: None,
@@ -115,6 +116,7 @@ query_params = { api-version = "2025-04-01-preview" }
         "#;
     let expected_provider = ModelProviderInfo {
         models: Vec::new(),
+        model_reasoning_efforts: Default::default(),
         name: "Azure".into(),
         base_url: Some("https://xxxxx.openai.azure.com/openai".into()),
         model_catalog_url: None,
@@ -157,6 +159,7 @@ supports_standalone_web_search = true
         "#;
     let expected_provider = ModelProviderInfo {
         models: Vec::new(),
+        model_reasoning_efforts: Default::default(),
         name: "Example".into(),
         base_url: Some("https://example.com".into()),
         model_catalog_url: None,
@@ -344,6 +347,7 @@ fn test_create_amazon_bedrock_provider() {
         ModelProviderInfo::create_amazon_bedrock_provider(/*aws*/ None),
         ModelProviderInfo {
             models: Vec::new(),
+            model_reasoning_efforts: Default::default(),
             name: "Amazon Bedrock".to_string(),
             base_url: None,
             model_catalog_url: None,

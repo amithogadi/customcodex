@@ -274,6 +274,20 @@ impl ChatWidget {
         self.refresh_model_dependent_surfaces();
     }
 
+    /// Apply a validated configured choice after its settings request succeeds.
+    pub(crate) fn apply_configured_model_selection(&mut self, mode: CollaborationMode) {
+        self.config.model = Some(mode.settings.model.clone());
+        self.config.model_reasoning_effort = mode.settings.reasoning_effort.clone();
+        self.config.plan_mode_reasoning_effort = mode.settings.reasoning_effort.clone();
+        self.config.model_reasoning_summary =
+            Some(codex_protocol::config_types::ReasoningSummary::None);
+        self.set_model(&mode.settings.model);
+        self.set_reasoning_effort(mode.settings.reasoning_effort.clone());
+        // Set the complete active mode so None clears Plan reasoning as well.
+        self.set_effective_collaboration_mode(mode);
+        self.set_service_tier(None);
+    }
+
     pub(crate) fn current_model(&self) -> &str {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.model();

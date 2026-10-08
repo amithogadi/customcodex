@@ -45,6 +45,550 @@ pub(super) type RecordedRequests = Arc<Mutex<Vec<JSONRPCRequest>>>;
 pub(super) type RecordingAppServer = (AppServerSession, RecordedRequests, JoinHandle<Result<()>>);
 
 #[tokio::test]
+async fn configured_model_switch_keeps_thread_and_saves_defaults() -> Result<()> {
+    for mode in [ModeKind::Default, ModeKind::Plan] {
+        let (mut app, _events, _ops) = make_test_app_with_channels().await;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        let (mut server, requests, proxy) =
+            configured_switch_fixture(&mut app, &mut tui, HistoryCapabilities::Current).await?;
+        let thread_id = app.chat_widget.thread_id().unwrap();
+        if mode == ModeKind::Plan {
+            let mut collaboration_mode = app.chat_widget.effective_collaboration_mode();
+            collaboration_mode.mode = mode;
+            app.chat_widget
+                .set_effective_collaboration_mode(collaboration_mode);
+        }
+        app.chat_widget.handle_paste("keep this draft".into());
+        // The displayed thread's provider, rather than launch defaults, controls routing.
+        app.config.model_provider_id = "different-launch-provider".into();
+        for (model, effort) in [
+            ("second", Some(ReasoningEffortConfig::High)),
+            ("plain", None),
+        ] {
+            requests.lock().unwrap().clear();
+            Box::pin(app.handle_event(
+                &mut tui,
+                &mut server,
+                AppEvent::SelectConfiguredModel {
+                    source_thread: Some(thread_id),
+                    provider: "switch-test".into(),
+                    model: model.into(),
+                },
+            ))
+            .await?;
+            let settings = next_thread_settings_updated(&mut server, thread_id).await;
+            assert_eq!(settings.thread_settings.model, model);
+            assert_eq!(settings.thread_settings.effort, effort);
+            assert_eq!(settings.thread_settings.collaboration_mode.mode, mode);
+            app.enqueue_thread_notification(
+                thread_id,
+                ServerNotification::ThreadSettingsUpdated(settings),
+            )
+            .await?;
+            assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+            assert_eq!(app.chat_widget.current_model(), model);
+            assert_eq!(app.chat_widget.current_reasoning_effort(), effort);
+            assert_eq!(
+                app.chat_widget
+                    .current_collaboration_mode()
+                    .reasoning_effort(),
+                effort
+            );
+            assert_eq!(
+                app.chat_widget.composer_text_with_pending(),
+                "keep this draft"
+            );
+            assert!(recorded_params(&requests, "thread/start").is_empty());
+            let updates = recorded_params(&requests, "thread/settings/update");
+            assert_eq!(updates.len(), 1);
+            assert_eq!(updates[0]["threadId"], thread_id.to_string());
+            assert_eq!(updates[0]["collaborationMode"]["settings"]["model"], model);
+            assert_eq!(
+                updates[0]["collaborationMode"]["settings"]["reasoning_effort"],
+                serde_json::json!(effort)
+            );
+            assert_eq!(updates[0]["summary"], "none");
+            assert_eq!(updates[0]["serviceTier"], serde_json::Value::Null);
+            let saved: toml::Value = toml::from_str(&fs::read_to_string(
+                app.config.codex_home.join("config.toml"),
+            )?)?;
+            assert_eq!(saved["model"].as_str(), Some(model));
+            assert_eq!(saved["model_provider"].as_str(), Some("switch-test"));
+            assert_eq!(
+                saved
+                    .get("model_reasoning_effort")
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned),
+                effort.as_ref().map(ToString::to_string)
+            );
+        }
+        for (source_thread, model) in [
+            (Some(thread_id), "plain"),
+            (Some(ThreadId::new()), "second"),
+            (Some(thread_id), "missing"),
+        ] {
+            requests.lock().unwrap().clear();
+            Box::pin(app.handle_event(
+                &mut tui,
+                &mut server,
+                AppEvent::SelectConfiguredModel {
+                    source_thread,
+                    provider: "switch-test".into(),
+                    model: model.into(),
+                },
+            ))
+            .await?;
+            assert!(recorded_params(&requests, "thread/settings/update").is_empty());
+            assert!(recorded_params(&requests, "thread/start").is_empty());
+            assert!(recorded_params(&requests, "config/batchWrite").is_empty());
+        }
+        proxy.abort();
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn configured_model_switch_handles_update_and_save_failures() -> Result<()> {
+    for failure in [
+        HistoryCapabilities::SettingsUpdateFails(-32603),
+        HistoryCapabilities::SettingsUpdateFails(-32601),
+        HistoryCapabilities::ConfigWriteFails,
+    ] {
+        let (mut app, mut events, _ops) = make_test_app_with_channels().await;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        let (mut server, requests, proxy) =
+            configured_switch_fixture(&mut app, &mut tui, failure).await?;
+        let thread_id = app.chat_widget.thread_id().unwrap();
+        let original_mode = app.chat_widget.effective_collaboration_mode();
+        let config_path = app.config.codex_home.join("config.toml");
+        let original_config = fs::read(&config_path)?;
+        while events.try_recv().is_ok() {}
+        Box::pin(app.handle_event(
+            &mut tui,
+            &mut server,
+            AppEvent::SelectConfiguredModel {
+                source_thread: Some(thread_id),
+                provider: "switch-test".into(),
+                model: "second".into(),
+            },
+        ))
+        .await?;
+        assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+        assert_eq!(fs::read(&config_path)?, original_config);
+        assert!(recorded_params(&requests, "thread/start").is_empty());
+        if failure == HistoryCapabilities::ConfigWriteFails {
+            assert_eq!(app.chat_widget.current_model(), "second");
+            let messages = std::iter::from_fn(|| events.try_recv().ok())
+                .filter_map(|event| {
+                    if let AppEvent::InsertHistoryCell(cell) = event {
+                        Some(
+                            cell.warning_entries()
+                                .into_iter()
+                                .map(|warning| warning.details)
+                                .collect::<Vec<_>>()
+                                .join("\n"),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                messages.contains("defaults could not be saved"),
+                "{messages}"
+            );
+        } else {
+            assert_eq!(
+                app.chat_widget.effective_collaboration_mode(),
+                original_mode
+            );
+            assert!(recorded_params(&requests, "config/batchWrite").is_empty());
+        }
+        proxy.abort();
+    }
+    Ok(())
+}
+
+async fn configured_switch_fixture(
+    app: &mut App,
+    tui: &mut crate::tui::Tui,
+    capabilities: HistoryCapabilities,
+) -> Result<RecordingAppServer> {
+    configure_switch_models(app, "http://127.0.0.1:1/v1").await?;
+    let (mut server, requests, proxy) = start_recording_app_server_with_history(
+        &app.config,
+        capabilities,
+        None,
+        None,
+        crate::app_server_session::ThreadParamsMode::Embedded,
+        LoaderOverrides::without_managed_config_for_tests(),
+    )
+    .await?;
+    let started = server.start_thread(&app.config).await?;
+    app.replace_chat_widget_with_app_server_thread(
+        tui,
+        started,
+        crate::app::session_lifecycle::ThreadAttachPresentation::Fresh,
+        None,
+    )
+    .await?;
+    requests.lock().unwrap().clear();
+    Ok((server, requests, proxy))
+}
+
+async fn configure_switch_models(app: &mut App, base_url: &str) -> Result<()> {
+    let config_path = app.config.codex_home.join("config.toml");
+    fs::write(
+        &config_path,
+        r#"
+model = "first"
+model_provider = "switch-test"
+model_reasoning_effort = "max"
+[model_providers.switch-test]
+name = "Switch test"
+base_url = "http://127.0.0.1:1/v1"
+wire_api = "responses"
+[[model_providers.switch-test.models]]
+id = "first"
+context_window = 128000
+reasoning_effort = "max"
+[[model_providers.switch-test.models]]
+id = "second"
+context_window = 65536
+reasoning_effort = "high"
+[[model_providers.switch-test.models]]
+id = "plain"
+context_window = 32768
+
+[model_providers.switch-test-high]
+name = "Switch test"
+base_url = "http://127.0.0.1:1/v1"
+wire_api = "responses"
+[[model_providers.switch-test-high.models]]
+id = "first"
+context_window = 128000
+reasoning_effort = "high"
+"#
+        .replace("http://127.0.0.1:1/v1", base_url),
+    )?;
+    app.config = app
+        .rebuild_config_for_cwd(app.config.cwd.to_path_buf())
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn configured_model_switch_preserves_history_and_updates_next_turn_context() -> Result<()> {
+    use codex_app_server_protocol::TurnStartParams;
+    use codex_app_server_protocol::TurnStartResponse;
+    use codex_app_server_protocol::TurnStatus;
+    use wiremock::matchers::body_partial_json;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    let backend = wiremock::MockServer::start().await;
+    for model in ["first", "second"] {
+        let events = [
+            serde_json::json!({"type": "response.created", "response": {"id": model}}),
+            serde_json::json!({"type": "response.output_item.done", "item": {
+                "type": "message", "role": "assistant", "id": format!("msg-{model}"),
+                "content": [{"type": "output_text", "text": format!("Answer from {model}")}]
+            }}),
+            serde_json::json!({"type": "response.completed", "response": {"id": model,
+                "usage": {"input_tokens": 100, "output_tokens": 10, "total_tokens": 110}
+            }}),
+        ];
+        let body = events
+            .iter()
+            .map(|event| {
+                format!(
+                    "event: {}\ndata: {event}\n\n",
+                    event["type"].as_str().unwrap()
+                )
+            })
+            .collect::<String>();
+        wiremock::Mock::given(method("POST"))
+            .and(path("/v1/responses"))
+            .and(body_partial_json(serde_json::json!({"model": model})))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(body)
+                    .set_delay(std::time::Duration::from_millis(100)),
+            )
+            .expect(1)
+            .mount(&backend)
+            .await;
+    }
+    let (mut app, _events, _ops) = make_test_app_with_channels().await;
+    configure_switch_models(&mut app, &format!("{}/v1", backend.uri())).await?;
+    let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+    let started = server.start_thread(&app.config).await?;
+    let thread_id = started.session.thread_id;
+    let mut tui = crate::tui::test_support::make_test_tui()?;
+    app.replace_chat_widget_with_app_server_thread(
+        &mut tui,
+        started,
+        crate::app::session_lifecycle::ThreadAttachPresentation::Fresh,
+        None,
+    )
+    .await?;
+    for (index, text, expected_window) in [
+        (0, "Remember the first turn", 128_000),
+        (1, "Continue the conversation", 65_536),
+    ] {
+        let _: TurnStartResponse = server
+            .request_handle()
+            .request_typed(ClientRequest::TurnStart {
+                request_id: AppServerRequestId::String(format!("test-turn-{index}")),
+                params: TurnStartParams {
+                    thread_id: thread_id.to_string(),
+                    input: vec![codex_app_server_protocol::UserInput::Text {
+                        text: text.into(),
+                        text_elements: Vec::new(),
+                    }],
+                    ..Default::default()
+                },
+            })
+            .await?;
+        if index == 0 {
+            // Change settings while the first turn is active. Its request and context
+            // must remain on the original model, while the next turn uses the new one.
+            Box::pin(app.handle_event(
+                &mut tui,
+                &mut server,
+                AppEvent::SelectConfiguredModel {
+                    source_thread: Some(thread_id),
+                    provider: "switch-test".into(),
+                    model: "second".into(),
+                },
+            ))
+            .await?;
+        }
+        let context_window = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            let mut context_window = None;
+            loop {
+                match server.next_event().await.expect("server event stream") {
+                    AppServerEvent::ServerNotification(notification) => match *notification {
+                        ServerNotification::ThreadTokenUsageUpdated(usage) => {
+                            context_window = usage.token_usage.model_context_window;
+                        }
+                        ServerNotification::TurnCompleted(completed) => {
+                            assert_eq!(
+                                completed.turn.status,
+                                TurnStatus::Completed,
+                                "{:?}",
+                                completed.turn.error
+                            );
+                            break context_window;
+                        }
+                        _ => {}
+                    },
+                    AppServerEvent::ServerRequest(request) => {
+                        panic!("unexpected request: {request:?}")
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await?;
+        assert_eq!(context_window, Some(expected_window * 95 / 100));
+        assert_eq!(app.chat_widget.thread_id(), Some(thread_id));
+    }
+    let requests = backend.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    let first: serde_json::Value = requests[0].body_json()?;
+    let second: serde_json::Value = requests[1].body_json()?;
+    assert_eq!(first["model"], "first");
+    assert_eq!(second["model"], "second");
+    assert_eq!(second["reasoning"]["effort"], "high");
+    let input = second["input"].to_string();
+    assert!(input.contains("Remember the first turn"), "{input}");
+    assert!(input.contains("Answer from first"), "{input}");
+    server.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn configured_model_aliases_switch_both_directions_with_correct_requests() -> Result<()> {
+    use codex_app_server_protocol::TurnStartParams;
+    use codex_app_server_protocol::TurnStartResponse;
+    use codex_app_server_protocol::TurnStatus;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    for starting_provider in ["switch-test", "switch-test-high"] {
+        let backend = wiremock::MockServer::start().await;
+        let response_number = AtomicUsize::new(0);
+        wiremock::Mock::given(method("POST")).and(path("/v1/responses"))
+            .respond_with(move |_: &wiremock::Request| {
+                let id = response_number.fetch_add(1, Ordering::SeqCst);
+                let events = [
+                    serde_json::json!({"type":"response.created","response":{"id":format!("resp-{id}")}}),
+                    serde_json::json!({"type":"response.output_item.done","item":{
+                        "id":format!("msg-{id}"),"type":"message","role":"assistant",
+                        "content":[{"type":"output_text","text":format!("Answer {id}")}]
+                    }}),
+                    serde_json::json!({"type":"response.completed","response":{
+                        "id":format!("resp-{id}"),"usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}
+                    }}),
+                ];
+                let body = events.iter().map(|event| format!("event: {}\ndata: {event}\n\n", event["type"].as_str().unwrap())).collect::<String>();
+                wiremock::ResponseTemplate::new(200).insert_header("content-type", "text/event-stream").set_body_string(body)
+            }).expect(4).mount(&backend).await;
+        let (mut app, _events, _ops) = make_test_app_with_channels().await;
+        configure_switch_models(&mut app, &format!("{}/v1", backend.uri())).await?;
+        let config_path = app.config.codex_home.join("config.toml");
+        if starting_provider == "switch-test-high" {
+            let contents = fs::read_to_string(&config_path)?
+                .replace(
+                    "model_provider = \"switch-test\"",
+                    "model_provider = \"switch-test-high\"",
+                )
+                .replace(
+                    "model_reasoning_effort = \"max\"",
+                    "model_reasoning_effort = \"high\"",
+                );
+            fs::write(&config_path, contents)?;
+            app.config = app
+                .rebuild_config_for_cwd(app.config.cwd.to_path_buf())
+                .await?;
+        }
+        let mut server = Box::pin(crate::start_embedded_app_server_for_picker(&app.config)).await?;
+        let started = server.start_thread(&app.config).await?;
+        let thread_id = started.session.thread_id;
+        let mut tui = crate::tui::test_support::make_test_tui()?;
+        app.replace_chat_widget_with_app_server_thread(
+            &mut tui,
+            started,
+            crate::app::session_lifecycle::ThreadAttachPresentation::Fresh,
+            None,
+        )
+        .await?;
+        let choices = [
+            (
+                "switch-test-high",
+                "first",
+                ReasoningEffortConfig::High,
+                128_000,
+            ),
+            ("switch-test", "second", ReasoningEffortConfig::High, 65_536),
+            ("switch-test", "first", ReasoningEffortConfig::Max, 128_000),
+            (
+                "switch-test-high",
+                "first",
+                ReasoningEffortConfig::High,
+                128_000,
+            ),
+        ];
+        for (index, (provider, model, effort, window)) in choices.iter().enumerate() {
+            Box::pin(app.handle_event(
+                &mut tui,
+                &mut server,
+                AppEvent::SelectConfiguredModel {
+                    source_thread: Some(thread_id),
+                    provider: (*provider).into(),
+                    model: (*model).into(),
+                },
+            ))
+            .await?;
+            assert_eq!(
+                app.chat_widget.thread_id(),
+                Some(thread_id),
+                "{starting_provider} -> {provider}/{model}"
+            );
+            assert_eq!(
+                app.chat_widget.current_reasoning_effort(),
+                Some(effort.clone())
+            );
+            let _: TurnStartResponse = server
+                .request_handle()
+                .request_typed(ClientRequest::TurnStart {
+                    request_id: AppServerRequestId::String(format!("alias-turn-{index}")),
+                    params: TurnStartParams {
+                        thread_id: thread_id.to_string(),
+                        input: vec![codex_app_server_protocol::UserInput::Text {
+                            text: format!("Alias turn {index}"),
+                            text_elements: Vec::new(),
+                        }],
+                        ..Default::default()
+                    },
+                })
+                .await?;
+            let context_window = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+                let mut context_window = None;
+                loop {
+                    if let AppServerEvent::ServerNotification(notification) =
+                        server.next_event().await.expect("server event")
+                    {
+                        match *notification {
+                            ServerNotification::ThreadTokenUsageUpdated(usage) => {
+                                context_window = usage.token_usage.model_context_window
+                            }
+                            ServerNotification::ThreadSettingsUpdated(settings) => {
+                                assert_eq!(
+                                    settings.thread_settings.model_provider,
+                                    starting_provider
+                                );
+                                app.enqueue_thread_notification(
+                                    thread_id,
+                                    ServerNotification::ThreadSettingsUpdated(settings),
+                                )
+                                .await
+                                .unwrap();
+                            }
+                            ServerNotification::TurnCompleted(completed) => {
+                                assert_eq!(
+                                    completed.turn.status,
+                                    TurnStatus::Completed,
+                                    "{:?}",
+                                    completed.turn.error
+                                );
+                                break context_window;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            })
+            .await?;
+            assert_eq!(context_window, Some(window * 95 / 100));
+            assert_eq!(app.chat_widget.current_model(), *model);
+            assert_eq!(
+                app.chat_widget.current_reasoning_effort(),
+                Some(effort.clone())
+            );
+        }
+        let requests = backend.received_requests().await.unwrap();
+        assert_eq!(requests.len(), choices.len());
+        for (request, (_, model, effort, _)) in requests.iter().zip(choices.iter()) {
+            let body: serde_json::Value = request.body_json()?;
+            assert_eq!(body["model"], *model);
+            assert_eq!(body["reasoning"]["effort"], serde_json::json!(effort));
+        }
+        let last: serde_json::Value = requests.last().unwrap().body_json()?;
+        assert!(last["input"].to_string().contains("Alias turn 0"));
+        assert!(last["input"].to_string().contains("Answer 0"));
+        let saved: toml::Value = toml::from_str(&fs::read_to_string(&config_path)?)?;
+        assert_eq!(saved["model_provider"].as_str(), Some(starting_provider));
+        assert_eq!(saved["model_reasoning_effort"].as_str(), Some("high"));
+        let defaults = app.load_new_session_config(&server).await?;
+        let fresh = server.start_thread(&defaults).await?;
+        assert_eq!(fresh.session.model_provider_id, starting_provider);
+        assert_eq!(fresh.session.model, "first");
+        assert_eq!(
+            fresh.session.reasoning_effort,
+            Some(ReasoningEffortConfig::High)
+        );
+        server.shutdown().await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn configured_model_starts_a_new_thread_and_persists_the_provider_atomically() -> Result<()> {
     let (mut app, _events, _ops) = make_test_app_with_channels().await;
     let config_path = app.config.codex_home.join("config.toml");
@@ -386,6 +930,8 @@ pub(super) enum HistoryCapabilities {
     ThreadStartFails,
     ConfigReadUnsupported(i64),
     ConfigReadFails,
+    SettingsUpdateFails(i64),
+    ConfigWriteFails,
 }
 
 /// Returns and resets `(thread/loaded/list, thread/read)` request counts.
@@ -547,6 +1093,30 @@ pub(super) async fn start_recording_app_server_with_history(
                                 tools.iter().any(|tool| tool["type"] == "namespace")
                             });
                     let response = if (matches!(
+                        history_capabilities,
+                        HistoryCapabilities::SettingsUpdateFails(_)
+                    ) && request.method == "thread/settings/update")
+                        || (history_capabilities == HistoryCapabilities::ConfigWriteFails
+                            && request.method == "config/batchWrite")
+                    {
+                        let code = match history_capabilities {
+                            HistoryCapabilities::SettingsUpdateFails(code) => code,
+                            _ => -32603,
+                        };
+                        JSONRPCMessage::Error(JSONRPCError {
+                            id: request_id,
+                            error: JSONRPCErrorError {
+                                code,
+                                data: None,
+                                message: if code == -32601 {
+                                    "method not found"
+                                } else {
+                                    "forced settings failure"
+                                }
+                                .into(),
+                            },
+                        })
+                    } else if (matches!(
                         history_capabilities,
                         HistoryCapabilities::ItemsListFails
                             | HistoryCapabilities::ItemsAndSummaryTurnsFail

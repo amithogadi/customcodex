@@ -2492,6 +2492,7 @@ fn websocket_provider_with_connect_timeout(
         supports_standalone_web_search: false,
         capabilities: None,
         include_internal_metadata: false,
+        model_reasoning_efforts: Default::default(),
     }
 }
 

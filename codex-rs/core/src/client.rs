@@ -682,15 +682,28 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
     ) -> Reasoning {
         // Explicit catalog entries own reasoning settings, including omission for
-        // models without reasoning. Do not leak a previous provider's default.
-        let effort = self
-            .state
-            .provider
-            .info()
-            .models
-            .iter()
-            .find(|model| model.id == model_info.slug)
-            .map_or(effort, |model| model.reasoning_effort.clone());
+        // models without reasoning. Equivalent aliases' explicit reasoning levels
+        // are valid choices too. Do not leak a previous provider's default.
+        let alias_effort = effort
+            .as_ref()
+            .filter(|effort| {
+                self.state
+                    .provider
+                    .info()
+                    .model_reasoning_efforts
+                    .get(&model_info.slug)
+                    .is_some_and(|efforts| efforts.contains(effort))
+            })
+            .cloned();
+        let effort = alias_effort.or_else(|| {
+            self.state
+                .provider
+                .info()
+                .models
+                .iter()
+                .find(|model| model.id == model_info.slug)
+                .map_or(effort, |model| model.reasoning_effort.clone())
+        });
         Reasoning {
             effort: effort
                 .or_else(|| model_info.default_reasoning_level.clone())

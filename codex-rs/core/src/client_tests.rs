@@ -673,6 +673,7 @@ fn responses_request_preserves_result_metadata_above_previous_aggregate_budget()
 fn websocket_incremental_reuse_tracks_raw_result_metadata() -> anyhow::Result<()> {
     let provider = ModelProviderInfo {
         include_internal_metadata: false,
+        model_reasoning_efforts: Default::default(),
         ..ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()))
     };
     let mut api_provider = provider.to_api_provider(/*auth_mode*/ None)?;

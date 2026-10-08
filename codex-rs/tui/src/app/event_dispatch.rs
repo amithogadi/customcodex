@@ -168,7 +168,13 @@ impl App {
             }
             AppEvent::SelectConfiguredModel { source_thread, provider, model } => {
                 if source_thread == self.chat_widget.thread_id() {
-                    self.start_fresh_session_with_model(tui, app_server, None, None, None, Some((provider, model))).await;
+                    if let Some(thread_id) = source_thread
+                        && self.chat_widget.configured_provider_shares_session(&provider)
+                    {
+                        self.select_configured_model_in_thread(app_server, thread_id, provider, model).await;
+                    } else {
+                        self.start_fresh_session_with_model(tui, app_server, None, None, None, Some((provider, model))).await;
+                    }
                 }
             }
             AppEvent::StartManagedWorktree { mode, name } => {

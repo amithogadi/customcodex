@@ -197,6 +197,7 @@ fn model_provider_from_proto(
         supports_standalone_web_search: provider.supports_standalone_web_search,
         capabilities: None,
         include_internal_metadata: false,
+        model_reasoning_efforts: Default::default(),
     };
     Ok((id, info))
 }
@@ -588,6 +589,7 @@ mod tests {
             aws: None,
             capabilities: None,
             include_internal_metadata: false,
+            model_reasoning_efforts: Default::default(),
         }
     }
 
